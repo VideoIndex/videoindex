@@ -68,6 +68,33 @@ impl Operator for ShotBoundary {
         }
     }
 
+    fn cache_params(&self, ctx: &OpContext) -> serde_json::Value {
+        serde_json::json!({
+            "min_distance": self.params.min_distance,
+            "hard_distance": self.params.hard_distance,
+            "k_std": self.params.k_std,
+            "ratio": self.params.ratio,
+            "window": self.params.window,
+            "sample_fps": ctx.policy.sample_fps,
+        })
+    }
+
+    fn replay_supported(&self) -> bool {
+        true
+    }
+
+    async fn replay(&self, ctx: &OpContext) -> Result<Option<u64>> {
+        // Replay must not run `finish`, which would delete the segments.
+        let _ = self.state.lock().await.take();
+        let shots = ctx.storage.segments(ctx.video, SegmentLevel::Shot).await?;
+        let mut n = 0;
+        for seg in shots {
+            ctx.emit(Item::Shot(Arc::new(seg))).await?;
+            n += 1;
+        }
+        Ok(Some(n))
+    }
+
     async fn run(&self, ctx: &OpContext, input: OpInput) -> Result<OpOutput> {
         match input.item {
             Item::Media(media) => {

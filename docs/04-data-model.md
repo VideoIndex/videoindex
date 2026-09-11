@@ -98,6 +98,7 @@ pub trait Storage: Send + Sync {
     async fn frame_samples(&self, track: TrackId, range: Option<TimeRange>) -> Result<Vec<FrameSample>>;
     async fn put_spans(&self, s: &[Span]) -> Result<()>;               // transcript + ocr
     async fn delete_spans_by_operator(&self, track: TrackId, operator: &str) -> Result<u64>; // re-runs replace their own output
+    async fn spans_by_operator(&self, video: VideoId, operator: &str) -> Result<Vec<Span>>;  // replay of cached stages
     async fn put_descriptions(&self, d: &[Description]) -> Result<()>;
     async fn put_embeddings(&self, e: &[Embedding]) -> Result<()>;
     async fn put_provenance(&self, p: &Provenance) -> Result<ProvenanceId>;

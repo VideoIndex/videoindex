@@ -72,8 +72,42 @@ impl Operator for Ocr {
         &[ItemKind::OcrSpan]
     }
 
+    fn optional_inputs(&self) -> &[InputKind] {
+        &[]
+    }
+
     fn required_roles(&self) -> &[&'static str] {
         &[roles::OCR]
+    }
+
+    fn cache_params(&self, ctx: &OpContext) -> serde_json::Value {
+        let (provider, model) = ctx
+            .providers
+            .ocr()
+            .map(|a| (a.provider_name().to_string(), a.model().to_string()))
+            .unwrap_or_default();
+        serde_json::json!({
+            "provider": provider,
+            "model": model,
+            "gate": ctx.config.models.ocr,
+            "sample_fps": ctx.policy.sample_fps,
+        })
+    }
+
+    fn replay_supported(&self) -> bool {
+        true
+    }
+
+    async fn replay(&self, ctx: &OpContext) -> Result<Option<u64>> {
+        let spans = ctx.storage.spans_by_operator(ctx.video, self.id()).await?;
+        let mut n = 0;
+        for sp in spans {
+            if let Span::Ocr(o) = sp {
+                ctx.emit(Item::OcrSpan(Arc::new(o))).await?;
+                n += 1;
+            }
+        }
+        Ok(Some(n))
     }
 
     fn cost_estimate(&self, input: &InputSummary) -> CostEstimate {
@@ -94,6 +128,10 @@ impl Operator for Ocr {
             frame,
         } = input.item
         else {
+            // The media item arrives in replay mode; nothing to do with it.
+            if matches!(input.item, Item::Media(_)) {
+                return Ok(OpOutput::default());
+            }
             return Err(ctx.err("expected a hashed frame"));
         };
         let gate = ctx.config.models.ocr.clone();
@@ -126,16 +164,27 @@ impl Operator for Ocr {
         st.last_hash = Some(phash);
         st.last_sig = Some(sig);
         st.last_t = Some(t);
+        if !ctx.allow_provider_call() {
+            ctx.record_skipped(1);
+            return Ok(OpOutput::default());
+        }
         st.read += 1;
         let ocr = ctx.providers.ocr()?;
-        let resp = ocr
+        let resp = match ocr
             .read(&ImageData::Rgb8 {
                 width: w,
                 height: h,
                 data: Arc::from(rgb),
             })
             .await
-            .map_err(|e| ctx.err(e.to_string()))?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                ctx.record_failure(t, t, e);
+                return Ok(OpOutput::default());
+            }
+        };
+        ctx.record_cost(&resp.stats);
         let lines: Vec<_> = resp
             .lines
             .into_iter()

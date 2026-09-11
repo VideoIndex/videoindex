@@ -218,6 +218,53 @@ pub async fn run(args: Args, mut config: Config, out: &Output) -> Result<()> {
                     ""
                 }
             ));
+            let cached: Vec<&str> = r
+                .stages
+                .iter()
+                .filter(|(_, st)| st.cached && st.status == vi_core::model::StageStatus::Skipped)
+                .map(|(n, _)| n.as_str())
+                .collect();
+            let replayed: Vec<&str> = r
+                .stages
+                .iter()
+                .filter(|(_, st)| st.replayed)
+                .map(|(n, _)| n.as_str())
+                .collect();
+            if !r.skipped && (!cached.is_empty() || !replayed.is_empty()) {
+                s.push_str(&format!(
+                    "  cache: skipped [{}], replayed [{}]\n",
+                    cached.join(", "),
+                    replayed.join(", ")
+                ));
+            }
+            for (name, st) in &r.stages {
+                if st.items_failed > 0 || st.items_skipped > 0 {
+                    s.push_str(&format!(
+                        "  {name}: {} inputs failed, {} skipped (budget){}\n",
+                        st.items_failed,
+                        st.items_skipped,
+                        st.failures
+                            .first()
+                            .map(|f| format!("; first failure at {}: {}", f.t0, f.error))
+                            .unwrap_or_default()
+                    ));
+                }
+            }
+            if r.budget.cost_usd > 0.0 || r.budget.exhausted.is_some() {
+                s.push_str(&format!(
+                    "  budget: ${:.4} spent{}{}\n",
+                    r.budget.cost_usd,
+                    r.budget
+                        .max_cost_usd
+                        .map(|m| format!(" of ${m:.2}"))
+                        .unwrap_or_default(),
+                    r.budget
+                        .exhausted
+                        .as_deref()
+                        .map(|e| format!("; {e} limit reached, provider calls stopped"))
+                        .unwrap_or_default()
+                ));
+            }
         }
         s.push_str(&format!(
             "{} source(s), {} failed, {elapsed:.1}s total",

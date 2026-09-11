@@ -58,6 +58,26 @@ impl Operator for SubtitleImport {
         }
     }
 
+    fn cache_params(&self, _ctx: &OpContext) -> serde_json::Value {
+        serde_json::json!({ "group_secs": GROUP_SECS, "gap_secs": GAP_SECS })
+    }
+
+    fn replay_supported(&self) -> bool {
+        true
+    }
+
+    async fn replay(&self, ctx: &OpContext) -> Result<Option<u64>> {
+        let spans = ctx.storage.spans_by_operator(ctx.video, self.id()).await?;
+        let mut n = 0;
+        for sp in spans {
+            if let Span::Transcript(t) = sp {
+                ctx.emit(Item::TranscriptSpan(Arc::new(t))).await?;
+                n += 1;
+            }
+        }
+        Ok(Some(n))
+    }
+
     async fn run(&self, ctx: &OpContext, input: OpInput) -> Result<OpOutput> {
         let Item::Media(media) = input.item else {
             return Err(ctx.err("expected the media item"));

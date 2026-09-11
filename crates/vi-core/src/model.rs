@@ -553,13 +553,36 @@ pub enum StageStatus {
     Skipped,
 }
 
+/// A range of input an operator could not process (provider failure after
+/// retries); the job continued past it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FailedRange {
+    /// Start.
+    pub t0: Timestamp,
+    /// End.
+    pub t1: Timestamp,
+    /// Error text.
+    pub error: String,
+}
+
 /// Checkpoint for one stage.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct StageState {
     /// Status.
     pub status: StageStatus,
     /// Items emitted so far.
     pub items_done: u64,
+    /// Inputs that failed after retries; the stage continued.
+    pub items_failed: u64,
+    /// Inputs skipped because a budget was exhausted.
+    pub items_skipped: u64,
+    /// The first failures, for the report (capped).
+    pub failures: Vec<FailedRange>,
+    /// Whether the stage was satisfied from the operator output cache.
+    pub cached: bool,
+    /// Whether the stage replayed stored outputs instead of recomputing.
+    pub replayed: bool,
     /// Last timestamp processed, for resumable stream operators.
     pub last_t: Option<Timestamp>,
     /// Error text if failed.
@@ -571,6 +594,11 @@ impl Default for StageState {
         Self {
             status: StageStatus::Pending,
             items_done: 0,
+            items_failed: 0,
+            items_skipped: 0,
+            failures: Vec::new(),
+            cached: false,
+            replayed: false,
             last_t: None,
             error: None,
         }

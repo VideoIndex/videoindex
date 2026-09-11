@@ -106,13 +106,13 @@ The scheduler derives the DAG from `inputs` and `outputs`. Adding an operator ne
 - Runs operators as tokio tasks, with CPU-bound ones dispatched to the rayon pool and decode to the worker process.
 - Bounded channels between operators provide backpressure; at most N frames are in flight per job. N is the decode worker's shared-memory slot count (`media.worker.max_in_flight_frames`), and channel capacities are derived from it so a slow consumer stalls the decoder instead of deadlocking it.
 - Provider calls go through per-provider semaphores and rate limiters. Batched where the provider supports it.
-- Every operator output is written to storage and the job checkpoint (`jobs/<job-id>.json`) is updated when a stage starts, finishes, or fails. Restarting a job resumes from the last checkpoint. In M0 resumption is all-or-nothing per job: a stage can only be skipped when every stage it feeds is complete too, so partially finished jobs re-run every stage (`sample` first deletes its earlier rows).
+- Every operator output is written to storage and the job checkpoint (`jobs/<job-id>.json`) is updated when a stage starts, finishes, or fails. A completed stage also leaves a marker in the operator output cache (below). Re-running a job plans each stage as *skip* (cached, no running consumer needs its items), *replay* (cached, a consumer needs its items and the operator can re-emit them from storage), or *run* (not cached, or a producer runs and so its inputs changed). `sample` cannot replay, so anything needing frames re-decodes; text stages (`subtitle_import`, `asr`, `ocr`) and `shot_boundary` replay.
 - Cancellation propagates through the DAG in under a second; partial results remain queryable.
 - Emits `Progress` events: stage, fraction complete, cost so far, ETA.
 
 ## Caching
 
-Operator outputs are cached under a key of `(input content hash, operator id, operator version, provider, model, model version, prompt hash, params hash)`. Consequences:
+Operator outputs are cached under a key of `(input content hash, operator id, operator version, provider, model, model version, prompt hash, params hash)`; in the embedded backend the outputs are the index rows themselves and the cache is a marker file per key under `cache/operators/`. Consequences:
 
 - Re-running with a different VLM re-runs only the VLM stage and downstream stages that depend on it.
 - Two Videos with identical content share every cached output.
@@ -135,7 +135,7 @@ max_wallclock_per_hour = "20m"
 fine = []
 ```
 
-When a budget is exhausted the job stops issuing new provider calls, finishes writing what it has, marks the Video with the reached state, and reports which stages were skipped.
+When a budget is exhausted the job stops issuing new provider calls, finishes writing what it has, marks the Video with the reached state, and reports which stages were skipped. `max_wallclock_per_hour` accepts `20m`, `1h30m`, `90s`; `0` for either limit means unlimited. The ceiling is the per-hour figure times the video's duration in hours (at least one minute's worth).
 
 ## Progressive indexing
 

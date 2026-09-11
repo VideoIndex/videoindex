@@ -18,7 +18,7 @@ pub mod scheduler;
 
 pub use dag::Dag;
 pub use operator::{
-    CostEstimate, Emitter, FrameItem, InputSummary, Item, ItemKind, MediaItem, OpContext, OpInput,
-    OpOutput, Operator, SpeechItem,
+    Budget, CostEstimate, Emitter, FrameItem, InputSummary, Item, ItemKind, MediaItem, OpContext,
+    OpInput, OpOutput, Operator, SpeechItem, StageFailures,
 };
 pub use scheduler::{JobOptions, JobReport, Scheduler};

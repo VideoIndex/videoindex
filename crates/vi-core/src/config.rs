@@ -363,6 +363,17 @@ impl IndexPolicy {
         }
     }
 
+    /// `max_wallclock_per_hour` as a duration. Accepts `20m`, `1h`, `90s`,
+    /// `1h30m`, or a bare number of seconds; `0` means no limit.
+    pub fn max_wallclock_per_hour_secs(&self) -> Result<f64> {
+        parse_duration_secs(&self.max_wallclock_per_hour).ok_or_else(|| {
+            Error::Config(format!(
+                "max_wallclock_per_hour '{}' is not a duration like 20m, 1h30m or 90s",
+                self.max_wallclock_per_hour
+            ))
+        })
+    }
+
     /// All operators in run order.
     pub fn operators(&self) -> impl Iterator<Item = &str> {
         self.coarse
@@ -507,6 +518,52 @@ impl Default for LogConfig {
             json: false,
         }
     }
+}
+
+/// Parse `1h30m`, `20m`, `90s`, `250ms`, or a bare number of seconds.
+pub fn parse_duration_secs(s: &str) -> Option<f64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Ok(v) = s.parse::<f64>() {
+        return (v >= 0.0).then_some(v);
+    }
+    let mut total = 0.0;
+    let mut num = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c.is_ascii_digit() || c == '.' {
+            num.push(c);
+            continue;
+        }
+        if c.is_whitespace() {
+            continue;
+        }
+        let mut unit = String::from(c);
+        while let Some(n) = chars.peek() {
+            if n.is_ascii_alphabetic() {
+                unit.push(*n);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        let v: f64 = num.parse().ok()?;
+        num.clear();
+        total += match unit.as_str() {
+            "ms" => v / 1000.0,
+            "s" | "sec" | "secs" => v,
+            "m" | "min" | "mins" => v * 60.0,
+            "h" | "hr" | "hrs" => v * 3600.0,
+            "d" => v * 86_400.0,
+            _ => return None,
+        };
+    }
+    if !num.is_empty() {
+        total += num.parse::<f64>().ok()?;
+    }
+    Some(total)
 }
 
 fn default_cache_dir() -> PathBuf {
@@ -675,6 +732,18 @@ mod tests {
             c.provider_for_role(roles::TEXT_EMBED),
             Err(Error::Provider(_))
         ));
+    }
+
+    #[test]
+    fn durations_parse() {
+        assert_eq!(parse_duration_secs("20m"), Some(1200.0));
+        assert_eq!(parse_duration_secs("1h30m"), Some(5400.0));
+        assert_eq!(parse_duration_secs("90s"), Some(90.0));
+        assert_eq!(parse_duration_secs("250ms"), Some(0.25));
+        assert_eq!(parse_duration_secs("0"), Some(0.0));
+        assert_eq!(parse_duration_secs("7"), Some(7.0));
+        assert_eq!(parse_duration_secs("soon"), None);
+        assert!(IndexPolicy::m0().max_wallclock_per_hour_secs().is_ok());
     }
 
     #[test]

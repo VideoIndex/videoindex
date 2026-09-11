@@ -82,6 +82,37 @@ impl Operator for Asr {
         &[vi_core::config::roles::ASR]
     }
 
+    fn cache_params(&self, ctx: &OpContext) -> serde_json::Value {
+        let (provider, model) = ctx
+            .providers
+            .asr()
+            .map(|a| (a.provider_name().to_string(), a.model().to_string()))
+            .unwrap_or_default();
+        serde_json::json!({
+            "provider": provider,
+            "model": model,
+            "language": ctx.config.models.asr.language,
+            "span_secs": ctx.config.models.asr.span_secs,
+            "vad": ctx.config.models.vad,
+        })
+    }
+
+    fn replay_supported(&self) -> bool {
+        true
+    }
+
+    async fn replay(&self, ctx: &OpContext) -> Result<Option<u64>> {
+        let spans = ctx.storage.spans_by_operator(ctx.video, self.id()).await?;
+        let mut n = 0;
+        for sp in spans {
+            if let Span::Transcript(t) = sp {
+                ctx.emit(Item::TranscriptSpan(Arc::new(t))).await?;
+                n += 1;
+            }
+        }
+        Ok(Some(n))
+    }
+
     fn cost_estimate(&self, input: &InputSummary) -> CostEstimate {
         // Assume two thirds of a lecture is speech and 30 s per request.
         let speech = if input.has_audio {
@@ -133,6 +164,10 @@ impl Operator for Asr {
                 let Some(track) = st.track.clone() else {
                     return Err(ctx.err("speech arrived before the media item"));
                 };
+                if !ctx.allow_provider_call() {
+                    ctx.record_skipped(1);
+                    return Ok(OpOutput::default());
+                }
                 let max = ctx.config.models.asr.concurrency;
                 Self::reap(&mut st, max).await?;
                 st.requests += 1;
@@ -148,6 +183,8 @@ impl Operator for Asr {
                     operator: self.id(),
                     version: self.version(),
                     stage: ctx.stage.clone(),
+                    budget: ctx.budget.clone(),
+                    failures: ctx.failures.clone(),
                 };
                 st.tasks.spawn(job.run());
                 Ok(OpOutput::default())
@@ -192,6 +229,8 @@ struct TranscribeJob {
     operator: &'static str,
     version: u32,
     stage: String,
+    budget: Arc<Budget>,
+    failures: Arc<StageFailures>,
 }
 
 impl TranscribeJob {
@@ -207,10 +246,17 @@ impl TranscribeJob {
             word_timestamps: true,
             temperature: 0.0,
         };
-        let resp = asr
-            .transcribe(&audio, &opts)
-            .await
-            .map_err(|e| Error::operator(&self.stage, e.to_string()))?;
+        let resp = match asr.transcribe(&audio, &opts).await {
+            Ok(r) => r,
+            Err(e) => {
+                // Retries are exhausted inside the adapter; mark the range
+                // and let the job continue.
+                tracing::warn!(stage = %self.stage, t0 = %self.seg.t0, t1 = %self.seg.t1, error = %e, "input failed; continuing");
+                self.failures.record(self.seg.t0, self.seg.t1, e);
+                return Ok((0, 0));
+            }
+        };
+        self.budget.add_cost(resp.stats.cost_usd);
         let offset = self.seg.t0.as_secs_f64();
         let prov = provenance_for(
             self.operator,

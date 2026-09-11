@@ -761,6 +761,12 @@ impl Storage for EmbeddedIndex {
                 "target_kind = 'frame' AND target_id IN (SELECT id FROM frame_samples WHERE track_id = ?1)",
                 &[&track.to_string()],
             )?;
+            drop_embeddings_for(
+                &tx,
+                &vectors,
+                "target_kind = 'ocr_span' AND target_id IN (SELECT o.id FROM ocr_spans o JOIN frame_samples f ON f.id = o.frame_sample_id WHERE f.track_id = ?1)",
+                &[&track.to_string()],
+            )?;
             let n = tx.execute(
                 "DELETE FROM frame_samples WHERE track_id = ?1",
                 [track.to_string()],
@@ -866,6 +872,35 @@ impl Storage for EmbeddedIndex {
             )?;
             tx.commit()?;
             Ok(n as u64)
+        })
+        .await
+    }
+
+    async fn spans_by_operator(&self, video: VideoId, operator: &str) -> Result<Vec<Span>> {
+        let operator = operator.to_string();
+        self.with_conn(move |c| {
+            let vid = video.to_string();
+            let mut out: Vec<(f64, Span)> = Vec::new();
+            let mut st = c.prepare_cached(
+                "SELECT s.* FROM transcript_spans s JOIN tracks tr ON tr.id = s.track_id
+                 JOIN provenance p ON p.id = s.provenance_id
+                 WHERE tr.video_id = ?1 AND p.operator = ?2 ORDER BY s.t0_secs",
+            )?;
+            for r in st.query_map(params![vid, operator], |r| Ok(transcript_from_row(r)))? {
+                let sp = r??;
+                out.push((sp.t0.as_secs_f64(), Span::Transcript(sp)));
+            }
+            let mut st = c.prepare_cached(
+                "SELECT o.* FROM ocr_spans o JOIN frame_samples f ON f.id = o.frame_sample_id
+                 JOIN tracks tr ON tr.id = f.track_id JOIN provenance p ON p.id = o.provenance_id
+                 WHERE tr.video_id = ?1 AND p.operator = ?2 ORDER BY o.t_secs",
+            )?;
+            for r in st.query_map(params![vid, operator], |r| Ok(ocr_from_row(r)))? {
+                let sp = r??;
+                out.push((sp.t.as_secs_f64(), Span::Ocr(sp)));
+            }
+            out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            Ok(out.into_iter().map(|(_, s)| s).collect())
         })
         .await
     }
@@ -1250,6 +1285,10 @@ impl Storage for EmbeddedIndex {
         }
         out.sort_by_key(|j| j.job_id);
         Ok(out)
+    }
+
+    fn cache_dir(&self) -> Option<PathBuf> {
+        Some(self.dir.join("cache"))
     }
 
     async fn manifest(&self) -> Result<Manifest> {

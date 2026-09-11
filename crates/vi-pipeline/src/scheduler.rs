@@ -30,10 +30,24 @@ use crate::ops;
 pub struct JobOptions {
     /// Policy name; `None` uses `config.default_policy`.
     pub policy: Option<String>,
-    /// Skip stages an unfinished earlier job for the same video completed.
+    /// Kept for compatibility: stages whose outputs are in the operator
+    /// cache are always skipped or replayed unless `force` is set.
     pub resume: bool,
-    /// Re-run even if the video is already indexed by this policy.
+    /// Ignore the operator output cache and re-run every stage.
     pub force: bool,
+}
+
+/// Budget outcome for a job.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BudgetReport {
+    /// Provider spend in USD.
+    pub cost_usd: f64,
+    /// Cost ceiling, if any.
+    pub max_cost_usd: Option<f64>,
+    /// Wall-clock ceiling in seconds, if any.
+    pub max_wallclock_secs: Option<f64>,
+    /// Which limit stopped provider calls, if one did.
+    pub exhausted: Option<String>,
 }
 
 /// What a finished job reports.
@@ -55,6 +69,8 @@ pub struct JobReport {
     pub index_state: IndexState,
     /// Whether this run was skipped because the video was already indexed.
     pub skipped: bool,
+    /// Budget outcome.
+    pub budget: BudgetReport,
 }
 
 /// The scheduler.
@@ -321,7 +337,13 @@ impl Scheduler {
             "acquired and probed in {acquire_secs:.2}s"
         );
 
-        // ---- job state / resume -----------------------------------------
+        // ---- operator output cache ---------------------------------------
+        // Every completed stage leaves a marker keyed by the content hash,
+        // operator id and version, and the operator's cache parameters
+        // (provider, model, thresholds). A marker means "these outputs are
+        // in the index"; a stage with a marker is skipped when no running
+        // consumer needs its items, replayed from storage when one does and
+        // the operator can, and re-run otherwise.
         let stage_names = dag.stage_names();
         let mut state = JobState::new(
             job_id,
@@ -330,76 +352,7 @@ impl Scheduler {
             policy_name.clone(),
             stage_names.iter().cloned(),
         );
-        if !fresh && !opts.force {
-            if video.index_state != IndexState::Acquired && video.index_state != IndexState::Failed
-            {
-                info!(video = %video.id, "already indexed ({:?}); use force to re-run", video.index_state);
-                let mut stages = state.stages.clone();
-                for s in stages.values_mut() {
-                    s.status = StageStatus::Skipped;
-                }
-                return Ok(JobReport {
-                    job_id,
-                    video_id: video.id,
-                    ok: true,
-                    stages,
-                    elapsed_secs: started.elapsed().as_secs_f64(),
-                    acquire_secs,
-                    index_state: video.index_state,
-                    skipped: true,
-                });
-            }
-            if opts.resume {
-                let prior = self
-                    .storage
-                    .list_jobs()
-                    .await?
-                    .into_iter()
-                    .filter(|j| j.video_id == video.id && !j.finished && j.policy == policy_name)
-                    .max_by_key(|j| j.updated_at);
-                if let Some(p) = prior {
-                    for (name, st) in &p.stages {
-                        if st.status == StageStatus::Complete {
-                            // Downstream-only stages can be skipped when their
-                            // producer is also complete; `sample` re-runs feed
-                            // consumers, so only skip when everything upstream
-                            // of a stage is complete too.
-                            state.stage_mut(name).status = StageStatus::Complete;
-                            state.stage_mut(name).items_done = st.items_done;
-                        }
-                    }
-                    info!(prior = %p.job_id, "resuming from checkpoint");
-                }
-            }
-        }
-        self.storage.checkpoint(job_id, &state).await?;
-
-        // A stage can only be skipped if every stage it feeds is complete as
-        // well, otherwise consumers would starve. Simplest correct rule for
-        // M0: skip all or nothing.
-        let all_complete = stage_names.iter().all(|s| state.is_complete(s));
-        if all_complete {
-            state.finished = true;
-            self.storage.checkpoint(job_id, &state).await?;
-            self.storage
-                .set_index_state(video.id, IndexState::Coarse)
-                .await?;
-            return Ok(JobReport {
-                job_id,
-                video_id: video.id,
-                ok: true,
-                stages: state.stages.clone(),
-                elapsed_secs: started.elapsed().as_secs_f64(),
-                acquire_secs,
-                index_state: IndexState::Coarse,
-                skipped: true,
-            });
-        }
-        for s in state.stages.values_mut() {
-            *s = StageState::default();
-        }
-
-        // ---- wire the DAG -----------------------------------------------
+        let budget = Arc::new(Budget::for_policy(&policy, probe.duration.as_secs_f64())?);
         let media = Arc::new(MediaItem {
             acquired,
             probe,
@@ -409,71 +362,230 @@ impl Scheduler {
         });
         let (operators, consumers, roots) = dag.into_parts();
         let n = operators.len();
+
+        // Cache keys and markers per stage.
+        let mut keys: Vec<String> = Vec::with_capacity(n);
+        let mut cached: Vec<bool> = Vec::with_capacity(n);
+        let stage_failures: Vec<Arc<StageFailures>> =
+            (0..n).map(|_| Arc::new(StageFailures::default())).collect();
+        let make_ctx = |i: usize, op: &dyn Operator, emitter: Emitter| OpContext {
+            job: job_id,
+            video: video.id,
+            stage: op.id().to_string(),
+            storage: self.storage.clone(),
+            config: self.config.clone(),
+            providers: self.providers.clone(),
+            policy: policy.clone(),
+            worker: self.config.media.worker.clone(),
+            emitter,
+            cancel: cancel.child_token(),
+            events: self.events.clone(),
+            expected_items: Some(expected_samples),
+            budget: budget.clone(),
+            failures: stage_failures[i].clone(),
+        };
+        for (i, op) in operators.iter().enumerate() {
+            let probe_ctx = make_ctx(i, op.as_ref(), Emitter::none());
+            let params = op.cache_params(&probe_ctx);
+            let key = cache_key(&media.acquired.content_hash, op.as_ref(), &params);
+            let has = !opts.force && self.cache_marker_exists(&key);
+            keys.push(key);
+            cached.push(has);
+        }
+        // A cached stage runs anyway when a running consumer needs its
+        // items and it cannot replay them. Resolve in reverse topological
+        // order so consumers are decided first.
+        #[derive(Clone, Copy, PartialEq, Debug)]
+        enum Plan {
+            Run,
+            Replay,
+            Skip,
+        }
+        let mut plan = vec![Plan::Run; n];
+        for i in (0..n).rev() {
+            if !cached[i] {
+                plan[i] = Plan::Run;
+                continue;
+            }
+            let consumer_needs_items = consumers[i].iter().any(|c| plan[*c] != Plan::Skip);
+            plan[i] = if !consumer_needs_items {
+                Plan::Skip
+            } else if operators[i].replay_supported() {
+                Plan::Replay
+            } else {
+                Plan::Run
+            };
+        }
+        // A replay whose own producers re-run would duplicate nothing (the
+        // operator replaces its outputs), but a running producer means the
+        // inputs may differ, so run instead.
+        for i in 0..n {
+            if plan[i] == Plan::Replay {
+                let producer_runs =
+                    (0..n).any(|p| consumers[p].contains(&i) && plan[p] == Plan::Run);
+                if producer_runs {
+                    plan[i] = Plan::Run;
+                }
+            }
+        }
+        // A stage whose producer re-runs sees new inputs: its cached outputs
+        // (rows keyed by the producer's rows) are gone, so it must run too.
+        // Operators are in topological order, so one forward pass settles it.
+        for i in 0..n {
+            if plan[i] == Plan::Run {
+                continue;
+            }
+            let producer_runs = consumers
+                .iter()
+                .enumerate()
+                .any(|(p, c)| c.contains(&i) && plan[p] == Plan::Run);
+            if producer_runs {
+                plan[i] = Plan::Run;
+            }
+        }
+        let all_skipped = plan.iter().all(|p| *p == Plan::Skip);
+        if all_skipped {
+            info!(video = %video.id, policy = %policy_name, "every stage is cached; nothing to do (use force to re-run)");
+            for (i, name) in stage_names.iter().enumerate() {
+                let st = state.stage_mut(name);
+                st.status = StageStatus::Skipped;
+                st.cached = cached[i];
+            }
+            state.finished = true;
+            self.storage.checkpoint(job_id, &state).await?;
+            if video.index_state == IndexState::Acquired || video.index_state == IndexState::Failed
+            {
+                self.storage
+                    .set_index_state(video.id, IndexState::Coarse)
+                    .await?;
+            }
+            return Ok(JobReport {
+                job_id,
+                video_id: video.id,
+                ok: true,
+                stages: state.stages.clone(),
+                elapsed_secs: started.elapsed().as_secs_f64(),
+                acquire_secs,
+                index_state: if video.index_state == IndexState::Fine {
+                    IndexState::Fine
+                } else {
+                    IndexState::Coarse
+                },
+                skipped: true,
+                budget: BudgetReport::default(),
+            });
+        }
+        for (i, name) in stage_names.iter().enumerate() {
+            let st = state.stage_mut(name);
+            st.cached = cached[i];
+            if plan[i] == Plan::Skip {
+                st.status = StageStatus::Skipped;
+            }
+        }
+        info!(
+            run = ?stage_names.iter().enumerate().filter(|(i, _)| plan[*i] == Plan::Run).map(|(_, s)| s.as_str()).collect::<Vec<_>>(),
+            replay = ?stage_names.iter().enumerate().filter(|(i, _)| plan[*i] == Plan::Replay).map(|(_, s)| s.as_str()).collect::<Vec<_>>(),
+            skip = ?stage_names.iter().enumerate().filter(|(i, _)| plan[*i] == Plan::Skip).map(|(_, s)| s.as_str()).collect::<Vec<_>>(),
+            "stage plan"
+        );
+        self.storage.checkpoint(job_id, &state).await?;
+
+        // ---- wire the DAG -----------------------------------------------
         let capacity = (self.config.media.worker.max_in_flight_frames / 2).clamp(2, 16);
         let mut senders: Vec<Option<mpsc::Sender<Item>>> = Vec::with_capacity(n);
         let mut receivers: Vec<Option<mpsc::Receiver<Item>>> = Vec::with_capacity(n);
-        for _ in 0..n {
-            let (tx, rx) = mpsc::channel::<Item>(capacity);
-            senders.push(Some(tx));
-            receivers.push(Some(rx));
+        for p in &plan {
+            if *p == Plan::Skip {
+                senders.push(None);
+                receivers.push(None);
+            } else {
+                let (tx, rx) = mpsc::channel::<Item>(capacity);
+                senders.push(Some(tx));
+                receivers.push(Some(rx));
+            }
         }
         let emitters: Vec<Emitter> = consumers
             .iter()
             .map(|c| Emitter::new(c.iter().filter_map(|j| senders[*j].clone()).collect()))
             .collect();
-        // Seed the roots with the media item.
-        let root_senders: Vec<mpsc::Sender<Item>> =
-            roots.iter().filter_map(|r| senders[*r].clone()).collect();
-        // Drop our copies so channels close once producers finish.
+        // Seed the running roots with the media item (replayed stages need
+        // it too, for the video id).
+        let root_senders: Vec<mpsc::Sender<Item>> = roots
+            .iter()
+            .filter(|r| plan[**r] != Plan::Skip)
+            .filter_map(|r| senders[*r].clone())
+            .collect();
+        // Non-root replayed stages also get the media item so they know the
+        // video; they ignore everything else.
+        let replay_senders: Vec<mpsc::Sender<Item>> = (0..n)
+            .filter(|i| plan[*i] == Plan::Replay && !roots.contains(i))
+            .filter_map(|i| senders[i].clone())
+            .collect();
         drop(senders);
-        for tx in root_senders {
+        for tx in root_senders.iter().chain(replay_senders.iter()) {
             let _ = tx.send(Item::Media(media.clone())).await;
         }
+        drop(root_senders);
+        drop(replay_senders);
 
         let job_cancel = cancel.child_token();
         let mut handles = Vec::with_capacity(n);
         for (i, op) in operators.into_iter().enumerate() {
+            if plan[i] == Plan::Skip {
+                continue;
+            }
             let stage = op.id().to_string();
-            let ctx = OpContext {
-                job: job_id,
-                video: video.id,
-                stage: stage.clone(),
-                storage: self.storage.clone(),
-                config: self.config.clone(),
-                providers: self.providers.clone(),
-                policy: policy.clone(),
-                worker: self.config.media.worker.clone(),
-                emitter: emitters[i].clone(),
-                cancel: job_cancel.clone(),
-                events: self.events.clone(),
-                expected_items: Some(expected_samples),
-            };
+            let mut ctx = make_ctx(i, op.as_ref(), emitters[i].clone());
+            ctx.cancel = job_cancel.clone();
             let rx = receivers[i]
                 .take()
                 .ok_or_else(|| Error::Other("receiver already taken".into()))?;
             let events = self.events.clone();
             let cancel_on_fail = job_cancel.clone();
+            let replay = plan[i] == Plan::Replay;
             handles.push(tokio::spawn(async move {
-                let result = run_stage(op, ctx, rx, &events).await;
+                let result = run_stage(op, ctx, rx, &events, replay).await;
                 if result.is_err() {
                     cancel_on_fail.cancel();
                 }
-                (stage, result)
+                (stage, i, result)
             }));
         }
-        // Emitters are cloned into contexts; drop ours so channels can close.
         drop(emitters);
 
         let mut ok = true;
+        let mut any_failures = false;
         for h in handles {
-            let (stage, result) = h
+            let (stage, i, result) = h
                 .await
                 .map_err(|e| Error::Other(format!("stage task panicked: {e}")))?;
+            let failures = &stage_failures[i];
             let st = state.stage_mut(&stage);
+            st.items_failed = failures.count();
+            st.items_skipped = failures.skipped_count();
+            st.failures = failures.ranges();
+            st.replayed = plan[i] == Plan::Replay;
             match result {
                 Ok(items) => {
-                    st.status = StageStatus::Complete;
                     st.items_done = items;
+                    if st.items_failed > 0 && items == 0 {
+                        // Nothing succeeded: the stage failed, even though
+                        // it kept going past each failure.
+                        ok = false;
+                        st.status = StageStatus::Failed;
+                        st.error = st
+                            .failures
+                            .first()
+                            .map(|f| format!("every input failed; first: {}", f.error));
+                    } else {
+                        st.status = StageStatus::Complete;
+                        if st.items_failed > 0 {
+                            any_failures = true;
+                        }
+                        if st.items_failed == 0 && st.items_skipped == 0 {
+                            self.write_cache_marker(&keys[i], &stage, items, job_id);
+                        }
+                    }
                 }
                 Err(e) => {
                     ok = false;
@@ -496,16 +608,42 @@ impl Scheduler {
         self.storage.checkpoint(job_id, &state).await?;
 
         let elapsed = started.elapsed();
+        let budget_report = BudgetReport {
+            cost_usd: budget.spent_usd(),
+            max_cost_usd: budget.max_cost_usd,
+            max_wallclock_secs: budget.max_wallclock_secs,
+            exhausted: budget.exhausted_reason().map(str::to_string),
+        };
+        let failed_total: u64 = state.stages.values().map(|s| s.items_failed).sum();
+        let skipped_total: u64 = state.stages.values().map(|s| s.items_skipped).sum();
         let summary = format!(
-            "{} stages, {} samples, {:.1}s",
+            "{} stages, {} samples, {:.1}s{}{}{}",
             state.stages.len(),
             state
                 .stages
                 .get("sample")
                 .map(|s| s.items_done)
                 .unwrap_or(0),
-            elapsed.as_secs_f64()
+            elapsed.as_secs_f64(),
+            if budget_report.cost_usd > 0.0 {
+                format!(", ${:.4}", budget_report.cost_usd)
+            } else {
+                String::new()
+            },
+            if failed_total > 0 {
+                format!(", {failed_total} inputs failed")
+            } else {
+                String::new()
+            },
+            if skipped_total > 0 {
+                format!(", {skipped_total} skipped (budget)")
+            } else {
+                String::new()
+            }
         );
+        if any_failures {
+            warn!(video = %video.id, "{summary}");
+        }
         self.events.emit(Event::JobFinished {
             job: job_id,
             ok,
@@ -521,16 +659,65 @@ impl Scheduler {
             acquire_secs,
             index_state,
             skipped: false,
+            budget: budget_report,
         })
+    }
+
+    fn cache_dir(&self) -> Option<std::path::PathBuf> {
+        self.storage.cache_dir().map(|d| d.join("operators"))
+    }
+
+    fn cache_marker_exists(&self, key: &str) -> bool {
+        self.cache_dir()
+            .map(|d| d.join(format!("{key}.json")).is_file())
+            .unwrap_or(false)
+    }
+
+    fn write_cache_marker(&self, key: &str, stage: &str, items: u64, job: JobId) {
+        let Some(dir) = self.cache_dir() else {
+            return;
+        };
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            debug!("cannot create operator cache dir: {e}");
+            return;
+        }
+        let marker = serde_json::json!({
+            "stage": stage,
+            "items": items,
+            "job": job.to_string(),
+            "completed_at": Utc::now().to_rfc3339(),
+        });
+        let path = dir.join(format!("{key}.json"));
+        if let Err(e) = std::fs::write(&path, marker.to_string()) {
+            debug!("cannot write operator cache marker {}: {e}", path.display());
+        }
     }
 }
 
-/// Drive one operator over its input channel. Returns items emitted.
+/// Cache key per `docs/05-indexing-pipeline.md`: content hash, operator id
+/// and version, and the operator's parameters (provider, model, prompt
+/// hash, thresholds), hashed to a file name.
+pub fn cache_key(content_hash: &str, op: &dyn Operator, params: &serde_json::Value) -> String {
+    let mut h = blake3::Hasher::new();
+    h.update(content_hash.as_bytes());
+    h.update(b"|");
+    h.update(op.id().as_bytes());
+    h.update(b"|");
+    h.update(op.version().to_string().as_bytes());
+    h.update(b"|");
+    h.update(params.to_string().as_bytes());
+    format!("{}-{}", op.id(), &h.finalize().to_hex()[..24])
+}
+
+/// Drive one operator over its input channel. Returns items emitted. In
+/// replay mode the operator re-emits stored outputs once it has seen the
+/// media item and ignores everything else.
 async fn run_stage(
     op: Box<dyn Operator>,
     ctx: OpContext,
     mut rx: mpsc::Receiver<Item>,
     events: &EventBus,
+    replay: bool,
 ) -> Result<u64> {
     let started = Instant::now();
     events.emit(Event::StageStarted {
@@ -539,6 +726,35 @@ async fn run_stage(
     });
     let mut emitted = 0u64;
     let result: Result<()> = async {
+        if replay {
+            // Wait for the media item so the operator knows the video.
+            let mut media_seen = false;
+            loop {
+                let item = tokio::select! {
+                    biased;
+                    _ = ctx.cancel.cancelled() => return Err(Error::Cancelled),
+                    item = rx.recv() => item,
+                };
+                let Some(item) = item else { break };
+                if let Item::Media(_) = &item {
+                    if !media_seen {
+                        media_seen = true;
+                        op.run(&ctx, OpInput { item }).await?;
+                        match op.replay(&ctx).await? {
+                            Some(n) => emitted += n,
+                            None => {
+                                return Err(Error::operator(
+                                    &ctx.stage,
+                                    "stage planned as replay but the operator cannot replay",
+                                ))
+                            }
+                        }
+                    }
+                }
+                // Other items (from producers that ran anyway) are ignored.
+            }
+            return Ok(());
+        }
         loop {
             let item = tokio::select! {
                 biased;

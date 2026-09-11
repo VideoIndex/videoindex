@@ -27,8 +27,8 @@ pub struct ImageEmbed {
 #[derive(Default)]
 struct State {
     last_hash: Option<u64>,
-    /// Frames waiting for a batch: sample id and owned RGB pixels.
-    pending: Vec<(FrameSampleId, ImageData)>,
+    /// Frames waiting for a batch: sample id, owned RGB pixels, time.
+    pending: Vec<(FrameSampleId, ImageData, vi_core::Timestamp)>,
     embedded: u64,
     skipped: u64,
     seen: u64,
@@ -56,12 +56,30 @@ impl ImageEmbed {
         if st.pending.is_empty() || (!force && st.pending.len() < batch) {
             return Ok(0);
         }
-        let items: Vec<(FrameSampleId, ImageData)> = std::mem::take(&mut st.pending);
-        let images: Vec<ImageData> = items.iter().map(|(_, im)| im.clone()).collect();
-        let resp = embedder
-            .embed_images(&images)
-            .await
-            .map_err(|e| ctx.err(e.to_string()))?;
+        let items: Vec<(FrameSampleId, ImageData, vi_core::Timestamp)> =
+            std::mem::take(&mut st.pending);
+        if !ctx.allow_provider_call() {
+            ctx.record_skipped(items.len() as u64);
+            return Ok(0);
+        }
+        let images: Vec<ImageData> = items.iter().map(|(_, im, _)| im.clone()).collect();
+        let resp = match embedder.embed_images(&images).await {
+            Ok(r) => r,
+            Err(e) => {
+                let t0 = items
+                    .iter()
+                    .map(|i| i.2)
+                    .min()
+                    .unwrap_or(vi_core::Timestamp::ZERO);
+                let t1 = items.iter().map(|i| i.2).max().unwrap_or(t0);
+                for _ in 0..items.len() {
+                    ctx.failures.record(t0, t1, &e);
+                }
+                tracing::warn!(stage = %ctx.stage, batch = items.len(), error = %e, "batch failed; continuing");
+                return Ok(0);
+            }
+        };
+        ctx.record_cost(&resp.stats);
         if resp.vectors.len() != items.len() {
             return Err(ctx.err(format!(
                 "provider returned {} vectors for {} images",
@@ -81,7 +99,7 @@ impl ImageEmbed {
         let rows: Vec<Embedding> = items
             .iter()
             .zip(resp.vectors)
-            .map(|((sample, _), vector)| Embedding {
+            .map(|((sample, _, _), vector)| Embedding {
                 id: EmbeddingId::new(),
                 target_kind: TargetKind::Frame,
                 target_id: sample.to_string(),
@@ -119,6 +137,20 @@ impl Operator for ImageEmbed {
         &[roles::IMAGE_EMBED]
     }
 
+    fn cache_params(&self, ctx: &OpContext) -> serde_json::Value {
+        let (provider, model) = ctx
+            .providers
+            .image_embedder()
+            .map(|a| (a.provider_name().to_string(), a.model().to_string()))
+            .unwrap_or_default();
+        serde_json::json!({
+            "provider": provider,
+            "model": model,
+            "dedup_distance": PHASH_DEDUP_DISTANCE,
+            "sample_fps": ctx.policy.sample_fps,
+        })
+    }
+
     fn cost_estimate(&self, input: &InputSummary) -> CostEstimate {
         // About a third of lecture frames are pHash-distinct; SigLIP base
         // on the CPU takes about 40 ms per image.
@@ -134,7 +166,7 @@ impl Operator for ImageEmbed {
             sample,
             phash,
             frame,
-            ..
+            t,
         } = input.item
         else {
             return Err(ctx.err("expected a hashed frame"));
@@ -164,6 +196,7 @@ impl Operator for ImageEmbed {
                 height: h,
                 data: Arc::from(rgb),
             },
+            t,
         ));
         let stored = self.flush(ctx, &mut st, false).await?;
         if st.seen % 64 == 0 {

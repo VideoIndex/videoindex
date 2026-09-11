@@ -1,13 +1,15 @@
 //! The operator contract from `docs/05-indexing-pipeline.md`.
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use vi_core::config::{Config, IndexPolicy, WorkerConfig};
-use vi_core::model::{FrameSample, Track, Video};
+use vi_core::model::{FailedRange, FrameSample, Track, Video};
 use vi_core::{Error, Event, EventBus, JobId, Progress, Result, Timestamp, VideoId};
 use vi_index::{BlobKey, Storage};
 use vi_media::{Acquired, FrameBuffer, Probe};
@@ -228,6 +230,153 @@ impl Emitter {
     }
 }
 
+/// The job's spending limits (`docs/05-indexing-pipeline.md`, budgets).
+/// Provider-backed operators call [`Budget::allow_call`] before each
+/// provider call; once a limit is hit no new calls are issued, what exists
+/// is written, and the report lists what was skipped.
+#[derive(Debug)]
+pub struct Budget {
+    /// Cost ceiling in USD for this job; `None` means unlimited.
+    pub max_cost_usd: Option<f64>,
+    /// Wall-clock deadline for issuing provider calls.
+    pub deadline: Option<Instant>,
+    /// Wall-clock limit in seconds, for reports.
+    pub max_wallclock_secs: Option<f64>,
+    spent_micro_usd: AtomicU64,
+    exhausted: AtomicBool,
+    started: Instant,
+}
+
+impl Budget {
+    /// A budget from a policy's per-hour limits and the video's duration.
+    pub fn for_policy(policy: &IndexPolicy, duration_secs: f64) -> Result<Self> {
+        let hours = (duration_secs / 3600.0).max(1.0 / 60.0); // at least a minute's worth
+        let max_cost_usd =
+            (policy.max_cost_usd_per_hour > 0.0).then_some(policy.max_cost_usd_per_hour * hours);
+        let wall = policy.max_wallclock_per_hour_secs()?;
+        let max_wallclock_secs = (wall > 0.0).then_some(wall * hours);
+        let started = Instant::now();
+        Ok(Self {
+            max_cost_usd,
+            deadline: max_wallclock_secs.map(|s| started + std::time::Duration::from_secs_f64(s)),
+            max_wallclock_secs,
+            spent_micro_usd: AtomicU64::new(0),
+            exhausted: AtomicBool::new(false),
+            started,
+        })
+    }
+
+    /// No limits.
+    pub fn unlimited() -> Self {
+        Self {
+            max_cost_usd: None,
+            deadline: None,
+            max_wallclock_secs: None,
+            spent_micro_usd: AtomicU64::new(0),
+            exhausted: AtomicBool::new(false),
+            started: Instant::now(),
+        }
+    }
+
+    /// Record spend.
+    pub fn add_cost(&self, usd: f64) {
+        if usd > 0.0 {
+            self.spent_micro_usd
+                .fetch_add((usd * 1e6).round() as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// Spend so far.
+    pub fn spent_usd(&self) -> f64 {
+        self.spent_micro_usd.load(Ordering::Relaxed) as f64 / 1e6
+    }
+
+    /// Whether another provider call may be issued. Once this returns
+    /// false it stays false.
+    pub fn allow_call(&self) -> bool {
+        if self.exhausted.load(Ordering::Relaxed) {
+            return false;
+        }
+        let over_cost = self.max_cost_usd.is_some_and(|max| self.spent_usd() >= max);
+        let over_time = self.deadline.is_some_and(|d| Instant::now() >= d);
+        if over_cost || over_time {
+            self.exhausted.store(true, Ordering::Relaxed);
+            tracing::warn!(
+                spent_usd = self.spent_usd(),
+                elapsed_secs = self.started.elapsed().as_secs_f64(),
+                reason = if over_cost { "cost" } else { "wallclock" },
+                "budget exhausted; no further provider calls"
+            );
+            return false;
+        }
+        true
+    }
+
+    /// Whether a limit was hit.
+    pub fn is_exhausted(&self) -> bool {
+        self.exhausted.load(Ordering::Relaxed)
+    }
+
+    /// Which limit was hit, for reports.
+    pub fn exhausted_reason(&self) -> Option<&'static str> {
+        if !self.is_exhausted() {
+            return None;
+        }
+        if self.max_cost_usd.is_some_and(|m| self.spent_usd() >= m) {
+            Some("cost")
+        } else {
+            Some("wallclock")
+        }
+    }
+}
+
+/// Failure bookkeeping for one stage, shared with the scheduler.
+#[derive(Debug, Default)]
+pub struct StageFailures {
+    count: AtomicU64,
+    skipped: AtomicU64,
+    first: std::sync::Mutex<Vec<FailedRange>>,
+}
+
+/// How many failed ranges a report keeps in full.
+pub const MAX_REPORTED_FAILURES: usize = 50;
+
+impl StageFailures {
+    /// Record a failed input range.
+    pub fn record(&self, t0: Timestamp, t1: Timestamp, error: impl std::fmt::Display) {
+        self.count.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut v) = self.first.lock() {
+            if v.len() < MAX_REPORTED_FAILURES {
+                v.push(FailedRange {
+                    t0,
+                    t1,
+                    error: error.to_string(),
+                });
+            }
+        }
+    }
+
+    /// Record inputs skipped because the budget ran out.
+    pub fn skipped(&self, n: u64) {
+        self.skipped.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Failures so far.
+    pub fn count(&self) -> u64 {
+        self.count.load(Ordering::Relaxed)
+    }
+
+    /// Skips so far.
+    pub fn skipped_count(&self) -> u64 {
+        self.skipped.load(Ordering::Relaxed)
+    }
+
+    /// The recorded ranges.
+    pub fn ranges(&self) -> Vec<FailedRange> {
+        self.first.lock().map(|v| v.clone()).unwrap_or_default()
+    }
+}
+
 /// What an operator sees while running.
 pub struct OpContext {
     /// Job id.
@@ -254,6 +403,10 @@ pub struct OpContext {
     pub events: EventBus,
     /// Expected item count for progress, when known.
     pub expected_items: Option<u64>,
+    /// The job's budget.
+    pub budget: Arc<Budget>,
+    /// This stage's failure record.
+    pub failures: Arc<StageFailures>,
 }
 
 impl std::fmt::Debug for OpContext {
@@ -275,6 +428,27 @@ impl OpContext {
         self.emitter.emit(item).await
     }
 
+    /// Whether a provider call may be issued now (budget not exhausted).
+    pub fn allow_provider_call(&self) -> bool {
+        self.budget.allow_call()
+    }
+
+    /// Record a provider call's cost against the budget.
+    pub fn record_cost(&self, stats: &vi_providers::CallStats) {
+        self.budget.add_cost(stats.cost_usd);
+    }
+
+    /// Record an input range that failed after retries; the stage goes on.
+    pub fn record_failure(&self, t0: Timestamp, t1: Timestamp, error: impl std::fmt::Display) {
+        tracing::warn!(stage = %self.stage, t0 = %t0, t1 = %t1, error = %error, "input failed; continuing");
+        self.failures.record(t0, t1, error);
+    }
+
+    /// Record inputs skipped because the budget ran out.
+    pub fn record_skipped(&self, n: u64) {
+        self.failures.skipped(n);
+    }
+
     /// Report progress for this stage.
     pub fn progress(&self, items_done: u64) {
         let fraction = match self.expected_items {
@@ -288,7 +462,7 @@ impl OpContext {
             fraction,
             items_done,
             items_total: self.expected_items,
-            cost_usd: 0.0,
+            cost_usd: self.budget.spent_usd(),
             eta_secs: None,
         }));
     }
@@ -350,10 +524,78 @@ pub trait Operator: Send + Sync {
     }
     /// Cost estimate.
     fn cost_estimate(&self, input: &InputSummary) -> CostEstimate;
+    /// Parameters that change the output and so belong in the cache key
+    /// (provider, model, thresholds). The scheduler adds the content hash,
+    /// operator id and version itself.
+    fn cache_params(&self, _ctx: &OpContext) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+    /// Re-emit stored outputs of an earlier run to consumers without
+    /// recomputing. Returns the number of items emitted, or `None` when the
+    /// operator cannot replay (its outputs are not stored as items). Called
+    /// instead of `run`/`finish` when the stage is cached but a consumer
+    /// still needs its items.
+    async fn replay(&self, _ctx: &OpContext) -> Result<Option<u64>> {
+        Ok(None)
+    }
+    /// Whether [`Operator::replay`] is implemented (decided at plan time).
+    fn replay_supported(&self) -> bool {
+        false
+    }
     /// Process one input item, emitting through `ctx`.
     async fn run(&self, ctx: &OpContext, input: OpInput) -> Result<OpOutput>;
     /// Called once after the last input; flush buffered writes.
     async fn finish(&self, _ctx: &OpContext) -> Result<OpOutput> {
         Ok(OpOutput::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn budget_limits_from_policy() {
+        let mut p = IndexPolicy::m0();
+        p.max_cost_usd_per_hour = 2.0;
+        p.max_wallclock_per_hour = "20m".into();
+        let b = Budget::for_policy(&p, 1800.0).unwrap();
+        assert_eq!(b.max_cost_usd, Some(1.0));
+        assert_eq!(b.max_wallclock_secs, Some(600.0));
+        assert!(b.allow_call());
+        b.add_cost(0.6);
+        assert!(b.allow_call());
+        b.add_cost(0.5);
+        assert!(!b.allow_call(), "over the cost ceiling");
+        assert!(b.is_exhausted());
+        assert_eq!(b.exhausted_reason(), Some("cost"));
+        assert!((b.spent_usd() - 1.1).abs() < 1e-9);
+
+        let mut free = IndexPolicy::m0();
+        free.max_cost_usd_per_hour = 0.0;
+        free.max_wallclock_per_hour = "0".into();
+        let b = Budget::for_policy(&free, 10.0).unwrap();
+        assert!(b.max_cost_usd.is_none() && b.deadline.is_none());
+        assert!(b.allow_call());
+
+        let mut bad = IndexPolicy::m0();
+        bad.max_wallclock_per_hour = "soon".into();
+        assert!(Budget::for_policy(&bad, 10.0).is_err());
+    }
+
+    #[test]
+    fn failures_are_capped_but_counted() {
+        let f = StageFailures::default();
+        for i in 0..(MAX_REPORTED_FAILURES + 10) {
+            f.record(
+                Timestamp::from_secs(i as i64),
+                Timestamp::from_secs(i as i64 + 1),
+                "boom",
+            );
+        }
+        f.skipped(3);
+        assert_eq!(f.count() as usize, MAX_REPORTED_FAILURES + 10);
+        assert_eq!(f.ranges().len(), MAX_REPORTED_FAILURES);
+        assert_eq!(f.skipped_count(), 3);
     }
 }

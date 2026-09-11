@@ -18,7 +18,7 @@ pub struct TextEmbed {
 
 #[derive(Debug, Default)]
 struct State {
-    pending: Vec<(TargetKind, String, String)>,
+    pending: Vec<(TargetKind, String, String, vi_core::Timestamp)>,
     embedded: u64,
 }
 
@@ -37,11 +37,28 @@ impl TextEmbed {
         let items = std::mem::take(&mut st.pending);
         let mut stored = 0;
         for chunk in items.chunks(batch) {
-            let texts: Vec<String> = chunk.iter().map(|(_, _, t)| t.clone()).collect();
-            let resp = embedder
-                .embed(&texts)
-                .await
-                .map_err(|e| ctx.err(e.to_string()))?;
+            if !ctx.allow_provider_call() {
+                ctx.record_skipped(chunk.len() as u64);
+                continue;
+            }
+            let texts: Vec<String> = chunk.iter().map(|(_, _, t, _)| t.clone()).collect();
+            let resp = match embedder.embed(&texts).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let t0 = chunk
+                        .iter()
+                        .map(|c| c.3)
+                        .min()
+                        .unwrap_or(vi_core::Timestamp::ZERO);
+                    let t1 = chunk.iter().map(|c| c.3).max().unwrap_or(t0);
+                    for _ in 0..chunk.len() {
+                        ctx.failures.record(t0, t1, &e);
+                    }
+                    tracing::warn!(stage = %ctx.stage, batch = chunk.len(), error = %e, "batch failed; continuing");
+                    continue;
+                }
+            };
+            ctx.record_cost(&resp.stats);
             if resp.vectors.len() != chunk.len() {
                 return Err(ctx.err(format!(
                     "provider returned {} vectors for {} texts",
@@ -61,7 +78,7 @@ impl TextEmbed {
             let rows: Vec<Embedding> = chunk
                 .iter()
                 .zip(resp.vectors)
-                .map(|((kind, id, _), vector)| Embedding {
+                .map(|((kind, id, _, _), vector)| Embedding {
                     id: EmbeddingId::new(),
                     target_kind: *kind,
                     target_id: id.clone(),
@@ -105,6 +122,15 @@ impl Operator for TextEmbed {
         &[roles::TEXT_EMBED]
     }
 
+    fn cache_params(&self, ctx: &OpContext) -> serde_json::Value {
+        let (provider, model) = ctx
+            .providers
+            .text_embedder()
+            .map(|a| (a.provider_name().to_string(), a.model().to_string()))
+            .unwrap_or_default();
+        serde_json::json!({ "provider": provider, "model": model })
+    }
+
     fn cost_estimate(&self, input: &InputSummary) -> CostEstimate {
         // About one span per 12 s of speech, 5 ms each on the CPU.
         let spans = input.duration_secs / 12.0;
@@ -116,18 +142,22 @@ impl Operator for TextEmbed {
     }
 
     async fn run(&self, ctx: &OpContext, input: OpInput) -> Result<OpOutput> {
-        let (kind, id, text) = match input.item {
-            Item::TranscriptSpan(s) => {
-                (TargetKind::TranscriptSpan, s.id.to_string(), s.text.clone())
-            }
-            Item::OcrSpan(s) => (TargetKind::OcrSpan, s.id.to_string(), s.text.clone()),
+        let (kind, id, text, t) = match input.item {
+            Item::TranscriptSpan(s) => (
+                TargetKind::TranscriptSpan,
+                s.id.to_string(),
+                s.text.clone(),
+                s.t0,
+            ),
+            Item::OcrSpan(s) => (TargetKind::OcrSpan, s.id.to_string(), s.text.clone(), s.t),
+            Item::Media(_) => return Ok(OpOutput::default()),
             _ => return Err(ctx.err("expected a transcript or OCR span")),
         };
         if text.trim().is_empty() {
             return Ok(OpOutput::default());
         }
         let mut st = self.state.lock().await;
-        st.pending.push((kind, id, text));
+        st.pending.push((kind, id, text, t));
         let stored = self.flush(ctx, &mut st, false).await?;
         Ok(OpOutput { emitted: 0, stored })
     }

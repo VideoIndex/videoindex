@@ -196,6 +196,9 @@ pub trait Storage: Send + Sync {
     /// Remove the transcript spans of a track that a given operator produced
     /// (so a re-run replaces its own output and leaves imported subtitles).
     async fn delete_spans_by_operator(&self, track: TrackId, operator: &str) -> Result<u64>;
+    /// Transcript and OCR spans of a video produced by an operator, in time
+    /// order (used to replay a cached stage's outputs to its consumers).
+    async fn spans_by_operator(&self, video: VideoId, operator: &str) -> Result<Vec<Span>>;
     /// Insert or replace descriptions.
     async fn put_descriptions(&self, d: &[Description]) -> Result<()>;
     /// Insert embedding metadata (and vectors, once a vector store exists).
@@ -236,6 +239,11 @@ pub trait Storage: Send + Sync {
 
     // ---- maintenance -----------------------------------------------------
 
+    /// Directory for operator output cache markers (`cache/` in the
+    /// embedded layout); `None` for backends without a local directory.
+    fn cache_dir(&self) -> Option<std::path::PathBuf> {
+        None
+    }
     /// The manifest.
     async fn manifest(&self) -> Result<Manifest>;
     /// Sizes and counts.

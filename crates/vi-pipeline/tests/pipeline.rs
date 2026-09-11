@@ -251,6 +251,242 @@ async fn unknown_and_planned_operators_are_clear_errors() {
     assert_eq!(dag.stage_names()[0], "sample");
 }
 
+fn policy(ops: &[&str]) -> vi_core::config::IndexPolicy {
+    vi_core::config::IndexPolicy {
+        coarse: ops.iter().map(|s| s.to_string()).collect(),
+        fine: vec![],
+        ..vi_core::config::IndexPolicy::m0()
+    }
+}
+
+/// Write the fixture with an `.info.json` and an English SRT into
+/// `<cache>/incoming/PLtest/` and return the media path.
+fn seed_incoming(cache: &std::path::Path) -> std::path::PathBuf {
+    let incoming = cache.join("incoming").join("PLtest");
+    std::fs::create_dir_all(&incoming).unwrap();
+    let media = incoming.join("001-fixture.mp4");
+    std::fs::copy(fx::fixture_path(), &media).unwrap();
+    std::fs::write(
+        incoming.join("001-fixture.info.json"),
+        serde_json::json!({
+            "id": "fixture",
+            "title": "Synthetic workshop",
+            "webpage_url": "https://www.youtube.com/watch?v=fixture",
+            "subtitles": {"en": [{"ext": "srt"}]},
+            "automatic_captions": {}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut srt = String::new();
+    for i in 0..24 {
+        let t0 = i * 5;
+        srt.push_str(&format!(
+            "{}\n00:0{}:{:02},000 --> 00:0{}:{:02},500\ncaption kw{i} about segment {}\n\n",
+            i + 1,
+            t0 / 60,
+            t0 % 60,
+            (t0 + 4) / 60,
+            (t0 + 4) % 60,
+            t0 / 10
+        ));
+    }
+    std::fs::write(incoming.join("001-fixture.en.srt"), srt).unwrap();
+    media
+}
+
+#[tokio::test]
+async fn cached_stages_are_skipped_or_replayed_and_new_ones_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let idx = Arc::new(EmbeddedIndex::create(&dir.path().join("t.vidx")).unwrap());
+    let mut c = Config::default();
+    c.media.worker.path = Some(fx::worker_path());
+    c.media.sample_max_dim = 320;
+    c.policy
+        .insert("a".into(), policy(&["sample", "phash", "thumbnail"]));
+    c.policy.insert(
+        "b".into(),
+        policy(&["sample", "phash", "thumbnail", "shot_boundary"]),
+    );
+    let sched = Scheduler::new(idx.clone(), Arc::new(c), EventBus::default());
+    let run = |p: &str, force: bool| {
+        let sched = sched.clone();
+        let p = p.to_string();
+        async move {
+            sched
+                .run(
+                    Source::Path(fx::fixture_path()),
+                    JobOptions {
+                        policy: Some(p),
+                        force,
+                        ..JobOptions::default()
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap()
+        }
+    };
+    let first = run("a", false).await;
+    assert!(first.ok && !first.skipped, "{first:?}");
+    assert!(first.stages.values().all(|s| !s.cached));
+    // Markers exist for every stage.
+    let markers = std::fs::read_dir(dir.path().join("t.vidx/cache/operators"))
+        .unwrap()
+        .count();
+    assert_eq!(markers, 3);
+
+    // Same policy again: everything cached, nothing runs.
+    let again = run("a", false).await;
+    assert!(again.skipped, "{again:?}");
+    assert!(again
+        .stages
+        .values()
+        .all(|s| s.cached && s.status == StageStatus::Skipped));
+
+    // A policy with one more operator: shot_boundary runs, which needs
+    // frames, so sample runs too; phash and thumbnail have no running
+    // consumer and are skipped from the cache.
+    let more = run("b", false).await;
+    assert!(more.ok && !more.skipped, "{more:?}");
+    assert_eq!(more.stages["shot_boundary"].status, StageStatus::Complete);
+    assert_eq!(more.stages["shot_boundary"].items_done, 12);
+    assert_eq!(more.stages["sample"].status, StageStatus::Complete);
+    assert!(
+        more.stages["sample"].cached,
+        "sample was cached but had to run"
+    );
+    // sample re-running replaces the frame rows, so phash and thumbnail,
+    // though cached, run again or the new rows would lack hashes and
+    // thumbnails.
+    assert_eq!(more.stages["phash"].status, StageStatus::Complete);
+    assert!(more.stages["phash"].cached);
+    assert_eq!(more.stages["thumbnail"].status, StageStatus::Complete);
+    let video = &idx.list_videos().await.unwrap()[0];
+    let tracks = idx.tracks(video.id).await.unwrap();
+    let vt = tracks
+        .iter()
+        .find(|t| t.kind == vi_core::model::TrackKind::Video)
+        .unwrap();
+    let samples = idx.frame_samples(vt.id, None).await.unwrap();
+    assert!(!samples.is_empty());
+    assert!(samples
+        .iter()
+        .all(|s| s.phash.is_some() && s.thumbnail_blob.is_some()));
+
+    // Same policy again: all four cached, nothing runs.
+    let same = run("b", false).await;
+    assert!(same.skipped, "{same:?}");
+
+    // Force re-runs everything.
+    let forced = run("b", true).await;
+    assert!(forced.ok && !forced.skipped);
+    assert!(forced
+        .stages
+        .values()
+        .all(|s| s.status == StageStatus::Complete));
+    assert!(forced.stages.values().all(|s| !s.cached));
+}
+
+#[tokio::test]
+async fn budget_exhaustion_skips_provider_calls_and_failures_are_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("videos");
+    let media = seed_incoming(&cache);
+    let idx = Arc::new(EmbeddedIndex::create(&dir.path().join("t.vidx")).unwrap());
+    let mut c = Config::default();
+    c.media.worker.path = Some(fx::worker_path());
+    c.media.cache_dir = cache.clone();
+    // A local text embedder pointing at a directory with no models.
+    c.providers.insert(
+        "local".into(),
+        vi_core::config::ProviderConfig {
+            adapter: "onnx_local".into(),
+            model_dir: Some(dir.path().join("no-models")),
+            ..Default::default()
+        },
+    );
+    c.roles.insert(
+        "text_embed".into(),
+        vi_core::config::RoleBinding {
+            provider: "local".into(),
+            ..Default::default()
+        },
+    );
+    let mut tight = policy(&["subtitle_import", "text_embed"]);
+    tight.max_wallclock_per_hour = "1ms".into();
+    c.policy.insert("tight".into(), tight);
+    c.policy
+        .insert("loose".into(), policy(&["subtitle_import", "text_embed"]));
+    let sched = Scheduler::new(idx.clone(), Arc::new(c), EventBus::default());
+
+    // Wall-clock budget of a millisecond: no provider call is issued, the
+    // stage completes with everything skipped, the job is still ok.
+    let r = sched
+        .run(
+            Source::Path(media.clone()),
+            JobOptions {
+                policy: Some("tight".into()),
+                ..JobOptions::default()
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(r.ok, "{r:?}");
+    let te = &r.stages["text_embed"];
+    assert_eq!(te.status, StageStatus::Complete);
+    assert!(te.items_skipped >= 6, "{te:?}");
+    assert_eq!(te.items_failed, 0);
+    assert_eq!(r.budget.exhausted.as_deref(), Some("wallclock"));
+    // A stage that skipped work leaves no cache marker.
+    let markers: Vec<String> = std::fs::read_dir(dir.path().join("t.vidx/cache/operators"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    assert!(markers.iter().any(|m| m.starts_with("subtitle_import")));
+    assert!(
+        !markers.iter().any(|m| m.starts_with("text_embed")),
+        "{markers:?}"
+    );
+
+    // Unlimited budget: every batch fails (no model files), the failures
+    // are recorded, the stage is failed, the job is not ok.
+    let media_cached = cache.join(format!(
+        "{}.mp4",
+        idx.get_video(r.video_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .content_hash
+    ));
+    let r2 = sched
+        .run(
+            Source::Path(media_cached),
+            JobOptions {
+                policy: Some("loose".into()),
+                force: true,
+                ..JobOptions::default()
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(!r2.ok, "{r2:?}");
+    let te = &r2.stages["text_embed"];
+    assert_eq!(te.status, StageStatus::Failed);
+    assert!(te.items_failed >= 6, "{te:?}");
+    assert!(!te.failures.is_empty());
+    assert!(
+        te.failures[0].error.contains("model file missing"),
+        "{:?}",
+        te.failures[0]
+    );
+    assert_eq!(r2.index_state, IndexState::Failed);
+    // subtitle_import still completed and is cached.
+    assert_eq!(r2.stages["subtitle_import"].status, StageStatus::Complete);
+}
+
 #[tokio::test]
 async fn provider_backed_operators_need_a_bound_role_at_plan_time() {
     let dir = tempfile::tempdir().unwrap();
