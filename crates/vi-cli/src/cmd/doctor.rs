@@ -34,7 +34,18 @@ struct Disk {
 #[derive(Debug, Serialize)]
 struct Gpu {
     present: bool,
+    /// One line per GPU: name, VRAM, driver.
     detail: String,
+    count: u32,
+    driver_version: Option<String>,
+    /// CUDA version the driver supports, from the `nvidia-smi` banner.
+    cuda_driver_version: Option<String>,
+    /// `nvcc --version` release, when a CUDA toolkit is installed.
+    cuda_toolkit_version: Option<String>,
+    /// CUDA runtime libraries ONNX Runtime's CUDA execution provider needs
+    /// (`libcudart`, `libcublas`, `libcudnn`), as found by the dynamic
+    /// linker.
+    cuda_libs: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,35 +110,7 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
     .map(|name| tool(name))
     .collect::<Vec<_>>();
 
-    let gpu = match which::which("nvidia-smi") {
-        Ok(_) => match Command::new("nvidia-smi")
-            .args([
-                "--query-gpu=name,memory.total,driver_version",
-                "--format=csv,noheader",
-            ])
-            .output()
-        {
-            Ok(o) if o.status.success() => Gpu {
-                present: true,
-                detail: String::from_utf8_lossy(&o.stdout).trim().to_string(),
-            },
-            Ok(o) => Gpu {
-                present: false,
-                detail: format!(
-                    "nvidia-smi present but failed: {}",
-                    String::from_utf8_lossy(&o.stderr).trim()
-                ),
-            },
-            Err(e) => Gpu {
-                present: false,
-                detail: format!("nvidia-smi failed to run: {e}"),
-            },
-        },
-        Err(_) => Gpu {
-            present: false,
-            detail: "none (nvidia-smi not installed)".into(),
-        },
-    };
+    let gpu = detect_gpu();
 
     let disks = sysinfo::Disks::new_with_refreshed_list()
         .iter()
@@ -162,15 +145,7 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
     };
 
     let incoming = Path::new("/data/videoindex/videos/incoming");
-    let incoming_files = std::fs::read_dir(incoming).ok().map(|rd| {
-        rd.filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .is_some_and(|x| x == "mp4" || x == "mkv" || x == "webm")
-            })
-            .count() as u64
-    });
+    let incoming_files = incoming.is_dir().then(|| count_videos(incoming, 0));
 
     let report = Report {
         vi_version: env!("CARGO_PKG_VERSION").into(),
@@ -225,6 +200,16 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
             bytes(report.swap_total)
         ));
         s.push_str(&format!("gpu: {}\n", report.gpu.detail));
+        if report.gpu.present {
+            s.push_str(&format!(
+                "  count {}  driver {}  cuda (driver) {}  cuda toolkit {}  cuda libs: {}\n",
+                report.gpu.count,
+                report.gpu.driver_version.as_deref().unwrap_or("?"),
+                report.gpu.cuda_driver_version.as_deref().unwrap_or("?"),
+                report.gpu.cuda_toolkit_version.as_deref().unwrap_or("missing"),
+                if report.gpu.cuda_libs.is_empty() { "none (ONNX Runtime CUDA EP unavailable)".to_string() } else { report.gpu.cuda_libs.join(" ") }
+            ));
+        }
         s.push_str("disks:\n");
         for d in &report.disks {
             s.push_str(&format!("  {:<16} {} free of {}\n", d.mount, bytes(d.available), bytes(d.total)));
@@ -275,7 +260,13 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
 }
 
 fn tool(name: &str) -> Tool {
-    let path = which::which(name).ok();
+    let path = which::which(name).ok().or_else(|| {
+        // rustup installs into ~/.cargo/bin, which non-login shells may
+        // not have on PATH.
+        let home = std::env::var_os("HOME")?;
+        let p = Path::new(&home).join(".cargo").join("bin").join(name);
+        p.is_file().then_some(p)
+    });
     let version = path.as_ref().and_then(|p| {
         let args: &[&str] = match name {
             "ffmpeg" | "ffprobe" => &["-version"],
@@ -314,6 +305,117 @@ fn shorten_version(name: &str, line: &str) -> String {
             .next()
             .unwrap_or(line)
             .to_string(),
+        "nvidia-smi" => line.rsplit(':').next().unwrap_or(line).trim().to_string(),
         _ => line.to_string(),
     }
+}
+
+/// Count video files under `dir`, descending into subdirectories (playlists
+/// arrive as one directory each).
+fn count_videos(dir: &Path, depth: u32) -> u64 {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut n = 0;
+    for e in rd.filter_map(|e| e.ok()) {
+        let p = e.path();
+        if p.is_dir() {
+            if depth < 3 {
+                n += count_videos(&p, depth + 1);
+            }
+        } else if vi_media::acquire::is_video_file(&p) {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn detect_gpu() -> Gpu {
+    let none = |detail: String| Gpu {
+        present: false,
+        detail,
+        count: 0,
+        driver_version: None,
+        cuda_driver_version: None,
+        cuda_toolkit_version: None,
+        cuda_libs: Vec::new(),
+    };
+    if which::which("nvidia-smi").is_err() {
+        return none("none (nvidia-smi not installed)".into());
+    }
+    let query = Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=name,memory.total,driver_version",
+            "--format=csv,noheader",
+        ])
+        .output();
+    let rows: Vec<String> = match query {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
+        Ok(o) => {
+            return none(format!(
+                "nvidia-smi present but failed: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            ))
+        }
+        Err(e) => return none(format!("nvidia-smi failed to run: {e}")),
+    };
+    if rows.is_empty() {
+        return none("nvidia-smi reports no GPU".into());
+    }
+    let driver_version = rows[0].rsplit(',').next().map(|s| s.trim().to_string());
+    // The banner is the only place nvidia-smi prints the CUDA version the
+    // driver supports.
+    let cuda_driver_version = Command::new("nvidia-smi").output().ok().and_then(|o| {
+        let text = String::from_utf8_lossy(&o.stdout).to_string();
+        let i = text.find("CUDA Version:")?;
+        let rest = &text[i + "CUDA Version:".len()..];
+        let v: String = rest
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        (!v.is_empty()).then_some(v)
+    });
+    let cuda_toolkit_version = ["nvcc", "/usr/local/cuda/bin/nvcc"]
+        .iter()
+        .find_map(|c| Command::new(c).arg("--version").output().ok())
+        .and_then(|o| {
+            let text = String::from_utf8_lossy(&o.stdout).to_string();
+            let i = text.find("release ")?;
+            let v: String = text[i + "release ".len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            (!v.is_empty()).then_some(v)
+        });
+    let cuda_libs = ["libcudart.so", "libcublas.so", "libcudnn.so"]
+        .iter()
+        .filter(|lib| ldconfig_has(lib))
+        .map(|s| s.to_string())
+        .collect();
+    Gpu {
+        present: true,
+        detail: rows.join("; "),
+        count: rows.len() as u32,
+        driver_version,
+        cuda_driver_version,
+        cuda_toolkit_version,
+        cuda_libs,
+    }
+}
+
+/// Whether the dynamic linker cache lists a library (Linux only).
+fn ldconfig_has(lib: &str) -> bool {
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
+    Command::new("ldconfig")
+        .arg("-p")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains(lib))
+        .unwrap_or(false)
 }
