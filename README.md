@@ -44,6 +44,22 @@ vi status ./talks.vidx                     # videos, states, sample counts, size
 
 Every command takes `--json` for machine-readable output and `--config videoindex.toml`; `VI_*` environment variables override config keys (`VI_MEDIA__SAMPLE_MAX_DIM=320`).
 
+## Python
+
+```sh
+cd bindings/python && maturin develop --release   # into an active virtualenv; needs the same build deps as the crates
+```
+
+```python
+import videoindex as vi
+idx = vi.Index.open("./talks.vidx", config=vi.Config.from_file("config/gcp-a100.toml"))
+hits = idx.search("hybrid retrieval", k=5)
+for ev in idx.ask("When do they discuss evaluation?"):
+    if ev["type"] == "token": print(ev["text"], end="")
+```
+
+`bindings/python/README.md` has the full surface. The decode worker is a separate binary, so set `media.worker.path` to a built `vi` or `vi-media-worker` when the package is used outside this repository (wheels will bundle it later).
+
 ## Evaluation
 
 Benchmarks: LVBench, 1H-VideoQA and Minerva, as named in Google's [agentic video](https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-agentic-video-in-gemini/) announcement. Model backends are abstracted so open-source and frontier models can be compared A/B on the same index.

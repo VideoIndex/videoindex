@@ -115,6 +115,8 @@ Streaming events over the SDK and over SSE:
 
 Citations are emitted inline as the answer streams and are always backed by a stored row (span, description, or the frames a `view` returned, which are persisted as a blob so the citation can be rendered later). The chat app renders citations as clickable timestamps that seek the player.
 
+Implementation (M2): the model writes markers of the form `[[cite:VIDEO_ID:T0-T1]]` (seconds, or `HH:MM:SS`); a streaming scanner removes them from the token stream and emits `citation` events, typed by the evidence the loop has already seen for that video and range (`transcript`, `ocr`, `frame`, `description`, else `range`). Markers naming a video that is not in the index are dropped. The CLI prints them as `[HH:MM:SS]` (with the video title when the index holds several videos).
+
 ## Multi-video and cross-video queries
 
 An Index holds many Videos. `search` and `ask` accept a video filter; without one they run across the Index. Temporal fusion is per video; cross-video ranking uses the fused scene scores. Answers cite per video. This is how the demo app answers questions across a full playlist.

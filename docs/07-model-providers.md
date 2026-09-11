@@ -48,8 +48,10 @@ Examples of how this is used:
 | `anthropic` | Vlm (images), Llm | Claude models. Frame grids for video. |
 | `onnx_local` | ImageEmbedder, TextEmbedder, Ocr, plus VAD internally | In-process via ONNX Runtime: SigLIP or CLIP, a small text embedder, RapidOCR, Silero VAD. CPU by default, CUDA or CoreML execution providers when available. |
 | `candle_local` | ImageEmbedder, TextEmbedder | Alternative pure-Rust backend for platforms where ONNX Runtime is awkward. |
-| `whisper_local` | Asr | whisper.cpp via its server or bindings, for fully offline indexing. |
+| `whisper_local` | Asr | whisper.cpp via its server or bindings, for fully offline indexing. Not built: the faster-whisper server in `scripts/asr-server/` is reached through `openai_compat`, which covers this case. |
 | `paddleocr_sidecar` | Ocr | Optional HTTP sidecar for higher-quality OCR. |
+
+Status (2026-09-11): `openai_compat` (ASR, chat, embeddings), `anthropic`, `gemini` and `onnx_local` (SigLIP, bge-small, RapidOCR; Silero VAD is used by the `vad` operator directly) are implemented in `vi-providers` and `vi-perceive`. Gemini's file upload for clips over the inline limit, `candle_local` and `paddleocr_sidecar` are not. Adapters that live outside `vi-providers` (`onnx_local`) register through `ProviderRegistry::register_factory`.
 
 Adding an adapter is one crate module implementing the traits and a capabilities struct. No other crate changes.
 
