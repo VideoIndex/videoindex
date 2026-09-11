@@ -1,3 +1,49 @@
+
+⏺ Both updates are done. The docs now reflect the real 1H-VideoQA facts, and the download path assumes YouTube is unreachable from azuremc.
+
+  1H-VideoQA corrections in docs/08-evaluation.md and the roadmap. The repo at github.com/google-deepmind/1h-videoqa is Apache-2.0 with data via a linked Kaggle benchmark. It has 101 five-way multiple-choice questions
+  over 21 YouTube videos of 40 to 90 minutes, so I changed my earlier 125-question and 105-minute figures. Because the set is small, the eval doc now asks for per-question results and a confidence interval. The roadmap's
+  open question about availability is marked resolved.
+
+  Download path now runs on the Mac in every doc that mentioned it. The deployment doc describes a three-step flow: download on the Mac, rsync into /data/videoindex/videos/incoming/ on azuremc, then index the local files
+  there. The pipeline doc adds that the local-file acquirer imports yt-dlp's .info.json and subtitle sidecars so transferred videos keep title, chapters, and captions. The kickoff prompt tells the agent to expect YouTube
+  to be blocked and to start M1 with that sidecar import instead of the yt-dlp acquirer.
+
+  The script is written since downloads are now the only path. scripts/download_videos.sh installs yt-dlp via Homebrew if missing, reads the two playlist URLs from dataset/videolist.md or a URL file you pass, fetches 720p
+  MP4 with English subtitles and metadata, skips already-downloaded entries on re-run, and prints the rsync command. It passed a bash syntax check and the URL extraction was tested against your list, which yields exactly
+  the two playlist URLs. It deliberately skips the bare channel URL, which would fetch the whole AI Engineer channel. To run it:
+
+  scripts/download_videos.sh
+
+  The script has not been executed, so yt-dlp's format selection has not been exercised against a live download yet.
+
+------------------------------------------------------------------------------------------------------------------------
+e design is written to docs/ as thirteen Markdown files, about 12,000 words, with a kickoff prompt for azuremc. Nothing is committed yet since you didn't ask for a commit.
+
+  What was written
+
+  - docs/README.md indexes the set and defines the shared glossary.
+  - Documents 01 through 11 cover overview, architecture, the Rust boundary, data model, indexing pipeline, query and agent loop, model providers, evaluation, SDK and API surfaces, roadmap, and deployment on azuremc.
+  - docs/KICKOFF.md is the prompt to paste into a fresh session on azuremc. It has the agent read the docs, inspect the machine into docs/MACHINE.md, and build milestone M0.
+
+  The Rust answer, in brief. Roughly 80% of runtime code and all of the hot path is Rust: acquire, decode, sampling, in-process perception, provider HTTP clients, storage, retrieval, scheduler, the default agent loop,
+  server, and MCP. Python and JavaScript hold prompts, experimental agent policies, the eval harness, and the apps. Python gets PyO3 bindings with zero-copy NumPy frames and GIL release. Node gets napi-rs with prebuilt
+  binaries. Every other language uses server mode over HTTP, SSE, and MCP. A C ABI via UniFFI is deferred until mobile has a user. The reasoning is in docs/03-rust-boundary.md, including sandboxed decode for untrusted
+  media and the realtime techniques.
+
+  Decisions baked in from your answers. Hybrid inference, files plus URLs with yt-dlp as a pluggable acquirer, an embedded portable index directory behind a storage trait, and Python plus Node bindings only for v1.
+
+  Verified. All cross-document links resolve and every code fence is balanced. Mermaid diagrams were checked for structure only, not rendered.
+
+  Things to know
+
+  - A folder docs/vibe_summaries/ with a summaries file appeared during the session. I did not create it and left it alone.
+  - Two items in the roadmap need your confirmation: the license, proposed Apache-2.0, and whether 1H-VideoQA is publicly available.
+  - The Mac download script is deferred as you asked. The design assumes vi acquire runs on azuremc first, with the Mac script as a fallback.
+  - Two memory notes were saved so the azuremc topology and your four design decisions carry into future sessions.
+
+
+------------------------------------------------------------------------------------------------------------------------
 Ready to code?
   
  Here is Claude's plan:                                                                                                                                  
