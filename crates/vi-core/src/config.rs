@@ -391,6 +391,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::result_large_err)] // figment::Jail's closure signature
     fn env_overrides_apply() {
         // figment::Jail isolates environment mutation.
         figment::Jail::expect_with(|jail| {
