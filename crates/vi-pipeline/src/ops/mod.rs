@@ -6,6 +6,7 @@ use crate::operator::Operator;
 
 pub mod asr;
 pub mod image_embed;
+pub mod ocr;
 pub mod phash;
 pub mod sample;
 pub mod shot_boundary;
@@ -16,6 +17,7 @@ pub mod vad;
 
 pub use asr::Asr;
 pub use image_embed::ImageEmbed;
+pub use ocr::Ocr;
 pub use phash::PHash;
 pub use sample::Sample;
 pub use shot_boundary::ShotBoundary;
@@ -35,17 +37,12 @@ pub const AVAILABLE: &[&str] = &[
     "shot_boundary",
     "image_embed",
     "text_embed",
+    "ocr",
 ];
 
 /// Operators named in the design but not yet implemented; listing them lets
 /// error messages distinguish "not yet" from "typo".
-pub const PLANNED: &[&str] = &[
-    "ocr",
-    "scenes",
-    "chapters",
-    "vlm_describe",
-    "entities_events",
-];
+pub const PLANNED: &[&str] = &["scenes", "chapters", "vlm_describe", "entities_events"];
 
 /// Construct an operator by policy name.
 pub fn build(name: &str, config: &Config) -> Option<Box<dyn Operator>> {
@@ -62,6 +59,7 @@ pub fn build(name: &str, config: &Config) -> Option<Box<dyn Operator>> {
         "shot_boundary" => Some(Box::new(ShotBoundary::new())),
         "image_embed" => Some(Box::new(ImageEmbed::new())),
         "text_embed" => Some(Box::new(TextEmbed::new())),
+        "ocr" => Some(Box::new(Ocr::new())),
         _ => None,
     }
 }

@@ -134,6 +134,8 @@ pub struct ModelsConfig {
     pub vad: VadConfig,
     /// Speech recognition chunking.
     pub asr: AsrConfig,
+    /// On-screen text.
+    pub ocr: OcrGateConfig,
 }
 
 impl Default for ModelsConfig {
@@ -144,6 +146,32 @@ impl Default for ModelsConfig {
             onnx_threads: 0,
             vad: VadConfig::default(),
             asr: AsrConfig::default(),
+            ocr: OcrGateConfig::default(),
+        }
+    }
+}
+
+/// When the `ocr` operator reads a frame. A frame is read when it is the
+/// first, or its pHash differs from the last frame read by more than the
+/// dedup distance, or its pixel change against the last frame read is at
+/// least `min_pixel_change`, or `max_gap_secs` have passed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct OcrGateConfig {
+    /// Fraction of the small grey image (0-1) that must change.
+    pub min_pixel_change: f32,
+    /// Read a frame at least this often, seconds.
+    pub max_gap_secs: f64,
+    /// Drop lines shorter than this many characters.
+    pub min_chars: usize,
+}
+
+impl Default for OcrGateConfig {
+    fn default() -> Self {
+        Self {
+            min_pixel_change: 0.02,
+            max_gap_secs: 30.0,
+            min_chars: 2,
         }
     }
 }

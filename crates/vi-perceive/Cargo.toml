@@ -22,7 +22,7 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 tokenizers = { workspace = true }
 serde_json = { workspace = true }
-image = { workspace = true }
+image = { workspace = true, features = ["png"] }
 webp = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

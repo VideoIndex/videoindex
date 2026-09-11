@@ -17,12 +17,12 @@ use vi_core::config::{Pricing, ProviderConfig, RoleBinding};
 use vi_core::cpu;
 use vi_providers::registry::{ExternalAdapter, ExternalFactory};
 use vi_providers::{
-    CallStats, EmbedResponse, ImageData, ImageEmbedder, ProviderError, ProviderRegistry, Result,
-    TextEmbedder, Usage,
+    CallStats, EmbedResponse, ImageData, ImageEmbedder, Ocr, OcrBox, OcrLine, OcrResponse,
+    ProviderError, ProviderRegistry, Result, TextEmbedder, Usage,
 };
 
 use crate::onnx::{resolve_device, Device};
-use crate::{bge, siglip, PerceiveError};
+use crate::{bge, ocr, siglip, PerceiveError};
 
 /// Adapter kind name in config.
 pub const KIND: &str = "onnx_local";
@@ -33,10 +33,12 @@ pub struct OnnxLocal {
     model_dir: PathBuf,
     image_model: String,
     text_model: String,
+    ocr_model: String,
     device: Device,
     threads: usize,
     siglip: OnceLock<Arc<siglip::Siglip>>,
     bge: OnceLock<Arc<bge::TextEmbedder>>,
+    ocr: OnceLock<Arc<ocr::RapidOcr>>,
     load_error: Mutex<Option<String>>,
 }
 
@@ -87,6 +89,7 @@ impl OnnxLocal {
                 .unwrap_or_else(|| default_model_dir.to_path_buf()),
             image_model: get("image_model").unwrap_or_else(|| siglip::MODEL_DIR.to_string()),
             text_model: get("text_model").unwrap_or_else(|| bge::MODEL_DIR.to_string()),
+            ocr_model: get("ocr_model").unwrap_or_else(|| ocr::MODEL_DIR.to_string()),
             device,
             threads: cfg
                 .extra
@@ -96,8 +99,26 @@ impl OnnxLocal {
                 .unwrap_or(default_threads),
             siglip: OnceLock::new(),
             bge: OnceLock::new(),
+            ocr: OnceLock::new(),
             load_error: Mutex::new(None),
         })
+    }
+
+    fn ocr(&self) -> Result<Arc<ocr::RapidOcr>> {
+        if let Some(s) = self.ocr.get() {
+            return Ok(s.clone());
+        }
+        let dir = self.model_dir.join(&self.ocr_model);
+        let m = ocr::RapidOcr::load(&dir, self.device, self.threads, ocr::OcrConfig::default())
+            .map_err(|e| perr(&self.name, e))?;
+        let _ = self.ocr.set(Arc::new(m));
+        self.ocr
+            .get()
+            .cloned()
+            .ok_or_else(|| ProviderError::Inference {
+                provider: self.name.clone(),
+                message: "model cell empty after load".into(),
+            })
     }
 
     /// A factory for [`ProviderRegistry::register_factory`].
@@ -196,6 +217,10 @@ impl ExternalAdapter for OnnxLocal {
     fn as_image_embedder(&self) -> Option<Arc<dyn ImageEmbedder>> {
         Some(Arc::new(SiglipHandle(self.shared())))
     }
+
+    fn as_ocr(&self) -> Option<Arc<dyn Ocr>> {
+        Some(Arc::new(OcrHandle(self.shared())))
+    }
 }
 
 impl OnnxLocal {
@@ -209,6 +234,7 @@ impl OnnxLocal {
             model_dir: self.model_dir.clone(),
             image_model: self.image_model.clone(),
             text_model: self.text_model.clone(),
+            ocr_model: self.ocr_model.clone(),
             device: self.device,
             threads: self.threads,
             siglip: match self.siglip.get() {
@@ -216,6 +242,10 @@ impl OnnxLocal {
                 None => OnceLock::new(),
             },
             bge: match self.bge.get() {
+                Some(m) => OnceLock::from(m.clone()),
+                None => OnceLock::new(),
+            },
+            ocr: match self.ocr.get() {
                 Some(m) => OnceLock::from(m.clone()),
                 None => OnceLock::new(),
             },
@@ -355,6 +385,63 @@ impl TextEmbedder for BgeHandle {
             stats: self
                 .0
                 .stats(&self.0.text_model, texts.len() as u64, 0, started),
+        })
+    }
+}
+
+/// `Ocr` over RapidOCR.
+struct OcrHandle(Arc<OnnxLocal>);
+
+#[async_trait]
+impl Ocr for OcrHandle {
+    fn provider_name(&self) -> &str {
+        &self.0.name
+    }
+
+    fn model(&self) -> &str {
+        &self.0.ocr_model
+    }
+
+    async fn read(&self, image: &ImageData) -> Result<OcrResponse> {
+        let started = Instant::now();
+        let name = self.0.name.clone();
+        let model = self.0.ocr()?;
+        let ImageData::Rgb8 {
+            width,
+            height,
+            data,
+        } = image
+        else {
+            return Err(ProviderError::Invalid(
+                "onnx_local takes raw RGB images, not encoded ones".into(),
+            ));
+        };
+        if data.len() < (*width as usize) * (*height as usize) * 3 {
+            return Err(ProviderError::Invalid("RGB buffer too short".into()));
+        }
+        let (w, h, d) = (*width, *height, data.clone());
+        let lines = cpu::run(move || model.read(&d, w, h, w as usize * 3))
+            .await
+            .map_err(|e| ProviderError::Inference {
+                provider: name.clone(),
+                message: e.to_string(),
+            })?
+            .map_err(|e| perr(&name, e))?;
+        Ok(OcrResponse {
+            lines: lines
+                .into_iter()
+                .map(|l| OcrLine {
+                    text: l.text,
+                    bbox: Some(OcrBox {
+                        x: l.bbox[0],
+                        y: l.bbox[1],
+                        w: l.bbox[2],
+                        h: l.bbox[3],
+                    }),
+                    confidence: Some(l.confidence),
+                })
+                .collect(),
+            stats: self.0.stats(&self.0.ocr_model, 1, 1, started),
         })
     }
 }
