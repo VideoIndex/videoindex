@@ -139,6 +139,24 @@ impl Worker {
     }
 }
 
+/// Facts learned from a worker handshake.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct WorkerInfo {
+    /// Executable that was run.
+    pub executable: PathBuf,
+    /// libav version string reported by the worker.
+    pub libav: String,
+}
+
+/// Spawn a worker, complete the handshake, shut it down. Used by `vi doctor`.
+pub async fn worker_info(cfg: &WorkerConfig) -> Result<WorkerInfo> {
+    let executable = worker_executable(cfg)?;
+    let w = Worker::spawn(cfg).await?;
+    let libav = w.libav.clone();
+    w.shutdown().await;
+    Ok(WorkerInfo { executable, libav })
+}
+
 /// Probe a file in a worker process.
 pub async fn probe(cfg: &WorkerConfig, path: &Path) -> Result<Probe> {
     let mut w = Worker::spawn(cfg).await?;
