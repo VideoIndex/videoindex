@@ -372,11 +372,7 @@ impl VectorStore {
                     } else if let Some((mi, _)) = local
                         .iter()
                         .enumerate()
-                        .min_by(|a, b| {
-                            a.1 .0
-                                .partial_cmp(&b.1 .0)
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        })
+                        .min_by(|a, b| a.1 .0.total_cmp(&b.1 .0))
                         .map(|(i, v)| (i, *v))
                     {
                         if dot > local[mi].0 {
@@ -388,7 +384,7 @@ impl VectorStore {
             })
             .flatten()
             .collect();
-        top.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        top.sort_by(|a, b| b.0.total_cmp(&a.0));
         top.truncate(k);
         Ok(top
             .into_iter()

@@ -42,7 +42,7 @@ pub fn phash_rgb(data: &[u8], width: usize, height: usize, stride: usize) -> u64
         }
     }
     let mut sorted = low;
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
     let median = (sorted[LOW * LOW / 2 - 1] + sorted[LOW * LOW / 2]) * 0.5;
     let mut bits = 0u64;
     for (i, v) in low.iter().enumerate() {

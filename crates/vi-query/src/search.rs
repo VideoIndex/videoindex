@@ -285,11 +285,7 @@ pub async fn search(
             groups.entry(idx).or_default().push(f);
         }
         for (idx, mut members) in groups {
-            members.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            members.sort_by(|a, b| b.score.total_cmp(&a.score));
             let best = members[0].score;
             let rest: f64 = members.iter().skip(1).map(|m| m.score).sum();
             let score = best + SECONDARY_WEIGHT * rest;
@@ -335,11 +331,7 @@ pub async fn search(
             });
         }
     }
-    results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    results.sort_by(|a, b| b.score.total_cmp(&a.score));
     results.truncate(k);
     Ok(SearchResponse {
         hits: results,

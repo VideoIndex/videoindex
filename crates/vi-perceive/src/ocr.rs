@@ -214,11 +214,7 @@ impl RapidOcr {
         // Sort by aspect ratio so batches pad little.
         let mut order: Vec<usize> = (0..boxes.len()).collect();
         let ratio = |b: &TextBox| f64::from(b.x1 - b.x0) / f64::from((b.y1 - b.y0).max(1));
-        order.sort_by(|a, b| {
-            ratio(&boxes[*a])
-                .partial_cmp(&ratio(&boxes[*b]))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        order.sort_by(|a, b| ratio(&boxes[*a]).total_cmp(&ratio(&boxes[*b])));
         for chunk in order.chunks(8) {
             let widths: Vec<usize> = chunk
                 .iter()
@@ -291,16 +287,32 @@ impl RapidOcr {
         if boxes.is_empty() {
             return Ok(Vec::new());
         }
-        // Reading order: rows by centre y (within half a box height), then x.
-        boxes.sort_by(|a, b| {
-            let (ay, by) = (f64::from(a.y0 + a.y1) / 2.0, f64::from(b.y0 + b.y1) / 2.0);
-            let tol = f64::from((a.y1 - a.y0).min(b.y1 - b.y0)) / 2.0;
-            if (ay - by).abs() <= tol {
-                a.x0.cmp(&b.x0)
+        // Reading order: sort by centre y (a total order), then group into
+        // rows greedily (a box joins the current row when its centre is
+        // within half the row's box height) and sort each row by x. A
+        // tolerance inside a comparator is not a total order and the
+        // standard sort panics on one.
+        boxes.sort_by_key(|b| b.y0 + b.y1);
+        let mut rows: Vec<Vec<TextBox>> = Vec::new();
+        for b in boxes.drain(..) {
+            let cy = f64::from(b.y0 + b.y1) / 2.0;
+            let joins = rows.last().is_some_and(|row| {
+                let r = &row[0];
+                let rcy = f64::from(r.y0 + r.y1) / 2.0;
+                (cy - rcy).abs() <= f64::from((r.y1 - r.y0).min(b.y1 - b.y0)) / 2.0
+            });
+            if joins {
+                if let Some(row) = rows.last_mut() {
+                    row.push(b);
+                }
             } else {
-                ay.partial_cmp(&by).unwrap_or(std::cmp::Ordering::Equal)
+                rows.push(vec![b]);
             }
-        });
+        }
+        for row in &mut rows {
+            row.sort_by_key(|b| b.x0);
+        }
+        let boxes: Vec<TextBox> = rows.into_iter().flatten().collect();
         let texts = self.recognize(rgb, width, height, stride, &boxes)?;
         let (fw, fh) = (width as f32, height as f32);
         Ok(boxes

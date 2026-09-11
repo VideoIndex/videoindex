@@ -1,0 +1,72 @@
+{"id":"q01","video":"CvZDJxd4LKM","type":"transcript","question":"resume attack where hidden text tells the model to print yes","anchor":"print yes"}
+{"id":"q02","video":"CvZDJxd4LKM","type":"transcript","question":"example of a poisoned document in Microsoft Copilot's retrieval database","anchor":"Microsoft copilot"}
+{"id":"q03","video":"CvZDJxd4LKM","type":"transcript","question":"earlier work on automatic privilege separation from two decades ago","anchor":"privilege separation"}
+{"id":"q04","video":"CvZDJxd4LKM","type":"transcript","question":"how many people joined the agentic AI summit at Berkeley in person and online","anchor":"2,000 joined in person"}
+{"id":"q05","video":"iDhzzugMOLA","type":"transcript","question":"RoboCup goal of humanoid robots beating the human world champions by 2050","anchor":"2050"}
+{"id":"q06","video":"iDhzzugMOLA","type":"transcript","question":"racing agent slipping off the track or hitting a wall","anchor":"hitting a wall"}
+{"id":"q07","video":"iDhzzugMOLA","type":"transcript","question":"dataset of 10,000 images for evaluating bias in AI models","anchor":"10,000 images"}
+{"id":"q08","video":"ntjOxjZMaac","type":"transcript","question":"league exploiters in AlphaStar training","anchor":"league exploiters"}
+{"id":"q09","video":"ntjOxjZMaac","type":"transcript","question":"using Elo scores like chess to compare agents","anchor":"Elo"}
+{"id":"q10","video":"ntjOxjZMaac","type":"transcript","question":"language models failing to count the Rs in strawberry","anchor":"strawberry"}
+{"id":"q11","video":"sfJM4LaiYsM","type":"transcript","question":"how many years the internet took compared with the adoption of AI agents","anchor":"Took the internet 11 years"}
+{"id":"q12","video":"sfJM4LaiYsM","type":"transcript","question":"speculative request hedging to reduce voice agent latency","anchor":"speculative request hedging"}
+{"id":"q13","video":"sfJM4LaiYsM","type":"transcript","question":"vocabulary a sommelier uses to describe wine as an analogy for voice quality","anchor":"wine"}
+{"id":"q14","video":"sfJM4LaiYsM","type":"ocr","question":"the agent iceberg slide","anchor":"Agent Iceberg"}
+{"id":"q15","video":"sfJM4LaiYsM","type":"ocr","question":"inside tau-bench building reliable evaluation","anchor":"Building Reliable Evaluation"}
+{"id":"q16","video":"sfJM4LaiYsM","type":"visual","question":"slide with an iceberg in the ocean","t0":478,"t1":590}
+{"id":"q17","video":"sfJM4LaiYsM","type":"visual","question":"photo of an old rotary telephone","t0":880,"t1":1000}
+{"id":"q18","video":"sfJM4LaiYsM","type":"visual","question":"woman in a red shirt holding a phone to her ear","t0":1480,"t1":1640}
+{"id":"q19","video":"yqPIsTTdUkc","type":"transcript","question":"virtual lab agents designing nanobodies with AlphaFold structures","anchor":"nanobody"}
+{"id":"q20","video":"yqPIsTTdUkc","type":"transcript","question":"asking the AlphaGenome agent to find causal genes","anchor":"AlphaGenome"}
+{"id":"q21","video":"yqPIsTTdUkc","type":"transcript","question":"turning research papers into agents","anchor":"paper to agent"}
+{"id":"q22","video":"HV8pugcFVO0","type":"transcript","question":"paired versus unpaired standard error when comparing two models on a benchmark","anchor":"standard error"}
+{"id":"q23","video":"HV8pugcFVO0","type":"transcript","question":"terminal bench needing hundreds of thousands of tokens per run","anchor":"terminal bench"}
+{"id":"q24","video":"SrLcGdVOb9w","type":"transcript","question":"regret matching and hedge as no-regret learning algorithms","anchor":"regret matching"}
+{"id":"q25","video":"SrLcGdVOb9w","type":"transcript","question":"ultimatum game where Alice offers Bob thirty dollars","anchor":"$30"}
+{"id":"q26","video":"SrLcGdVOb9w","type":"transcript","question":"the approach taken in Diplomacy recommended for general games","anchor":"diplomacy"}
+{"id":"q27","video":"SrLcGdVOb9w","type":"transcript","question":"trying to solve a Sudoku puzzle ten thousand times and checking answers","anchor":"Sudoku"}
+{"id":"q28","video":"xNxrBHZPDvM","type":"transcript","question":"sampler and trainer waiting for each other slows large scale RL","anchor":"sampler"}
+{"id":"q29","video":"xNxrBHZPDvM","type":"transcript","question":"grader dependency where one grader depends on another","anchor":"grader"}
+{"id":"q30","video":"xNxrBHZPDvM","type":"transcript","question":"a summarizer that lets the model keep working past its context","anchor":"summarizer"}
+{"id":"q31","video":"3l0Zxus34es","type":"transcript","question":"how to define a verifiable environment for agents","anchor":"define a verifia"}
+{"id":"q32","video":"3l0Zxus34es","type":"transcript","question":"collision rate as a metric for hardware prompts","anchor":"collision"}
+{"id":"q33","video":"3l0Zxus34es","type":"transcript","question":"agents that can do critical thinking and invent something new","anchor":"critical thinking"}
+{"id":"q34","video":"xqRAS6rAouo","type":"transcript","question":"Duolingo using OpenAI models","anchor":"Duolingo"}
+{"id":"q35","video":"xqRAS6rAouo","type":"transcript","question":"would you pay twenty dollars for an AI that does your job better","anchor":"$20"}
+{"id":"q36","video":"xqRAS6rAouo","type":"transcript","question":"a simple mindset of four machines with MPI and a PyTorch job","anchor":"MPI"}
+{"id":"q37","video":"xqRAS6rAouo","type":"transcript","question":"losing half the money this year and breaking even next year","anchor":"breaking even"}
+{"id":"q38","video":"r1qZpYAmqmg","type":"transcript","question":"the five things to consider when training an LLM starting with architecture","anchor":"five things"}
+{"id":"q39","video":"r1qZpYAmqmg","type":"transcript","question":"filtering web documents by how likely Wikipedia references them","anchor":"referenced by Wikipedia"}
+{"id":"q40","video":"r1qZpYAmqmg","type":"transcript","question":"training cost between fifty and eighty million dollars","anchor":"80 million"}
+{"id":"q41","video":"r1qZpYAmqmg","type":"transcript","question":"memory for FP32 parameters, gradients and optimizer states","anchor":"optimizer states"}
+{"id":"q42","video":"r1qZpYAmqmg","type":"transcript","question":"the model returns a joke about frogs instead of Python code","anchor":"joke about frogs"}
+{"id":"q43","video":"OkEGJ5G3foU","type":"transcript","question":"recommendation of Nathan Lambert's policy gradients book","anchor":"Nathan Lambert"}
+{"id":"q44","video":"OkEGJ5G3foU","type":"transcript","question":"paper using temperature 1.5 with min_p sampling","anchor":"temperature 1.5"}
+{"id":"q45","video":"OkEGJ5G3foU","type":"transcript","question":"float4 being about two times faster than float8","anchor":"Float 4"}
+{"id":"q46","video":"OkEGJ5G3foU","type":"transcript","question":"in GRPO the value model is removed compared with PPO","anchor":"GRPO"}
+{"id":"q47","video":"640KMYtxCeI","type":"transcript","question":"multimodal embedding model with vectors stored in a vector database","anchor":"multimodal embedding"}
+{"id":"q48","video":"bk0TmxoZlUY","type":"transcript","question":"building a golden dataset of test cases to iterate from","anchor":"golden data set"}
+{"id":"q49","video":"wXVvfFMTyzY","type":"transcript","question":"A2A is too early to go into production","anchor":"too early"}
+{"id":"q50","video":"wXVvfFMTyzY","type":"transcript","question":"spawning a sub-agent to absorb the context flood","anchor":"context flood"}
+{"id":"q51","video":"JfaLQqfXqPA","type":"transcript","question":"fine-tuning compared with a CNC machine with higher upfront cost","anchor":"CNC machine"}
+{"id":"q52","video":"JfaLQqfXqPA","type":"transcript","question":"demos using 150 examples and 500 examples","anchor":"500 examples"}
+{"id":"q53","video":"89NuzmKokIk","type":"transcript","question":"GuideLLM as a project associated with the vLLM inference runtime","anchor":"inference runtime project"}
+{"id":"q54","video":"nxuTVd7v7dg","type":"transcript","question":"the Wi-Fi going down during the workshop","anchor":"It's down"}
+{"id":"q55","video":"nxuTVd7v7dg","type":"transcript","question":"asking the bot for a really long story to test interruption","anchor":"really long story"}
+{"id":"q56","video":"2HNSG990Ew8","type":"transcript","question":"many teams are not doing any evals today","anchor":"aren't doing any eval"}
+{"id":"q57","video":"2HNSG990Ew8","type":"transcript","question":"customers like Uber, Reddit and Instacart","anchor":"Instacart"}
+{"id":"q58","video":"ZuiJjkbX0Og","type":"transcript","question":"street addresses as an analogy for token IDs","anchor":"street addresses"}
+{"id":"q59","video":"ZuiJjkbX0Og","type":"transcript","question":"cosine similarity is not an intuitive measure of similarity","anchor":"cosine similarity"}
+{"id":"q60","video":"ZuiJjkbX0Og","type":"transcript","question":"backpropagation is a generic optimization algorithm not just for weights","anchor":"backpropagation is a generic"}
+{"id":"q61","video":"Ahtaha9fEM0","type":"transcript","question":"SGLang uses FlashInfer as its attention kernel library","anchor":"flash infer"}
+{"id":"q62","video":"hwCmfThIiS4","type":"transcript","question":"trophic levels are feeding positions in a food chain","anchor":"Trophic levels"}
+{"id":"q63","video":"MPtCBaZn84A","type":"transcript","question":"Schadenfreude, the German term for pleasure at another's misfortune","anchor":"German term"}
+{"id":"q64","video":"tzRvcTEapzo","type":"transcript","question":"a critique agent checks whether the proposals are feasible","anchor":"critique agent"}
+{"id":"q65","video":"6YdPI9YbjbI","type":"transcript","question":"whether an LLM judge should score binary or on a scale","anchor":"binary or a scale"}
+{"id":"q66","video":"_FKeSzM9fPc","type":"transcript","question":"getting hired at Stability AI after six months","anchor":"stability AI"}
+{"id":"q67","video":"N4vCBM5YbN0","type":"transcript","question":"MCP is just a tool, a function","anchor":"MCP is just a tool"}
+{"id":"q68","video":"EAfP8pDs7h4","type":"transcript","question":"VS Code storing secrets in the Mac keychain","anchor":"keychain"}
+{"id":"q69","video":"G1hhmz6mXT0","type":"transcript","question":"please set phones to silent or vibrate","anchor":"vibrate"}
+{"id":"q70","video":"YYNXFsUutbM","type":"transcript","question":"show of hands on whether you need revenue to raise VC","anchor":"Show of hands"}
+{"id":"q71","video":"YYNXFsUutbM","type":"ocr","question":"do you need a co-founder to raise VC","anchor":"co-founder"}
+{"id":"q72","video":"YYNXFsUutbM","type":"visual","question":"two women speaking on a conference stage","t0":12,"t1":28}

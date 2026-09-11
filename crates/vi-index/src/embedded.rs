@@ -132,6 +132,7 @@ fn open_conn(path: &Path) -> Result<Connection> {
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
          PRAGMA synchronous = NORMAL;
+         PRAGMA busy_timeout = 30000;
          PRAGMA foreign_keys = ON;
          PRAGMA temp_store = MEMORY;
          PRAGMA cache_size = -65536;",
@@ -899,7 +900,7 @@ impl Storage for EmbeddedIndex {
                 let sp = r??;
                 out.push((sp.t.as_secs_f64(), Span::Ocr(sp)));
             }
-            out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            out.sort_by(|a, b| a.0.total_cmp(&b.0));
             Ok(out.into_iter().map(|(_, s)| s).collect())
         })
         .await
@@ -1108,7 +1109,7 @@ impl Storage for EmbeddedIndex {
                     });
                 }
             }
-            hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            hits.sort_by(|a, b| b.score.total_cmp(&a.score));
             hits.truncate(q.k.max(1));
             Ok(hits)
         })

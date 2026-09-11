@@ -228,7 +228,7 @@ pub(crate) fn probe_impl(path: &Path) -> Result<Probe> {
         if gaps.is_empty() {
             return None;
         }
-        gaps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        gaps.sort_by(|a, b| a.total_cmp(b));
         Some(gaps[gaps.len() / 2])
     });
 
