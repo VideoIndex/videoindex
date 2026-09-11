@@ -3269,7 +3269,25 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "vi-agent"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "image",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
  "vi-core",
+ "vi-index",
+ "vi-media",
+ "vi-perceive",
+ "vi-pipeline",
+ "vi-providers",
+ "vi-query",
+ "vi-testkit",
 ]
 
 [[package]]
@@ -3278,6 +3296,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "futures",
  "humansize",
  "serde",
  "serde_json",
@@ -3287,6 +3306,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "vi-agent",
  "vi-core",
  "vi-index",
  "vi-media",

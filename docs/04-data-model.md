@@ -109,6 +109,9 @@ pub trait Storage: Send + Sync {
     // blobs
     async fn put_blob(&self, key: &BlobKey, bytes: Bytes) -> Result<()>;
     async fn get_blob(&self, key: &BlobKey) -> Result<Option<Bytes>>;
+    // sessions (agent conversations, TTL)
+    async fn put_session(&self, id: &str, state: &serde_json::Value, ttl_secs: u64) -> Result<()>;
+    async fn get_session(&self, id: &str) -> Result<Option<serde_json::Value>>;
     // jobs
     async fn checkpoint(&self, job: JobId, state: &JobState) -> Result<()>;
     async fn load_checkpoint(&self, job: JobId) -> Result<Option<JobState>>;

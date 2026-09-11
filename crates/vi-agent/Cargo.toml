@@ -1,6 +1,6 @@
 [package]
 name = "vi-agent"
-description = "VideoIndex agentic loop, budgets, policies"
+description = "VideoIndex agentic loop: tools over the index and media, budgets, policies, streaming answers with citations"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,26 @@ authors.workspace = true
 
 [dependencies]
 vi-core = { workspace = true }
+vi-index = { workspace = true }
+vi-query = { workspace = true }
+vi-providers = { workspace = true }
+vi-media = { workspace = true }
+vi-perceive = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+bytes = { workspace = true }
+image = { workspace = true, features = ["png"] }
+chrono = { workspace = true }
+
+[dev-dependencies]
+vi-testkit = { workspace = true }
+vi-pipeline = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

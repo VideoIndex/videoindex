@@ -1,5 +1,6 @@
 //! The `vi` binary. See `docs/09-sdk-and-apis.md` for the command surface.
-//! M0 shipped `init`, `probe`, `index`, `status`, `doctor`; M1 adds `search`.
+//! M0 shipped `init`, `probe`, `index`, `status`, `doctor`; M1 added
+//! `search`; M2 adds `ask`, `view` and `timeline`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
@@ -40,8 +41,14 @@ enum Command {
     Probe(cmd::probe::Args),
     /// Index one or more local video files into an index directory.
     Index(cmd::index::Args),
-    /// Full-text search over transcripts, on-screen text and descriptions.
+    /// Hybrid search over transcripts, on-screen text, descriptions and frames.
     Search(cmd::search::Args),
+    /// Ask a question; streams an answer with timestamp citations.
+    Ask(cmd::ask::Args),
+    /// Render a labelled frame grid of a time range to a PNG.
+    View(cmd::view::Args),
+    /// Print the chapters, scenes or shots of a video.
+    Timeline(cmd::timeline::Args),
     /// Show videos, states, sample counts, sizes, and jobs of an index.
     Status(cmd::status::Args),
     /// Report machine facts: CPU, RAM, GPU, disks, toolchain, network paths.
@@ -118,6 +125,9 @@ fn run() -> Result<()> {
             Command::Probe(a) => cmd::probe::run(a, &config, &out).await,
             Command::Index(a) => cmd::index::run(a, config, &out).await,
             Command::Search(a) => cmd::search::run(a, &config, &out).await,
+            Command::Ask(a) => cmd::ask::run(a, &config, &out).await,
+            Command::View(a) => cmd::view::run(a, &config, &out).await,
+            Command::Timeline(a) => cmd::timeline::run(a, &config, &out).await,
             Command::Status(a) => cmd::status::run(a, &config, &out).await,
             Command::Doctor(a) => cmd::doctor::run(a, &config, &out).await,
         }

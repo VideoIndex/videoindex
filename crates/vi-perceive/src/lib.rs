@@ -11,6 +11,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod bge;
+pub mod grid;
 pub mod ocr;
 pub mod onnx;
 pub mod onnx_local;

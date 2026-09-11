@@ -16,6 +16,7 @@ pub mod cost;
 pub mod error;
 pub mod governor;
 pub mod pricing;
+pub mod prompts;
 pub mod registry;
 pub mod retry;
 pub mod sse;

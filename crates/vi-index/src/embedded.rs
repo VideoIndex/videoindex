@@ -1250,6 +1250,46 @@ impl Storage for EmbeddedIndex {
         self.blobs.get(key).await
     }
 
+    async fn put_session(&self, id: &str, state: &serde_json::Value, ttl_secs: u64) -> Result<()> {
+        let id = id.to_string();
+        let state = state.to_string();
+        self.with_conn(move |c| {
+            let now = Utc::now();
+            let exp = now + chrono::Duration::seconds(ttl_secs as i64);
+            c.execute(
+                "INSERT INTO sessions(id, created_at, expires_at, state) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(id) DO UPDATE SET expires_at = excluded.expires_at, state = excluded.state",
+                params![id, now.to_rfc3339(), exp.to_rfc3339(), state],
+            )?;
+            c.execute("DELETE FROM sessions WHERE expires_at < ?1", [now.to_rfc3339()])?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn get_session(&self, id: &str) -> Result<Option<serde_json::Value>> {
+        let id = id.to_string();
+        self.with_conn(move |c| {
+            let row: Option<(String, String)> = c
+                .query_row(
+                    "SELECT expires_at, state FROM sessions WHERE id = ?1",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            let Some((exp, state)) = row else {
+                return Ok(None);
+            };
+            if let Ok(e) = DateTime::parse_from_rfc3339(&exp) {
+                if e < Utc::now() {
+                    return Ok(None);
+                }
+            }
+            Ok(serde_json::from_str(&state).ok())
+        })
+        .await
+    }
+
     async fn checkpoint(&self, job: JobId, state: &JobState) -> Result<()> {
         let dir = self.jobs_dir();
         tokio::fs::create_dir_all(&dir).await?;

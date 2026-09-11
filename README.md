@@ -6,7 +6,7 @@ The design lives in [`docs/`](docs/README.md); read it in order the first time. 
 
 ## Status
 
-M0 (skeleton and decode) is complete: probe and decode through a sandboxed worker process, an embedded SQLite + FTS5 + blob index, an operator DAG scheduler, and `vi init | probe | index | status | doctor`. M1 (coarse index and search) is in progress: yt-dlp sidecar import (`.info.json`, subtitles, chapters), the content-addressed media cache, the `YtDlp` acquirer, text `vi search`, the provider layer (`vi-providers`), Silero VAD and Whisper ASR through an OpenAI-compatible server, shot detection, SigLIP and bge embeddings with a vector store, RapidOCR, hybrid `vi search`, budgets and the operator cache, and the `Http`/`ObjectStore` acquirers are done; the two-playlist run and the dev set close M1.
+M0 (skeleton and decode) is complete: probe and decode through a sandboxed worker process, an embedded SQLite + FTS5 + blob index, an operator DAG scheduler, and `vi init | probe | index | status | doctor`. M1 (coarse index and search) is in progress: yt-dlp sidecar import (`.info.json`, subtitles, chapters), the content-addressed media cache, the `YtDlp` acquirer, text `vi search`, the provider layer (`vi-providers`), Silero VAD and Whisper ASR through an OpenAI-compatible server, shot detection, SigLIP and bge embeddings with a vector store, RapidOCR, hybrid `vi search`, budgets and the operator cache, and the `Http`/`ObjectStore` acquirers are done; the two-playlist run and the dev set close M1. M2 has started: chat adapters for OpenAI-compatible servers, Anthropic and Gemini, and the `vi ask` agent loop with tools, budgets and citations.
 
 ## Build
 
@@ -36,6 +36,9 @@ vi index ./talks.vidx https://cdn.example.com/talks/day1.mp4 s3://bucket/talks/ 
 vi --config config/gcp-a100.toml index ./talks.vidx talk.mp4 --policy coarse_asr   # + VAD and Whisper ASR (scripts/asr_server.sh start)
 vi search ./talks.vidx "hybrid retrieval"  # BM25 + text and image vectors, grouped by shot/scene
 vi search ./talks.vidx "slide with a diagram" --kind frame   # SigLIP text-to-frame search
+vi ask ./talks.vidx "When do they discuss evaluation?"   # agentic answer with [HH:MM:SS] citations (needs an agent_llm role)
+vi view ./talks.vidx <video-id> --t0 1830 --t1 1860 --fps 1 -o grid.png   # labelled frame grid
+vi timeline ./talks.vidx <video-id> --level shot
 vi status ./talks.vidx                     # videos, states, sample counts, sizes, jobs
 ```
 

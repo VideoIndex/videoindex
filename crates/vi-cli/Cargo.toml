@@ -25,6 +25,8 @@ vi-pipeline = { workspace = true }
 vi-perceive = { workspace = true }
 vi-query = { workspace = true }
 vi-providers = { workspace = true }
+vi-agent = { workspace = true }
+futures = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }

@@ -228,6 +228,13 @@ pub trait Storage: Send + Sync {
     /// Fetch a blob.
     async fn get_blob(&self, key: &BlobKey) -> Result<Option<Bytes>>;
 
+    // ---- sessions ---------------------------------------------------------
+
+    /// Store (or replace) an agent session's state, expiring after `ttl_secs`.
+    async fn put_session(&self, id: &str, state: &serde_json::Value, ttl_secs: u64) -> Result<()>;
+    /// Load a session's state if it exists and has not expired.
+    async fn get_session(&self, id: &str) -> Result<Option<serde_json::Value>>;
+
     // ---- jobs ------------------------------------------------------------
 
     /// Persist a job checkpoint.

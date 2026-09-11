@@ -24,6 +24,13 @@ concurrency = 4
 timeout_secs = 600
 max_retries = 4
 
+# Hosted models for the agent and scene descriptions (key in $ANTHROPIC_API_KEY).
+[providers.claude]
+adapter = "anthropic"
+model = "claude-sonnet-5"
+concurrency = 4
+requests_per_minute = 50
+
 # In-process ONNX models (SigLIP, RapidOCR, bge-small).
 [providers.local]
 adapter = "onnx_local"
@@ -34,6 +41,8 @@ asr = { provider = "whisper_local" }
 ocr = { provider = "local" }
 image_embed = { provider = "local" }
 text_embed = { provider = "local" }
+agent_llm = { provider = "claude" }
+vlm_describe = { provider = "claude" }
 
 # Coarse pass with speech recognition; the rest of lecture_default lands
 # operator by operator.
