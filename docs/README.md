@@ -18,6 +18,9 @@ Read the documents in order the first time. After that, each stands alone.
 | 10 | [Roadmap](10-roadmap.md) | Milestones M0 to M5, repo layout, license, open questions |
 | 11 | [Deployment](11-deployment.md) | videoindex.app on the azuremc machine |
 | — | [Kickoff prompt](KICKOFF.md) | The prompt to start development on azuremc |
+| — | [Machine facts](MACHINE.md) | What the current azuremc host is and what M0 measured on it |
+| — | [Machine recommendations](MACHINE-RECOMMENDATIONS.md) | Specs for the indexing/dev machine and the serving machine |
+| — | [Decisions](DECISIONS.md) | Dated choices made where the design was silent |
 
 ## Glossary
 
