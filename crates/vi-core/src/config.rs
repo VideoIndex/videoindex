@@ -48,11 +48,12 @@ impl Default for Config {
         );
         policy.insert("coarse_only".to_string(), IndexPolicy::coarse_only());
         policy.insert("m0".to_string(), IndexPolicy::m0());
+        policy.insert("coarse_local".to_string(), IndexPolicy::coarse_local());
         Self {
             media: MediaConfig::default(),
             index: IndexConfig::default(),
             policy,
-            default_policy: "m0".to_string(),
+            default_policy: "coarse_local".to_string(),
             providers: BTreeMap::new(),
             roles: BTreeMap::new(),
             server: ServerConfig::default(),
@@ -202,6 +203,22 @@ impl IndexPolicy {
     pub fn m0() -> Self {
         Self {
             coarse: ["sample", "phash", "thumbnail"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            fine: Vec::new(),
+            max_cost_usd_per_hour: 0.0,
+            max_wallclock_per_hour: "5m".to_string(),
+            ..Self::lecture_default()
+        }
+    }
+
+    /// Everything that runs without a model provider: sidecar subtitles,
+    /// sampling, perceptual hashes, thumbnails. The default until the
+    /// provider-backed operators exist.
+    pub fn coarse_local() -> Self {
+        Self {
+            coarse: ["subtitle_import", "sample", "phash", "thumbnail"]
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),

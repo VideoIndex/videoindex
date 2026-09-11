@@ -169,8 +169,14 @@ pub trait Storage: Send + Sync {
     async fn put_tracks(&self, t: &[Track]) -> Result<()>;
     /// Tracks of a video.
     async fn tracks(&self, video: VideoId) -> Result<Vec<Track>>;
+    /// Remove tracks of one kind (and, by cascade, their samples and spans).
+    async fn delete_tracks(&self, video: VideoId, kind: TrackKind) -> Result<u64>;
     /// Insert or replace segments.
     async fn put_segments(&self, s: &[Segment]) -> Result<()>;
+    /// Remove all segments of a video at one level.
+    async fn delete_segments(&self, video: VideoId, level: SegmentLevel) -> Result<u64>;
+    /// Segments of a video at one level, by time.
+    async fn segments(&self, video: VideoId, level: SegmentLevel) -> Result<Vec<Segment>>;
     /// Insert or replace frame samples.
     async fn put_frame_samples(&self, s: &[FrameSample]) -> Result<()>;
     /// Set pHashes.

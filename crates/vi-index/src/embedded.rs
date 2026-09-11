@@ -496,6 +496,41 @@ impl Storage for EmbeddedIndex {
         .await
     }
 
+    async fn delete_tracks(&self, video: VideoId, kind: TrackKind) -> Result<u64> {
+        self.with_conn(move |c| {
+            let n = c.execute(
+                "DELETE FROM tracks WHERE video_id = ?1 AND kind = ?2",
+                params![video.to_string(), kind.as_str()],
+            )?;
+            Ok(n as u64)
+        })
+        .await
+    }
+
+    async fn delete_segments(&self, video: VideoId, level: SegmentLevel) -> Result<u64> {
+        self.with_conn(move |c| {
+            let n = c.execute(
+                "DELETE FROM segments WHERE video_id = ?1 AND level = ?2",
+                params![video.to_string(), level.as_str()],
+            )?;
+            Ok(n as u64)
+        })
+        .await
+    }
+
+    async fn segments(&self, video: VideoId, level: SegmentLevel) -> Result<Vec<Segment>> {
+        self.with_conn(move |c| {
+            let mut st = c.prepare_cached(
+                "SELECT * FROM segments WHERE video_id = ?1 AND level = ?2 ORDER BY t0_secs",
+            )?;
+            let rows = st.query_map(params![video.to_string(), level.as_str()], |r| {
+                Ok(segment_from_row(r))
+            })?;
+            rows.map(|r| r?).collect()
+        })
+        .await
+    }
+
     async fn put_segments(&self, s: &[Segment]) -> Result<()> {
         let s = s.to_vec();
         self.with_conn(move |c| {
@@ -1222,6 +1257,9 @@ mod tests {
 
         assert_eq!(idx.delete_frame_samples(t.id).await.unwrap(), 10);
         assert!(idx.frame_samples(t.id, None).await.unwrap().is_empty());
+        assert_eq!(idx.delete_tracks(v.id, TrackKind::Audio).await.unwrap(), 0);
+        assert_eq!(idx.delete_tracks(v.id, TrackKind::Video).await.unwrap(), 1);
+        assert!(idx.tracks(v.id).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1349,6 +1387,15 @@ mod tests {
             provenance_id: prov.id,
         };
         idx.put_segments(std::slice::from_ref(&seg)).await.unwrap();
+        assert_eq!(
+            idx.segments(v.id, SegmentLevel::Scene).await.unwrap(),
+            vec![seg.clone()]
+        );
+        assert!(idx
+            .segments(v.id, SegmentLevel::Chapter)
+            .await
+            .unwrap()
+            .is_empty());
         let desc = Description {
             id: DescriptionId::new(),
             target_kind: TargetKind::Segment,

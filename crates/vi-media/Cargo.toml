@@ -25,6 +25,7 @@ tempfile = { workspace = true }
 libc = { workspace = true }
 blake3 = { workspace = true }
 async-trait = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 vi-testkit = { workspace = true }

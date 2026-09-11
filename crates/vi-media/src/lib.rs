@@ -1,6 +1,8 @@
 //! `vi-media`: everything that touches media bytes.
 //!
-//! - [`acquire`]: the `Acquirer` trait and the `LocalFile` acquirer.
+//! - [`acquire`]: the `Acquirer` trait, the `LocalFile` acquirer (with
+//!   sidecar import and the content-addressed media cache) and `YtDlp`.
+//! - [`sidecar`]: yt-dlp `.info.json`, SRT and VTT parsing.
 //! - [`mod@probe`]: container and stream facts via libav.
 //! - [`frame`]: `Arc<FrameBuffer>` frames with a pixel-format tag.
 //! - [`worker`]: the decode worker process. All libav calls happen there, in
@@ -28,11 +30,12 @@ pub mod probe;
 pub mod protocol;
 pub mod sandbox;
 pub mod shm;
+pub mod sidecar;
 pub mod worker;
 
 mod decode;
 
-pub use acquire::{Acquired, Acquirer, LocalFile, Source};
+pub use acquire::{Acquired, Acquirer, LocalFile, Source, YtDlp};
 pub use client::{
     decode_audio, decode_video, probe, worker_info, AudioChunk, AudioStream, FrameStream,
     WorkerInfo,

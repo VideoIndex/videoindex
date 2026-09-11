@@ -109,6 +109,8 @@ pub enum Item {
         /// Blob key.
         blob: BlobKey,
     },
+    /// A transcript span that has been persisted.
+    TranscriptSpan(Arc<vi_core::model::TranscriptSpan>),
 }
 
 impl Item {
@@ -119,6 +121,7 @@ impl Item {
             Item::Frame(_) => ItemKind::Frame,
             Item::Hashed { .. } => ItemKind::Hashed,
             Item::Thumbnail { .. } => ItemKind::Thumbnail,
+            Item::TranscriptSpan(_) => ItemKind::TranscriptSpan,
         }
     }
 }

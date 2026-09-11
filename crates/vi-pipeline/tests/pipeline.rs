@@ -187,6 +187,12 @@ async fn unknown_and_planned_operators_are_clear_errors() {
     assert!(matches!(err, vi_core::Error::Unsupported(_)), "{err}");
     assert!(sched.plan(Some("does_not_exist")).is_err());
     let (name, _, dag) = sched.plan(None).unwrap();
+    assert_eq!(name, "coarse_local");
+    let stages = dag.stage_names();
+    assert!(
+        stages.contains(&"subtitle_import".to_string()) && stages.contains(&"sample".to_string())
+    );
+    let (name, _, dag) = sched.plan(Some("m0")).unwrap();
     assert_eq!(name, "m0");
     assert_eq!(dag.stage_names()[0], "sample");
 }
@@ -222,4 +228,180 @@ async fn cancellation_stops_a_job_quickly() {
         .stages
         .values()
         .any(|s| s.status == StageStatus::Failed && s.error.as_deref() == Some("cancelled")));
+}
+
+#[tokio::test]
+async fn sidecars_from_incoming_are_imported_and_media_moves_into_the_cache() {
+    use vi_core::model::{SegmentLevel, TrackKind};
+    use vi_index::{Kind, TextQuery};
+
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("videos");
+    let incoming = cache.join("incoming").join("PLtest");
+    std::fs::create_dir_all(&incoming).unwrap();
+    let media = incoming.join("001-fixture.mp4");
+    std::fs::copy(fx::fixture_path(), &media).unwrap();
+    std::fs::write(
+        incoming.join("001-fixture.info.json"),
+        serde_json::json!({
+            "id": "fixture",
+            "title": "Synthetic workshop",
+            "description": "twelve colour segments",
+            "channel": "VideoIndex tests",
+            "webpage_url": "https://www.youtube.com/watch?v=fixture",
+            "upload_date": "20250101",
+            "chapters": [
+                {"start_time": 0.0, "end_time": 60.0, "title": "First half"},
+                {"start_time": 60.0, "end_time": 120.0, "title": "Second half"}
+            ],
+            "subtitles": {"en": [{"ext": "srt"}]},
+            "automatic_captions": {}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut srt = String::new();
+    for i in 0..24 {
+        let t0 = i * 5;
+        srt.push_str(&format!(
+            "{}\n00:0{}:{:02},000 --> 00:0{}:{:02},500\ncaption kw{i} about segment {}\n\n",
+            i + 1,
+            t0 / 60,
+            t0 % 60,
+            (t0 + 4) / 60,
+            (t0 + 4) % 60,
+            t0 / 10
+        ));
+    }
+    std::fs::write(incoming.join("001-fixture.en.srt"), srt).unwrap();
+
+    let idx = Arc::new(EmbeddedIndex::create(&dir.path().join("t.vidx")).unwrap());
+    let mut c = Config::default();
+    c.media.worker.path = Some(fx::worker_path());
+    c.media.sample_max_dim = 320;
+    c.media.cache_dir = cache.clone();
+    let sched = Scheduler::new(idx.clone(), Arc::new(c), EventBus::default());
+
+    // Directory expansion finds the one video.
+    let expanded = sched.expand(&Source::Path(incoming.clone())).await.unwrap();
+    assert_eq!(expanded.len(), 1);
+
+    let report = sched
+        .run(
+            expanded[0].clone(),
+            JobOptions::default(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(report.ok, "{report:?}");
+    assert_eq!(
+        report.stages["subtitle_import"].status,
+        StageStatus::Complete
+    );
+    assert!(
+        report.stages["subtitle_import"].items_done >= 6,
+        "{report:?}"
+    );
+
+    // Media and sidecars moved into the content-addressed cache.
+    assert!(!media.exists());
+    let video = idx.get_video(report.video_id).await.unwrap().unwrap();
+    assert!(cache.join(format!("{}.mp4", video.content_hash)).is_file());
+    assert!(cache
+        .join(format!("{}.info.json", video.content_hash))
+        .is_file());
+    assert!(cache
+        .join(format!("{}.en.srt", video.content_hash))
+        .is_file());
+
+    // Metadata from info.json.
+    assert_eq!(video.title.as_deref(), Some("Synthetic workshop"));
+    assert_eq!(video.channel.as_deref(), Some("VideoIndex tests"));
+    assert_eq!(video.source_uri, "https://www.youtube.com/watch?v=fixture");
+    assert_eq!(
+        video.published_at.unwrap().format("%Y-%m-%d").to_string(),
+        "2025-01-01"
+    );
+
+    // Chapters became chapter segments.
+    let chapters = idx.segments(video.id, SegmentLevel::Chapter).await.unwrap();
+    assert_eq!(chapters.len(), 2);
+    assert_eq!(chapters[1].title.as_deref(), Some("Second half"));
+    assert_eq!(chapters[1].t0, vi_core::Timestamp::from_secs(60));
+
+    // Subtitles became a subtitle track with searchable spans.
+    let tracks = idx.tracks(video.id).await.unwrap();
+    let sub = tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Subtitle)
+        .unwrap();
+    assert_eq!(sub.language.as_deref(), Some("en"));
+    assert!(sub.stream_index >= 1000);
+    let hits = idx
+        .text_search(&TextQuery {
+            kinds: vec![Kind::Transcript],
+            ..TextQuery::new("kw14", 5)
+        })
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(
+        hits[0].text.contains("kw14 about segment 7"),
+        "{:?}",
+        hits[0]
+    );
+    assert!(
+        hits[0].t0.as_secs_f64() >= 60.0 && hits[0].t0.as_secs_f64() < 80.0,
+        "{:?}",
+        hits[0]
+    );
+    let w = idx
+        .time_window(
+            video.id,
+            vi_core::Timestamp::from_secs(30),
+            vi_core::Timestamp::from_secs(45),
+            &[Kind::Transcript],
+        )
+        .await
+        .unwrap();
+    assert!(!w.transcript.is_empty());
+    assert!(
+        w.transcript.iter().all(|s| s.confidence == Some(1.0)),
+        "human subtitles"
+    );
+
+    // Re-indexing the cached file (forced) does not duplicate subtitle tracks or chapters.
+    let cached = cache.join(format!("{}.mp4", video.content_hash));
+    let again = sched
+        .run(
+            Source::Path(cached),
+            JobOptions {
+                force: true,
+                ..JobOptions::default()
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(again.ok && again.video_id == video.id);
+    let tracks = idx.tracks(video.id).await.unwrap();
+    assert_eq!(
+        tracks
+            .iter()
+            .filter(|t| t.kind == TrackKind::Subtitle)
+            .count(),
+        1
+    );
+    assert_eq!(
+        idx.segments(video.id, SegmentLevel::Chapter)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    let stats = idx.stats().await.unwrap();
+    assert_eq!(stats.videos.len(), 1);
+    assert!(stats.videos[0].transcript_spans >= 6);
+    assert_eq!(stats.videos[0].segments, 2);
 }

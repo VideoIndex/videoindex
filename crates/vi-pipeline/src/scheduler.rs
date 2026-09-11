@@ -12,10 +12,13 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use vi_core::config::{Config, IndexPolicy};
-use vi_core::model::{IndexState, JobState, StageState, StageStatus, Video};
+use vi_core::model::{
+    IndexState, JobState, Provenance, Segment, SegmentLevel, StageState, StageStatus, Video,
+};
+use vi_core::SegmentId;
 use vi_core::{Error, Event, EventBus, JobId, Result, VideoId};
 use vi_index::Storage;
-use vi_media::{Acquirer, LocalFile, Source};
+use vi_media::{Acquired, Acquirer, LocalFile, Source, YtDlp};
 
 use crate::dag::Dag;
 use crate::operator::*;
@@ -113,6 +116,83 @@ impl Scheduler {
         Ok((name, policy, dag))
     }
 
+    /// The acquirer for a source, or an error naming why none applies.
+    fn acquirer_for(&self, source: &Source) -> Result<Box<dyn Acquirer>> {
+        let local = LocalFile::with_cache(&self.config.media.cache_dir);
+        if local.handles(source) {
+            return Ok(Box::new(local));
+        }
+        let yt = YtDlp::new(&self.config.media.cache_dir);
+        if yt.handles(source) {
+            return Ok(Box::new(yt));
+        }
+        Err(Error::Unsupported(format!(
+            "no acquirer for {}; local files, directories and video-site URLs (yt-dlp) are supported",
+            source.uri()
+        )))
+    }
+
+    /// Expand a directory or playlist into individual sources.
+    pub async fn expand(&self, source: &Source) -> Result<Vec<Source>> {
+        Ok(self.acquirer_for(source)?.expand(source).await?)
+    }
+
+    /// Write chapter segments from sidecar metadata, else container chapters.
+    async fn import_chapters(
+        &self,
+        video: &Video,
+        acquired: &Acquired,
+        probe: &vi_media::Probe,
+    ) -> Result<u64> {
+        let chapters: Vec<(vi_core::Timestamp, vi_core::Timestamp, Option<String>)> =
+            if !acquired.chapters.is_empty() {
+                acquired
+                    .chapters
+                    .iter()
+                    .map(|c| (c.t0, c.t1, c.title.clone()))
+                    .collect()
+            } else {
+                probe
+                    .chapters
+                    .iter()
+                    .map(|c| (c.t0, c.t1, c.title.clone()))
+                    .collect()
+            };
+        self.storage
+            .delete_segments(video.id, SegmentLevel::Chapter)
+            .await?;
+        if chapters.is_empty() {
+            return Ok(0);
+        }
+        let prov = Provenance::local(
+            "chapters_import",
+            1,
+            serde_json::json!({
+                "source": if acquired.chapters.is_empty() { "container" } else { "info.json" },
+                "count": chapters.len(),
+            }),
+        );
+        self.storage.put_provenance(&prov).await?;
+        let segments: Vec<Segment> = chapters
+            .into_iter()
+            .filter(|(t0, t1, _)| t1 > t0)
+            .map(|(t0, t1, title)| Segment {
+                id: SegmentId::new(),
+                video_id: video.id,
+                level: SegmentLevel::Chapter,
+                parent_id: None,
+                t0,
+                t1,
+                keyframe_sample_id: None,
+                title,
+                summary: None,
+                provenance_id: prov.id,
+            })
+            .collect();
+        self.storage.put_segments(&segments).await?;
+        Ok(segments.len() as u64)
+    }
+
     /// Index one source.
     pub async fn run(
         &self,
@@ -131,13 +211,7 @@ impl Scheduler {
         });
 
         // ---- acquire + probe --------------------------------------------
-        let acquirer = LocalFile;
-        if !acquirer.handles(&source) {
-            return Err(Error::Unsupported(format!(
-                "only local files can be indexed in M0; got {}",
-                source.uri()
-            )));
-        }
+        let acquirer = self.acquirer_for(&source)?;
         let acquired = acquirer.acquire(&source).await?;
         let probe = vi_media::probe(&self.config.media.worker, &acquired.path).await?;
         let vstream = probe.video_stream().ok_or_else(|| {
@@ -156,8 +230,19 @@ impl Scheduler {
                 v.source_uri = acquired.source_uri.clone();
                 v.probe = serde_json::to_value(&probe)?;
                 v.duration = probe.duration;
-                if v.title.is_none() {
-                    v.title = acquired.title.clone().or_else(|| probe.title());
+                if acquired.title.is_some() {
+                    v.title = acquired.title.clone();
+                } else if v.title.is_none() {
+                    v.title = probe.title();
+                }
+                if acquired.description.is_some() {
+                    v.description = acquired.description.clone();
+                }
+                if acquired.channel.is_some() {
+                    v.channel = acquired.channel.clone();
+                }
+                if acquired.published_at.is_some() {
+                    v.published_at = acquired.published_at;
                 }
                 let tracks = self.storage.tracks(v.id).await?;
                 let tracks = if tracks.is_empty() {
@@ -177,9 +262,9 @@ impl Scheduler {
                     source_uri: acquired.source_uri.clone(),
                     content_hash: acquired.content_hash.clone(),
                     title: acquired.title.clone().or_else(|| probe.title()),
-                    description: None,
-                    channel: None,
-                    published_at: None,
+                    description: acquired.description.clone(),
+                    channel: acquired.channel.clone(),
+                    published_at: acquired.published_at,
                     duration: probe.duration,
                     start_wallclock: None,
                     probe: serde_json::to_value(&probe)?,
@@ -192,7 +277,9 @@ impl Scheduler {
                 (v, tracks, true)
             }
         };
+        let chapters = self.import_chapters(&video, &acquired, &probe).await?;
         let acquire_secs = started.elapsed().as_secs_f64();
+        info!(chapters, "metadata imported");
         info!(
             video = %video.id,
             duration = %probe.duration,

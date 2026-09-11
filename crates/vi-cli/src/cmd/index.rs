@@ -18,7 +18,8 @@ use crate::output::Output;
 pub struct Args {
     /// Index directory (created if missing).
     pub index_dir: PathBuf,
-    /// Local video files. Shell globs expand before `vi` sees them.
+    /// Local video files, directories of them, or video-site URLs (yt-dlp;
+    /// playlists expand). Shell globs expand before `vi` sees them.
     #[arg(required = true)]
     pub sources: Vec<String>,
     /// Policy name from the config (`m0`, `coarse_only`, `lecture_default`, ...).
@@ -130,14 +131,35 @@ pub async fn run(args: Args, mut config: Config, out: &Output) -> Result<()> {
         }
     });
 
+    // Expand directories and playlists first so the total is known.
+    let mut sources: Vec<(String, Source)> = Vec::new();
+    for s in &args.sources {
+        match sched.expand(&Source::parse(s)).await {
+            Ok(v) => sources.extend(v.into_iter().map(|src| (src.uri(), src))),
+            Err(e) => {
+                out.event(
+                    &serde_json::json!({"type": "error", "source": s, "error": e.to_string()}),
+                    || format!("error expanding {s}: {e}"),
+                );
+                bail!("could not expand {s}: {e}");
+            }
+        }
+    }
+    if sources.len() != args.sources.len() {
+        out.event(
+            &serde_json::json!({"type": "expanded", "count": sources.len()}),
+            || format!("{} source(s) after expansion", sources.len()),
+        );
+    }
+
     let mut reports: Vec<JobReport> = Vec::new();
     let mut failures = 0usize;
     let started = Instant::now();
-    for s in &args.sources {
+    for (s, source) in &sources {
         if cancel.is_cancelled() {
             break;
         }
-        let source = Source::parse(s);
+        let source = source.clone();
         let opts = JobOptions {
             policy: args.policy.clone(),
             resume: args.resume,
@@ -193,7 +215,7 @@ pub async fn run(args: Args, mut config: Config, out: &Output) -> Result<()> {
         }
         s.push_str(&format!(
             "{} source(s), {} failed, {elapsed:.1}s total",
-            args.sources.len(),
+            sources.len(),
             failures
         ));
         s

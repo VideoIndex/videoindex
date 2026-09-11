@@ -6,7 +6,7 @@ The design lives in [`docs/`](docs/README.md); read it in order the first time. 
 
 ## Status
 
-M0 (skeleton and decode) is complete: probe and decode through a sandboxed worker process, an embedded SQLite + FTS5 + blob index, an operator DAG scheduler, and `vi init | probe | index | status | doctor`. M1 (coarse index and search) is next.
+M0 (skeleton and decode) is complete: probe and decode through a sandboxed worker process, an embedded SQLite + FTS5 + blob index, an operator DAG scheduler, and `vi init | probe | index | status | doctor`. M1 (coarse index and search) is in progress: yt-dlp sidecar import (`.info.json`, subtitles, chapters), the content-addressed media cache, and the `YtDlp` acquirer are done; VAD, ASR, shot detection, embeddings, OCR and `vi search` are next.
 
 ## Build
 
@@ -29,7 +29,9 @@ cargo test
 vi doctor                                  # machine facts, toolchain, decode worker
 vi probe talk.mp4                          # container, streams, chapters, keyframe interval
 vi init ./talks.vidx
-vi index ./talks.vidx talk.mp4 [more.mp4]  # sample at 1 fps, pHash, WebP thumbnails
+vi index ./talks.vidx talk.mp4 [more.mp4]  # subtitles/chapters from sidecars, 1 fps samples, pHash, thumbnails
+vi index ./talks.vidx /data/videoindex/videos/incoming/   # a directory: every video in it
+vi index ./talks.vidx "https://www.youtube.com/playlist?list=..."   # via yt-dlp, where YouTube is reachable
 vi status ./talks.vidx                     # videos, states, sample counts, sizes, jobs
 ```
 
