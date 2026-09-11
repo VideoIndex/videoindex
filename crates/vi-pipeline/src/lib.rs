@@ -1,8 +1,23 @@
-//! `vi-pipeline`: in progress.
+//! `vi-pipeline`: turns a Source into a populated Index.
 //!
-//! Stub in M0; see `docs/10-roadmap.md` for the milestone that fills it in.
+//! - [`operator`]: the [`Operator`] trait, the [`Item`]s that flow between
+//!   operators, and [`OpContext`].
+//! - [`dag`]: derives the execution graph from operators' declared inputs and
+//!   outputs; adding an operator never touches the scheduler.
+//! - [`scheduler`]: runs the DAG as tokio tasks joined by bounded channels,
+//!   checkpoints every stage, emits progress events.
+//! - [`ops`]: the shipped operators (M0: `sample`, `phash`, `thumbnail`).
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
-/// Crate version, so the stub exports something and links.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub mod dag;
+pub mod operator;
+pub mod ops;
+pub mod scheduler;
+
+pub use dag::Dag;
+pub use operator::{
+    CostEstimate, Emitter, FrameItem, InputSummary, Item, ItemKind, MediaItem, OpContext, OpInput,
+    OpOutput, Operator,
+};
+pub use scheduler::{JobOptions, JobReport, Scheduler};

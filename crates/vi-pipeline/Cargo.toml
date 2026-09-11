@@ -1,6 +1,6 @@
 [package]
 name = "vi-pipeline"
-description = "VideoIndex vi-pipeline (in progress)"
+description = "VideoIndex indexing pipeline: operator DAG, scheduler, checkpoints, progress"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,21 @@ authors.workspace = true
 
 [dependencies]
 vi-core = { workspace = true }
+vi-media = { workspace = true }
+vi-perceive = { workspace = true }
+vi-index = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+vi-testkit = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

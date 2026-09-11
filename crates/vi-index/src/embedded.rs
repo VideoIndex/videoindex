@@ -369,7 +369,14 @@ impl Storage for EmbeddedIndex {
         let v = v.clone();
         self.with_conn(move |c| {
             c.execute(
-                &format!("INSERT OR REPLACE INTO videos({VIDEO_COLS}, duration_secs) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)"),
+                &format!("INSERT INTO videos({VIDEO_COLS}, duration_secs) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+                     ON CONFLICT(id) DO UPDATE SET
+                       source_uri = excluded.source_uri, content_hash = excluded.content_hash,
+                       title = excluded.title, description = excluded.description, channel = excluded.channel,
+                       published_at = excluded.published_at, duration_num = excluded.duration_num,
+                       duration_den = excluded.duration_den, duration_secs = excluded.duration_secs,
+                       start_wallclock = excluded.start_wallclock, probe = excluded.probe,
+                       index_state = excluded.index_state"),
                 params![
                     v.id.to_string(),
                     v.source_uri,
@@ -447,8 +454,13 @@ impl Storage for EmbeddedIndex {
             let tx = c.unchecked_transaction()?;
             {
                 let mut st = tx.prepare_cached(
-                    "INSERT OR REPLACE INTO tracks(id, video_id, kind, stream_index, codec, timebase_num, timebase_den, width, height, fps, sample_rate, channels, language)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                    "INSERT INTO tracks(id, video_id, kind, stream_index, codec, timebase_num, timebase_den, width, height, fps, sample_rate, channels, language)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+                     ON CONFLICT(id) DO UPDATE SET
+                       video_id = excluded.video_id, kind = excluded.kind, stream_index = excluded.stream_index,
+                       codec = excluded.codec, timebase_num = excluded.timebase_num, timebase_den = excluded.timebase_den,
+                       width = excluded.width, height = excluded.height, fps = excluded.fps,
+                       sample_rate = excluded.sample_rate, channels = excluded.channels, language = excluded.language",
                 )?;
                 for tr in &t {
                     st.execute(params![
@@ -490,8 +502,14 @@ impl Storage for EmbeddedIndex {
             let tx = c.unchecked_transaction()?;
             {
                 let mut st = tx.prepare_cached(
-                    "INSERT OR REPLACE INTO segments(id, video_id, level, parent_id, t0_num, t0_den, t0_secs, t1_num, t1_den, t1_secs, keyframe_sample_id, title, summary, provenance_id)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                    "INSERT INTO segments(id, video_id, level, parent_id, t0_num, t0_den, t0_secs, t1_num, t1_den, t1_secs, keyframe_sample_id, title, summary, provenance_id)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+                     ON CONFLICT(id) DO UPDATE SET
+                       video_id = excluded.video_id, level = excluded.level, parent_id = excluded.parent_id,
+                       t0_num = excluded.t0_num, t0_den = excluded.t0_den, t0_secs = excluded.t0_secs,
+                       t1_num = excluded.t1_num, t1_den = excluded.t1_den, t1_secs = excluded.t1_secs,
+                       keyframe_sample_id = excluded.keyframe_sample_id, title = excluded.title,
+                       summary = excluded.summary, provenance_id = excluded.provenance_id",
                 )?;
                 for seg in &s {
                     st.execute(params![
@@ -524,8 +542,14 @@ impl Storage for EmbeddedIndex {
             let tx = c.unchecked_transaction()?;
             {
                 let mut st = tx.prepare_cached(
-                    "INSERT OR REPLACE INTO frame_samples(id, track_id, t_num, t_den, t_secs, pts, is_keyframe, phash, thumbnail_blob, width, height)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                    "INSERT INTO frame_samples(id, track_id, t_num, t_den, t_secs, pts, is_keyframe, phash, thumbnail_blob, width, height)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+                     ON CONFLICT(id) DO UPDATE SET
+                       track_id = excluded.track_id, t_num = excluded.t_num, t_den = excluded.t_den, t_secs = excluded.t_secs,
+                       pts = excluded.pts, is_keyframe = excluded.is_keyframe,
+                       phash = COALESCE(excluded.phash, frame_samples.phash),
+                       thumbnail_blob = COALESCE(excluded.thumbnail_blob, frame_samples.thumbnail_blob),
+                       width = excluded.width, height = excluded.height",
                 )?;
                 for f in &s {
                     st.execute(params![
@@ -1138,6 +1162,18 @@ mod tests {
         let t = track(v.id);
         idx.put_tracks(std::slice::from_ref(&t)).await.unwrap();
         assert_eq!(idx.tracks(v.id).await.unwrap(), vec![t.clone()]);
+        // Re-putting the video is an update, not delete + insert: children survive.
+        idx.put_video(&Video {
+            title: Some("renamed".into()),
+            ..v.clone()
+        })
+        .await
+        .unwrap();
+        assert_eq!(idx.tracks(v.id).await.unwrap(), vec![t.clone()]);
+        assert_eq!(
+            idx.get_video(v.id).await.unwrap().unwrap().title.as_deref(),
+            Some("renamed")
+        );
 
         let frames: Vec<FrameSample> = (0..10)
             .map(|i| FrameSample {

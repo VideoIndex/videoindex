@@ -89,3 +89,65 @@ mod tests {
         assert_eq!(segment_at(500.0), 11);
     }
 }
+
+/// Locate the `vi-media-worker` binary for tests in crates other than
+/// `vi-media` (where `CARGO_BIN_EXE_vi-media-worker` is not set).
+///
+/// Order: `VI_MEDIA_WORKER` env; a binary next to the running test
+/// executable's profile directory; otherwise build it with `cargo build`
+/// (once per process).
+pub fn worker_path() -> PathBuf {
+    static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        if let Some(p) = std::env::var_os("VI_MEDIA_WORKER") {
+            return PathBuf::from(p);
+        }
+        let exe = std::env::current_exe().unwrap_or_default();
+        // target/<profile>/deps/<test> -> target/<profile>/
+        let profile_dir = exe
+            .parent()
+            .and_then(|d| {
+                if d.ends_with("deps") {
+                    d.parent()
+                } else {
+                    Some(d)
+                }
+            })
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default();
+        let name = if cfg!(windows) {
+            "vi-media-worker.exe"
+        } else {
+            "vi-media-worker"
+        };
+        let candidate = profile_dir.join(name);
+        if !candidate.is_file() {
+            let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let workspace = manifest_dir.join("..").join("..");
+            let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+            let mut cmd = std::process::Command::new(cargo);
+            cmd.current_dir(&workspace).args([
+                "build",
+                "-p",
+                "vi-media",
+                "--bin",
+                "vi-media-worker",
+            ]);
+            if profile_dir.file_name().and_then(|n| n.to_str()) == Some("release") {
+                cmd.arg("--release");
+            }
+            let status = cmd.status();
+            assert!(
+                matches!(status, Ok(s) if s.success()),
+                "failed to build vi-media-worker for tests: {status:?}"
+            );
+        }
+        assert!(
+            candidate.is_file(),
+            "worker binary missing at {}",
+            candidate.display()
+        );
+        candidate
+    })
+    .clone()
+}
