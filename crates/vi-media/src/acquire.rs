@@ -125,6 +125,10 @@ pub trait Acquirer: Send + Sync {
     }
     /// Acquire one source.
     async fn acquire(&self, source: &Source) -> Result<Acquired>;
+    /// Where the acquirer downloads to, if it downloads.
+    fn incoming_dir(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 /// Local files. Zero-copy open; sidecars imported; files under

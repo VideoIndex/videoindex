@@ -58,8 +58,10 @@ memmap2 = "0.9"
 tempfile = "3"
 libc = "0.2"
 
-# providers
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "multipart", "http2", "charset"] }
+# providers and remote acquirers
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "multipart", "http2", "charset", "stream"] }
+object_store = { version = "0.14", features = ["aws", "gcp", "azure"] }
+url = "2"
 
 # storage
 rusqlite = { version = "0.40", features = ["bundled", "blob", "serde_json"] }

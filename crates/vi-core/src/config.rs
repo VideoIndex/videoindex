@@ -16,6 +16,9 @@ pub const CONFIG_PATH_ENV: &str = "VI_CONFIG";
 pub const ENV_PREFIX: &str = "VI_";
 /// Separator between nested keys in environment overrides.
 pub const ENV_SPLIT: &str = "__";
+/// `default_policy` value meaning: `coarse_only` when its provider roles
+/// are all bound, else `coarse_local`.
+pub const AUTO_POLICY: &str = "auto";
 
 /// Top-level configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -56,7 +59,7 @@ impl Default for Config {
             index: IndexConfig::default(),
             models: ModelsConfig::default(),
             policy,
-            default_policy: "coarse_local".to_string(),
+            default_policy: AUTO_POLICY.to_string(),
             providers: BTreeMap::new(),
             roles: BTreeMap::new(),
             server: ServerConfig::default(),
@@ -77,6 +80,8 @@ pub struct MediaConfig {
     /// Frames are scaled in the worker so only what operators need crosses
     /// the process boundary.
     pub sample_max_dim: u32,
+    /// Limits for the `Http` and `ObjectStore` acquirers.
+    pub download: DownloadConfig,
 }
 
 impl Default for MediaConfig {
@@ -85,6 +90,37 @@ impl Default for MediaConfig {
             cache_dir: default_cache_dir(),
             worker: WorkerConfig::default(),
             sample_max_dim: 640,
+            download: DownloadConfig::default(),
+        }
+    }
+}
+
+/// Limits for remote acquisition (`docs/05-indexing-pipeline.md`, Acquire).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct DownloadConfig {
+    /// Largest file accepted, bytes.
+    pub max_bytes: u64,
+    /// Wall-clock limit per download, seconds.
+    pub timeout_secs: u64,
+    /// Allow HTTP hosts that resolve to private, loopback or link-local
+    /// addresses (off by default: a server must not be made to fetch from
+    /// its own network).
+    pub allow_private_addresses: bool,
+    /// Redirects followed per download.
+    pub max_redirects: u32,
+    /// Endpoint for `r2://` buckets (Cloudflare R2 is S3-compatible).
+    pub r2_endpoint: Option<String>,
+}
+
+impl Default for DownloadConfig {
+    fn default() -> Self {
+        Self {
+            max_bytes: 8 * 1024 * 1024 * 1024,
+            timeout_secs: 4 * 3600,
+            allow_private_addresses: false,
+            max_redirects: 5,
+            r2_endpoint: None,
         }
     }
 }
@@ -293,43 +329,55 @@ impl Default for IndexPolicy {
 }
 
 impl IndexPolicy {
-    /// The default policy from the design docs.
+    /// The default policy from the design docs: every coarse operator, then
+    /// the fine pass (M2).
     pub fn lecture_default() -> Self {
         Self {
             sample_fps: 1.0,
             coarse: [
+                "subtitle_import",
                 "vad",
                 "asr",
+                "sample",
                 "shot_boundary",
                 "phash",
+                "thumbnail",
                 "image_embed",
                 "ocr",
-                "thumbnail",
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-            fine: [
-                "scenes",
-                "chapters",
-                "vlm_describe",
-                "entities_events",
                 "text_embed",
             ]
             .iter()
             .map(|s| s.to_string())
             .collect(),
+            fine: ["scenes", "chapters", "vlm_describe", "entities_events"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             vlm_grid: "3x3".to_string(),
             max_cost_usd_per_hour: 2.0,
             max_wallclock_per_hour: "20m".to_string(),
         }
     }
 
-    /// Coarse pass only.
+    /// Coarse pass only: every coarse operator, so it needs the `asr`,
+    /// `ocr`, `image_embed` and `text_embed` roles bound.
     pub fn coarse_only() -> Self {
         Self {
             fine: Vec::new(),
             ..Self::lecture_default()
+        }
+    }
+
+    /// Roles a policy's operators need, by operator name.
+    pub fn roles_for_operator(op: &str) -> &'static [&'static str] {
+        match op {
+            "asr" => &[roles::ASR],
+            "ocr" => &[roles::OCR],
+            "image_embed" => &[roles::IMAGE_EMBED],
+            "text_embed" => &[roles::TEXT_EMBED],
+            "vlm_describe" => &[roles::VLM_DESCRIBE],
+            "entities_events" => &[roles::EXTRACT_LLM],
+            _ => &[],
         }
     }
 
@@ -632,6 +680,26 @@ impl Config {
         Ok((binding, provider))
     }
 
+    /// Resolve the policy to use when none is requested: `default_policy`,
+    /// or with `auto`, `coarse_only` when every role its operators need is
+    /// bound and `coarse_local` otherwise.
+    pub fn resolve_default_policy(&self) -> String {
+        if self.default_policy != AUTO_POLICY {
+            return self.default_policy.clone();
+        }
+        let full = self.policy.get("coarse_only");
+        let bound = full.is_some_and(|p| {
+            p.operators()
+                .flat_map(IndexPolicy::roles_for_operator)
+                .all(|r| self.roles.contains_key(*r))
+        });
+        if bound {
+            "coarse_only".to_string()
+        } else {
+            "coarse_local".to_string()
+        }
+    }
+
     /// Look up a policy by name.
     pub fn policy(&self, name: &str) -> Result<&IndexPolicy> {
         self.policy.get(name).ok_or_else(|| {
@@ -732,6 +800,30 @@ mod tests {
             c.provider_for_role(roles::TEXT_EMBED),
             Err(Error::Provider(_))
         ));
+    }
+
+    #[test]
+    fn auto_default_policy_follows_bound_roles() {
+        let c = Config::default();
+        assert_eq!(c.resolve_default_policy(), "coarse_local");
+        let c = Config::from_toml_str(
+            r#"
+            [providers.w]
+            adapter = "openai_compat"
+            base_url = "http://127.0.0.1:9000/v1"
+            [providers.l]
+            adapter = "onnx_local"
+            [roles]
+            asr = { provider = "w" }
+            ocr = { provider = "l" }
+            image_embed = { provider = "l" }
+            text_embed = { provider = "l" }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(c.resolve_default_policy(), "coarse_only");
+        let c = Config::from_toml_str("default_policy = \"m0\"").unwrap();
+        assert_eq!(c.resolve_default_policy(), "m0");
     }
 
     #[test]

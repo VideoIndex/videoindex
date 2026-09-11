@@ -2,6 +2,8 @@
 //!
 //! - [`acquire`]: the `Acquirer` trait, the `LocalFile` acquirer (with
 //!   sidecar import and the content-addressed media cache) and `YtDlp`.
+//! - [`remote`]: the `Http` and `ObjectStore` acquirers (size and time
+//!   limits, private-address refusal, resumable downloads).
 //! - [`sidecar`]: yt-dlp `.info.json`, SRT and VTT parsing.
 //! - [`mod@probe`]: container and stream facts via libav.
 //! - [`frame`]: `Arc<FrameBuffer>` frames with a pixel-format tag.
@@ -28,6 +30,7 @@ pub mod error;
 pub mod frame;
 pub mod probe;
 pub mod protocol;
+pub mod remote;
 pub mod sandbox;
 pub mod shm;
 pub mod sidecar;
@@ -44,6 +47,7 @@ pub use error::{MediaError, Result};
 pub use frame::{FrameBuffer, PixelFormat};
 pub use probe::{ChapterInfo, Probe, StreamInfo};
 pub use protocol::{AudioDecodeRequest, VideoDecodeRequest};
+pub use remote::{Http, ObjectStore};
 
 /// Argument that makes the `vi` binary (or any host binary) act as the decode
 /// worker. Hosts check `std::env::args().nth(1) == Some(WORKER_ARG)` before

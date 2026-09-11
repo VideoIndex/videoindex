@@ -125,8 +125,8 @@ An `IndexPolicy` is a named configuration:
 ```toml
 [policy.lecture_default]
 sample_fps = 1.0
-coarse = ["vad", "asr", "shot_boundary", "phash", "image_embed", "ocr", "thumbnail"]
-fine   = ["scenes", "chapters", "vlm_describe", "entities_events", "text_embed"]
+coarse = ["subtitle_import", "vad", "asr", "sample", "shot_boundary", "phash", "thumbnail", "image_embed", "ocr", "text_embed"]
+fine   = ["scenes", "chapters", "vlm_describe", "entities_events"]
 vlm_grid = "3x3"
 max_cost_usd_per_hour = 2.0
 max_wallclock_per_hour = "20m"
@@ -134,6 +134,8 @@ max_wallclock_per_hour = "20m"
 [policy.coarse_only]
 fine = []
 ```
+
+`default_policy = "auto"` (the default) picks `coarse_only` when the `asr`, `ocr`, `image_embed` and `text_embed` roles are bound and `coarse_local` (no provider-backed operators) otherwise. `text_embed` sits in the coarse pass because hybrid search needs span vectors; the fine pass adds the VLM and LLM stages in M2.
 
 When a budget is exhausted the job stops issuing new provider calls, finishes writing what it has, marks the Video with the reached state, and reports which stages were skipped. `max_wallclock_per_hour` accepts `20m`, `1h30m`, `90s`; `0` for either limit means unlimited. The ceiling is the per-hour figure times the video's duration in hours (at least one minute's worth).
 

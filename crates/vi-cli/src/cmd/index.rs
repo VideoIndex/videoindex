@@ -47,7 +47,7 @@ pub async fn run(args: Args, mut config: Config, out: &Output) -> Result<()> {
         let name = args
             .policy
             .clone()
-            .unwrap_or_else(|| config.default_policy.clone());
+            .unwrap_or_else(|| config.resolve_default_policy());
         let p = config
             .policy
             .get_mut(&name)

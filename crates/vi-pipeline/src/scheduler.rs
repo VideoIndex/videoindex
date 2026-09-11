@@ -18,7 +18,7 @@ use vi_core::model::{
 use vi_core::SegmentId;
 use vi_core::{Error, Event, EventBus, JobId, Result, VideoId};
 use vi_index::Storage;
-use vi_media::{Acquired, Acquirer, LocalFile, Source, YtDlp};
+use vi_media::{Acquired, Acquirer, Http, LocalFile, ObjectStore, Source, YtDlp};
 use vi_providers::ProviderRegistry;
 
 use crate::dag::Dag;
@@ -128,8 +128,8 @@ impl Scheduler {
     /// Resolve the policy and build the operator DAG for it, without running.
     pub fn plan(&self, policy_name: Option<&str>) -> Result<(String, IndexPolicy, Dag)> {
         let name = policy_name
-            .unwrap_or(&self.config.default_policy)
-            .to_string();
+            .map(str::to_string)
+            .unwrap_or_else(|| self.config.resolve_default_policy());
         let policy = self.config.policy(&name)?.clone();
         let mut operators = Vec::new();
         for op_name in policy.operators() {
@@ -176,8 +176,22 @@ impl Scheduler {
         if yt.handles(source) {
             return Ok(Box::new(yt));
         }
+        let http = Http::new(
+            &self.config.media.cache_dir,
+            self.config.media.download.clone(),
+        );
+        if http.handles(source) {
+            return Ok(Box::new(http));
+        }
+        let obj = ObjectStore::new(
+            &self.config.media.cache_dir,
+            self.config.media.download.clone(),
+        );
+        if obj.handles(source) {
+            return Ok(Box::new(obj));
+        }
         Err(Error::Unsupported(format!(
-            "no acquirer for {}; local files, directories and video-site URLs (yt-dlp) are supported",
+            "no acquirer for {}; local files and directories, video-site URLs (yt-dlp), https://…/file.mp4, and s3:// gs:// az:// r2:// objects are supported",
             source.uri()
         )))
     }

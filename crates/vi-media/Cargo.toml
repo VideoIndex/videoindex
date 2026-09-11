@@ -26,10 +26,15 @@ libc = { workspace = true }
 blake3 = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+reqwest = { workspace = true }
+object_store = { workspace = true }
+url = { workspace = true }
+futures = { workspace = true }
 
 [dev-dependencies]
 vi-testkit = { workspace = true }
 tempfile = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

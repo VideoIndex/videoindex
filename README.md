@@ -6,7 +6,7 @@ The design lives in [`docs/`](docs/README.md); read it in order the first time. 
 
 ## Status
 
-M0 (skeleton and decode) is complete: probe and decode through a sandboxed worker process, an embedded SQLite + FTS5 + blob index, an operator DAG scheduler, and `vi init | probe | index | status | doctor`. M1 (coarse index and search) is in progress: yt-dlp sidecar import (`.info.json`, subtitles, chapters), the content-addressed media cache, the `YtDlp` acquirer, text `vi search`, the provider layer (`vi-providers`), Silero VAD and Whisper ASR through an OpenAI-compatible server are done; shot detection, embeddings, OCR and hybrid search are next.
+M0 (skeleton and decode) is complete: probe and decode through a sandboxed worker process, an embedded SQLite + FTS5 + blob index, an operator DAG scheduler, and `vi init | probe | index | status | doctor`. M1 (coarse index and search) is in progress: yt-dlp sidecar import (`.info.json`, subtitles, chapters), the content-addressed media cache, the `YtDlp` acquirer, text `vi search`, the provider layer (`vi-providers`), Silero VAD and Whisper ASR through an OpenAI-compatible server, shot detection, SigLIP and bge embeddings with a vector store, RapidOCR, hybrid `vi search`, budgets and the operator cache, and the `Http`/`ObjectStore` acquirers are done; the two-playlist run and the dev set close M1.
 
 ## Build
 
@@ -32,8 +32,10 @@ vi init ./talks.vidx
 vi index ./talks.vidx talk.mp4 [more.mp4]  # subtitles/chapters from sidecars, 1 fps samples, pHash, thumbnails
 vi index ./talks.vidx /data/videoindex/videos/incoming/   # a directory: every video in it
 vi index ./talks.vidx "https://www.youtube.com/playlist?list=..."   # via yt-dlp, where YouTube is reachable
+vi index ./talks.vidx https://cdn.example.com/talks/day1.mp4 s3://bucket/talks/   # direct downloads, object stores
 vi --config config/gcp-a100.toml index ./talks.vidx talk.mp4 --policy coarse_asr   # + VAD and Whisper ASR (scripts/asr_server.sh start)
-vi search ./talks.vidx "hybrid retrieval"  # BM25 over captions/OCR/descriptions, grouped by chapter
+vi search ./talks.vidx "hybrid retrieval"  # BM25 + text and image vectors, grouped by shot/scene
+vi search ./talks.vidx "slide with a diagram" --kind frame   # SigLIP text-to-frame search
 vi status ./talks.vidx                     # videos, states, sample counts, sizes, jobs
 ```
 
