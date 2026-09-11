@@ -1,6 +1,6 @@
 [package]
 name = "vi-perceive"
-description = "VideoIndex vi-perceive (in progress)"
+description = "VideoIndex in-process perception: perceptual hashing, thumbnails (shot detection, VAD, embeddings later)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,10 @@ authors.workspace = true
 
 [dependencies]
 vi-core = { workspace = true }
+vi-media = { workspace = true }
+image = { workspace = true }
+webp = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

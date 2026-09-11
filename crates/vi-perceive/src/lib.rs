@@ -1,8 +1,14 @@
-//! `vi-perceive`: in progress.
+//! `vi-perceive`: CPU-bound, in-process perception operators' algorithms.
 //!
-//! Stub in M0; see `docs/10-roadmap.md` for the milestone that fills it in.
+//! M0 ships perceptual hashing ([`phash`]) and thumbnail encoding
+//! ([`thumbnail`]). Shot boundaries, VAD, and embeddings arrive in M1. These
+//! functions are synchronous and must be called from the rayon pool
+//! (`vi_core::cpu::run`), never from a tokio worker thread.
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
-/// Crate version, so the stub exports something and links.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub mod phash;
+pub mod thumbnail;
+
+pub use phash::{hamming, phash_rgb, PHASH_DEDUP_DISTANCE};
+pub use thumbnail::{encode_webp_thumbnail, ThumbnailError};
