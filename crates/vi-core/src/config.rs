@@ -238,33 +238,100 @@ impl IndexPolicy {
     }
 }
 
-/// One `[providers.<name>]` table. Opaque until the provider crate lands.
+/// One `[providers.<name>]` table (`docs/07-model-providers.md`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct ProviderConfig {
-    /// Adapter name, e.g. `openai_compat`.
+    /// Adapter name: `openai_compat`, `onnx_local`, `gemini`, `anthropic`.
     pub adapter: String,
-    /// Environment variable holding the API key.
+    /// Environment variable holding the API key. Keys are read once at
+    /// start-up and never logged.
     pub api_key_env: Option<String>,
-    /// Base URL for HTTP adapters.
+    /// Base URL for HTTP adapters, e.g. `http://127.0.0.1:9000/v1`.
     pub base_url: Option<String>,
     /// Default model.
     pub model: Option<String>,
+    /// Max in-flight requests to this provider.
+    pub concurrency: Option<u32>,
+    /// Request rate limit (token bucket refilled at this rate).
+    pub requests_per_minute: Option<u32>,
+    /// Token rate limit for LLM/VLM/embedding calls.
+    pub tokens_per_minute: Option<u32>,
+    /// Per-request timeout in seconds.
+    pub timeout_secs: Option<u64>,
+    /// Retries after the first attempt on 429, 5xx and transport errors.
+    pub max_retries: Option<u32>,
+    /// Price table override for cost accounting.
+    pub pricing: Option<Pricing>,
+    /// Directory holding model files for local adapters.
+    pub model_dir: Option<PathBuf>,
     /// Anything adapter-specific.
     #[serde(flatten)]
     pub extra: BTreeMap<String, toml::Value>,
 }
 
-/// One `[roles]` entry.
+/// Prices in USD used for cost accounting. All default to zero, which is
+/// right for local servers.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct Pricing {
+    /// Per million input tokens.
+    pub input_per_mtok: f64,
+    /// Per million output tokens.
+    pub output_per_mtok: f64,
+    /// Per input image.
+    pub per_image: f64,
+    /// Per second of audio or video sent.
+    pub per_media_second: f64,
+    /// Flat fee per call.
+    pub per_call: f64,
+}
+
+/// One `[roles]` entry: which provider (and optionally which model or base
+/// URL) serves a capability role.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct RoleBinding {
-    /// Provider name.
+    /// Provider name (a key of `[providers]`).
     pub provider: String,
     /// Model override.
     pub model: Option<String>,
     /// Base URL override.
     pub base_url: Option<String>,
+}
+
+/// Role names the pipeline and agent look up in `[roles]`.
+pub mod roles {
+    /// Speech to text.
+    pub const ASR: &str = "asr";
+    /// On-screen text.
+    pub const OCR: &str = "ocr";
+    /// Frame embeddings (and the matching text tower).
+    pub const IMAGE_EMBED: &str = "image_embed";
+    /// Text embeddings.
+    pub const TEXT_EMBED: &str = "text_embed";
+    /// Scene descriptions.
+    pub const VLM_DESCRIBE: &str = "vlm_describe";
+    /// Entity and event extraction.
+    pub const EXTRACT_LLM: &str = "extract_llm";
+    /// The agent's reasoning model.
+    pub const AGENT_LLM: &str = "agent_llm";
+    /// The agent's multimodal model (defaults to `agent_llm`).
+    pub const AGENT_VLM: &str = "agent_vlm";
+    /// Cross-encoder reranking.
+    pub const RERANKER: &str = "reranker";
+    /// Every role name, for validation.
+    pub const ALL: &[&str] = &[
+        ASR,
+        OCR,
+        IMAGE_EMBED,
+        TEXT_EMBED,
+        VLM_DESCRIBE,
+        EXTRACT_LLM,
+        AGENT_LLM,
+        AGENT_VLM,
+        RERANKER,
+    ];
 }
 
 /// Server settings (used from M3).
@@ -353,6 +420,27 @@ impl Config {
             .map_err(|e| Error::Config(e.to_string()))
     }
 
+    /// The role binding for a role name, if configured.
+    pub fn role(&self, name: &str) -> Option<&RoleBinding> {
+        self.roles.get(name)
+    }
+
+    /// The provider table a role points at.
+    pub fn provider_for_role(&self, role: &str) -> Result<(&RoleBinding, &ProviderConfig)> {
+        let binding = self.roles.get(role).ok_or_else(|| {
+            Error::Provider(format!(
+                "no provider bound to role '{role}'; add `[roles] {role} = {{ provider = \"...\" }}` to the config"
+            ))
+        })?;
+        let provider = self.providers.get(&binding.provider).ok_or_else(|| {
+            Error::Config(format!(
+                "role '{role}' names provider '{}' but no [providers.{}] table exists",
+                binding.provider, binding.provider
+            ))
+        })?;
+        Ok((binding, provider))
+    }
+
     /// Look up a policy by name.
     pub fn policy(&self, name: &str) -> Result<&IndexPolicy> {
         self.policy.get(name).ok_or_else(|| {
@@ -424,6 +512,35 @@ mod tests {
             assert_eq!(c.log.level, "debug");
             Ok(())
         });
+    }
+
+    #[test]
+    fn roles_resolve_to_providers() {
+        let c = Config::from_toml_str(
+            r#"
+            [providers.whisper]
+            adapter = "openai_compat"
+            base_url = "http://127.0.0.1:9000/v1"
+            model = "large-v3"
+            concurrency = 2
+            [roles]
+            asr = { provider = "whisper" }
+            ocr = { provider = "nope" }
+            "#,
+        )
+        .unwrap();
+        let (b, p) = c.provider_for_role(roles::ASR).unwrap();
+        assert_eq!(b.provider, "whisper");
+        assert_eq!(p.adapter, "openai_compat");
+        assert_eq!(p.concurrency, Some(2));
+        assert!(matches!(
+            c.provider_for_role(roles::OCR),
+            Err(Error::Config(_))
+        ));
+        assert!(matches!(
+            c.provider_for_role(roles::TEXT_EMBED),
+            Err(Error::Provider(_))
+        ));
     }
 
     #[test]

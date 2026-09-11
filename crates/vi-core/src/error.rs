@@ -58,6 +58,11 @@ pub enum Error {
     #[error("unsupported: {0}")]
     Unsupported(String),
 
+    /// A model provider call failed after retries, or no provider is bound
+    /// to the role an operator needs.
+    #[error("provider: {0}")]
+    Provider(String),
+
     /// Caller passed something invalid.
     #[error("invalid argument: {0}")]
     Invalid(String),
@@ -99,6 +104,11 @@ impl Error {
     /// Convenience constructor for [`Error::Protocol`].
     pub fn protocol(msg: impl Into<String>) -> Self {
         Self::Protocol(msg.into())
+    }
+
+    /// Convenience constructor for [`Error::Provider`].
+    pub fn provider(msg: impl Into<String>) -> Self {
+        Self::Provider(msg.into())
     }
 
     /// Convenience constructor for [`Error::Operator`].

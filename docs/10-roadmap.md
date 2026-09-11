@@ -27,6 +27,8 @@ Done when: the two playlists in `dataset/videolist.md` index to `coarse` unatten
 
 **Progress 2026-09-11:** `LocalFile` sidecar import (`.info.json`, `.srt`, `.vtt`), the content-addressed media cache move from `incoming/`, chapter import, the `subtitle_import` operator, directory expansion, and the `YtDlp` acquirer with playlist expansion are done. `vi search` exists over the text index (BM25 per kind, RRF, chapter grouping, thumbnails). Remaining: `Http` and `ObjectStore` acquirers, VAD, ASR, ShotBoundary, ImageEmbed, OCR, Lance vectors and vector search in the fusion, budgets.
 
+**Progress 2026-09-11 (GCP machine):** `vi-providers` skeleton: capability traits (`Vlm`, `Llm`, `Asr`, `Ocr`, `TextEmbedder`, `ImageEmbedder`, `Reranker`) with request/response types, `ProviderRegistry` binding `[roles]` to adapters, `Governor` (per-provider semaphore, request and token buckets), retries with exponential backoff and jitter honouring `Retry-After`, `CallStats` → `Provenance`, key redaction, and the `openai_compat` adapter's ASR method (verbose_json with word timings, tested against a fake server). A local Whisper server runs on the GPU (`scripts/asr_server.sh`).
+
 ## M2. Fine index, agent, Python
 
 - Scenes and chapters; VLM describe with frame grids and native video; entities and events; text embeddings.

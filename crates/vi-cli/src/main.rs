@@ -65,7 +65,7 @@ fn main() {
 }
 
 /// Stable exit codes: 1 generic, 2 usage/invalid, 3 not found, 4 media,
-/// 5 storage, 6 unsupported, 7 cancelled/timeout.
+/// 5 storage, 6 unsupported, 7 cancelled/timeout, 8 provider.
 fn exit_code(e: &anyhow::Error) -> i32 {
     if let Some(core) = e.downcast_ref::<vi_core::Error>() {
         return core_exit_code(core);
@@ -96,6 +96,7 @@ fn core_exit_code(e: &vi_core::Error) -> i32 {
         vi_core::Error::Storage(_) | vi_core::Error::SchemaTooNew { .. } => 5,
         vi_core::Error::Unsupported(_) => 6,
         vi_core::Error::Cancelled | vi_core::Error::Timeout(_) => 7,
+        vi_core::Error::Provider(_) => 8,
         _ => 1,
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "vi-providers"
-description = "VideoIndex model provider traits and adapters (VLM, ASR, OCR, embed, LLM)"
+description = "VideoIndex model provider traits and adapters (VLM, LLM, ASR, OCR, embeddings), rate limits, retries, cost accounting"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,21 @@ authors.workspace = true
 
 [dependencies]
 vi-core = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+blake3 = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
 
 [lints]
 workspace = true
