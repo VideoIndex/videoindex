@@ -1,6 +1,6 @@
 [package]
 name = "vi-index"
-description = "VideoIndex vi-index (in progress)"
+description = "VideoIndex storage: the Storage trait and the embedded SQLite + FTS5 + blob backend"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,19 @@ authors.workspace = true
 
 [dependencies]
 vi-core = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+blake3 = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
