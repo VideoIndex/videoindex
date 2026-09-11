@@ -375,10 +375,11 @@ fn strip_markup(line: &str) -> String {
         .to_string()
 }
 
-/// YouTube auto-captions arrive as rolling two-line cues where each cue
-/// repeats the previous line. Collapse a cue whose text is a suffix
-/// continuation of the previous one into the new material only, and drop
-/// exact repeats.
+/// YouTube auto-captions arrive as rolling two-line cues: `A`, `A B`, `B`,
+/// `B C`, `C`, ... where each cue repeats the previous line. Collapse a cue
+/// that extends the previous one into the new material only, treat a cue
+/// that is the tail of the previous one as a repeat (extend its end time),
+/// and drop exact repeats.
 fn dedup_rolling_captions(cues: Vec<Cue>) -> Vec<Cue> {
     let mut out: Vec<Cue> = Vec::with_capacity(cues.len());
     // Full text of the previous input cue (before trimming), for comparison.
@@ -387,6 +388,15 @@ fn dedup_rolling_captions(cues: Vec<Cue>) -> Vec<Cue> {
         if let (Some(full), Some(prev)) = (&prev_full, out.last_mut()) {
             if *full == cue.text {
                 prev.t1 = prev.t1.max(cue.t1);
+                continue;
+            }
+            // The cue is the second line of the previous two-line cue.
+            if full.len() > cue.text.len()
+                && full.ends_with(cue.text.as_str())
+                && full[..full.len() - cue.text.len()].ends_with(' ')
+            {
+                prev.t1 = prev.t1.max(cue.t1);
+                prev_full = Some(cue.text.clone());
                 continue;
             }
             if let Some(rest) = cue.text.strip_prefix(full.as_str()) {
@@ -460,6 +470,26 @@ mod tests {
         assert_eq!(cues[0].t0, Timestamp::new(1000, 1000));
         assert_eq!(cues[0].t1, Timestamp::new(3500, 1000));
         assert_eq!(cues[1].text, "Bye & thanks");
+    }
+
+    #[test]
+    fn collapses_youtube_srt_rolling_two_line_captions() {
+        let srt = "1\n00:00:14,719 --> 00:00:19,830\n\nleave armed and ready. So,\n\n2\n00:00:19,830 --> 00:00:19,840\nleave armed and ready. So,\n \n\n3\n00:00:19,840 --> 00:00:23,349\nleave armed and ready. So,\nstarting a company, raising VC,\n\n4\n00:00:23,349 --> 00:00:23,359\nstarting a company, raising VC,\n \n\n5\n00:00:23,359 --> 00:00:27,830\nstarting a company, raising VC,\nwhen do you raise VC?\n\n6\n00:00:27,830 --> 00:00:27,840\nwhen do you raise VC?\n \n";
+        let cues = parse_srt(srt);
+        let texts: Vec<&str> = cues.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "leave armed and ready. So,",
+                "starting a company, raising VC,",
+                "when do you raise VC?"
+            ],
+            "{cues:?}"
+        );
+        // The repeat cues extend the end time of the line they repeat.
+        assert!((cues[0].t1.as_secs_f64() - 19.84).abs() < 1e-6);
+        assert!((cues[1].t1.as_secs_f64() - 23.359).abs() < 1e-6);
+        assert!((cues[2].t1.as_secs_f64() - 27.84).abs() < 1e-6);
     }
 
     #[test]

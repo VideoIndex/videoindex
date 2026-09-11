@@ -24,6 +24,7 @@ allow = [
   "Zlib",
   "WTFPL",
   "Unicode-3.0",
+  "CDLA-Permissive-2.0", # webpki-roots: Mozilla's root certificate store, used by rustls
 ]
 confidence-threshold = 0.8
 

@@ -25,6 +25,8 @@ pub struct Config {
     pub media: MediaConfig,
     /// Index storage settings.
     pub index: IndexConfig,
+    /// Local model files and in-process inference settings.
+    pub models: ModelsConfig,
     /// Named indexing policies.
     pub policy: BTreeMap<String, IndexPolicy>,
     /// Policy used when none is requested.
@@ -52,6 +54,7 @@ impl Default for Config {
         Self {
             media: MediaConfig::default(),
             index: IndexConfig::default(),
+            models: ModelsConfig::default(),
             policy,
             default_policy: "coarse_local".to_string(),
             providers: BTreeMap::new(),
@@ -113,6 +116,109 @@ impl Default for WorkerConfig {
             decode_threads: 0,
         }
     }
+}
+
+/// Local model files and ONNX Runtime settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ModelsConfig {
+    /// Directory holding one subdirectory per model (`silero-vad/`,
+    /// `siglip-base-patch16-224/`, `rapidocr/`, ...).
+    pub dir: PathBuf,
+    /// `auto` (CUDA when the runtime and libraries are present, else CPU),
+    /// `cpu`, or `cuda`.
+    pub device: String,
+    /// Threads per ONNX Runtime session on the CPU. 0 means half the CPUs.
+    pub onnx_threads: usize,
+    /// Voice activity detection.
+    pub vad: VadConfig,
+    /// Speech recognition chunking.
+    pub asr: AsrConfig,
+}
+
+impl Default for ModelsConfig {
+    fn default() -> Self {
+        Self {
+            dir: default_models_dir(),
+            device: "auto".to_string(),
+            onnx_threads: 0,
+            vad: VadConfig::default(),
+            asr: AsrConfig::default(),
+        }
+    }
+}
+
+/// Silero VAD parameters (`docs/05-indexing-pipeline.md`, audio operators).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct VadConfig {
+    /// Speech probability at or above which a window starts speech.
+    pub threshold: f32,
+    /// Probability below which speech ends (hysteresis).
+    pub neg_threshold: f32,
+    /// Speech shorter than this is dropped, milliseconds.
+    pub min_speech_ms: u32,
+    /// Silence shorter than this joins its neighbours into one segment,
+    /// milliseconds.
+    pub min_silence_ms: u32,
+    /// Padding added on both sides of a segment, milliseconds.
+    pub pad_ms: u32,
+    /// Segments longer than this are split at their longest internal pause.
+    /// Long segments let a batched Whisper server fill its GPU batch; the
+    /// server cuts them into 30 s pieces at pauses itself.
+    pub max_segment_secs: f64,
+}
+
+impl Default for VadConfig {
+    fn default() -> Self {
+        Self {
+            threshold: 0.5,
+            neg_threshold: 0.35,
+            min_speech_ms: 250,
+            min_silence_ms: 1000,
+            pad_ms: 200,
+            max_segment_secs: 120.0,
+        }
+    }
+}
+
+/// ASR operator settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct AsrConfig {
+    /// Language hint passed to the provider; `None` lets it detect.
+    pub language: Option<String>,
+    /// Skip ASR when the video already has human-authored subtitles.
+    pub skip_if_human_subtitles: bool,
+    /// Target length of stored transcript spans, seconds (short ASR
+    /// segments are grouped up to this).
+    pub span_secs: f64,
+    /// Concurrent ASR requests per job.
+    pub concurrency: usize,
+}
+
+impl Default for AsrConfig {
+    fn default() -> Self {
+        Self {
+            language: None,
+            skip_if_human_subtitles: false,
+            span_secs: 15.0,
+            concurrency: 4,
+        }
+    }
+}
+
+fn default_models_dir() -> PathBuf {
+    if Path::new("/data/videoindex").is_dir() {
+        return PathBuf::from("/data/videoindex/models");
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home)
+            .join(".cache")
+            .join("videoindex")
+            .join("models");
+    }
+    std::env::temp_dir().join("videoindex").join("models")
 }
 
 /// Index storage settings.

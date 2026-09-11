@@ -198,6 +198,47 @@ async fn unknown_and_planned_operators_are_clear_errors() {
 }
 
 #[tokio::test]
+async fn provider_backed_operators_need_a_bound_role_at_plan_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let idx = Arc::new(EmbeddedIndex::create(&dir.path().join("t.vidx")).unwrap());
+    let mut c = Config::default();
+    c.media.worker.path = Some(fx::worker_path());
+    let pol = vi_core::config::IndexPolicy {
+        coarse: vec!["vad".into(), "asr".into()],
+        fine: vec![],
+        ..vi_core::config::IndexPolicy::m0()
+    };
+    c.policy.insert("speech".into(), pol);
+    let sched = Scheduler::new(idx.clone(), Arc::new(c.clone()), EventBus::default());
+    let err = sched.plan(Some("speech")).unwrap_err();
+    assert!(matches!(err, vi_core::Error::Provider(_)), "{err}");
+    assert!(err.to_string().contains("role 'asr'"), "{err}");
+    // Bound role: plans, and the DAG runs vad before asr.
+    let mut c2 = c.clone();
+    c2.providers.insert(
+        "w".into(),
+        vi_core::config::ProviderConfig {
+            adapter: "openai_compat".into(),
+            base_url: Some("http://127.0.0.1:9".into()),
+            ..Default::default()
+        },
+    );
+    c2.roles.insert(
+        "asr".into(),
+        vi_core::config::RoleBinding {
+            provider: "w".into(),
+            ..Default::default()
+        },
+    );
+    let sched = Scheduler::new(idx, Arc::new(c2), EventBus::default());
+    let (_, _, dag) = sched.plan(Some("speech")).unwrap();
+    assert_eq!(
+        dag.stage_names(),
+        vec!["vad".to_string(), "asr".to_string()]
+    );
+}
+
+#[tokio::test]
 async fn cancellation_stops_a_job_quickly() {
     let dir = tempfile::tempdir().unwrap();
     let idx = Arc::new(EmbeddedIndex::create(&dir.path().join("t.vidx")).unwrap());

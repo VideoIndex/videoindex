@@ -1,6 +1,6 @@
 [package]
 name = "vi-perceive"
-description = "VideoIndex in-process perception: perceptual hashing, thumbnails (shot detection, VAD, embeddings later)"
+description = "VideoIndex in-process perception: perceptual hashing, thumbnails, shot detection, Silero VAD, SigLIP and RapidOCR through ONNX Runtime"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,12 +8,20 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+# ONNX Runtime CUDA execution provider. Needs libcudart 12, cuBLAS and
+# cuDNN 9 on the loader path at run time.
+cuda = ["ort/cuda"]
+
 [dependencies]
 vi-core = { workspace = true }
 vi-media = { workspace = true }
 image = { workspace = true }
 webp = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
+ort = { workspace = true }
 
 [lints]
 workspace = true

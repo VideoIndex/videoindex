@@ -8,9 +8,10 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use vi_core::config::{Config, IndexPolicy, WorkerConfig};
 use vi_core::model::{FrameSample, Track, Video};
-use vi_core::{Error, Event, EventBus, JobId, Progress, Result, VideoId};
+use vi_core::{Error, Event, EventBus, JobId, Progress, Result, Timestamp, VideoId};
 use vi_index::{BlobKey, Storage};
 use vi_media::{Acquired, FrameBuffer, Probe};
+use vi_providers::ProviderRegistry;
 
 /// Kinds of items that flow between operators. An operator's `inputs` and
 /// `outputs` are sets of these; the DAG is derived from them.
@@ -77,6 +78,21 @@ impl MediaItem {
     }
 }
 
+/// A run of speech with its PCM, what the ASR operator transcribes.
+#[derive(Debug, Clone)]
+pub struct SpeechItem {
+    /// Start in the video.
+    pub t0: Timestamp,
+    /// End in the video.
+    pub t1: Timestamp,
+    /// 16 kHz mono samples covering `[t0, t1)`.
+    pub samples: Arc<[i16]>,
+    /// Sample rate.
+    pub sample_rate: u32,
+    /// Ordinal within the job, for logs and progress.
+    pub index: u64,
+}
+
 /// A decoded frame with its sample row.
 #[derive(Debug, Clone)]
 pub struct FrameItem {
@@ -111,6 +127,8 @@ pub enum Item {
     },
     /// A transcript span that has been persisted.
     TranscriptSpan(Arc<vi_core::model::TranscriptSpan>),
+    /// Speech audio for ASR.
+    SpeechRange(Arc<SpeechItem>),
 }
 
 impl Item {
@@ -122,6 +140,7 @@ impl Item {
             Item::Hashed { .. } => ItemKind::Hashed,
             Item::Thumbnail { .. } => ItemKind::Thumbnail,
             Item::TranscriptSpan(_) => ItemKind::TranscriptSpan,
+            Item::SpeechRange(_) => ItemKind::SpeechRange,
         }
     }
 }
@@ -209,6 +228,8 @@ pub struct OpContext {
     pub storage: Arc<dyn Storage>,
     /// Global config.
     pub config: Arc<Config>,
+    /// Model providers bound to roles.
+    pub providers: Arc<ProviderRegistry>,
     /// The active policy.
     pub policy: IndexPolicy,
     /// Decode worker settings.
@@ -303,6 +324,12 @@ pub trait Operator: Send + Sync {
     fn inputs(&self) -> &[InputKind];
     /// What it produces.
     fn outputs(&self) -> &[OutputKind];
+    /// Provider roles (`vi_core::config::roles`) that must be bound for the
+    /// operator to run; checked at plan time so a missing provider fails
+    /// before any decoding.
+    fn required_roles(&self) -> &[&'static str] {
+        &[]
+    }
     /// Cost estimate.
     fn cost_estimate(&self, input: &InputSummary) -> CostEstimate;
     /// Process one input item, emitting through `ctx`.

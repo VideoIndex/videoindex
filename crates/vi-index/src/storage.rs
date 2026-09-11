@@ -193,6 +193,9 @@ pub trait Storage: Send + Sync {
     ) -> Result<Vec<FrameSample>>;
     /// Insert or replace transcript and OCR spans.
     async fn put_spans(&self, s: &[Span]) -> Result<()>;
+    /// Remove the transcript spans of a track that a given operator produced
+    /// (so a re-run replaces its own output and leaves imported subtitles).
+    async fn delete_spans_by_operator(&self, track: TrackId, operator: &str) -> Result<u64>;
     /// Insert or replace descriptions.
     async fn put_descriptions(&self, d: &[Description]) -> Result<()>;
     /// Insert embedding metadata (and vectors, once a vector store exists).

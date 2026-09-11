@@ -73,6 +73,9 @@ impl Operator for SubtitleImport {
         }
         let mut emitted = 0u64;
         let mut stored = 0u64;
+        // yt-dlp often writes the same auto-captions twice (`en` and
+        // `en-orig`); one searchable copy is enough.
+        let mut seen: Vec<blake3::Hash> = Vec::new();
         for (i, file) in files.iter().enumerate() {
             ctx.check_cancelled()?;
             let cues = match sidecar::parse_file(file) {
@@ -82,6 +85,20 @@ impl Operator for SubtitleImport {
                     continue;
                 }
             };
+            let mut hasher = blake3::Hasher::new();
+            for c in &cues {
+                hasher.update(c.text.as_bytes());
+                hasher.update(b"\n");
+            }
+            let digest = hasher.finalize();
+            if seen.contains(&digest) {
+                tracing::info!(
+                    file = %file.path.display(),
+                    "skipping subtitle file identical to one already imported"
+                );
+                continue;
+            }
+            seen.push(digest);
             let grouped = sidecar::group_cues(&cues, GROUP_SECS, GAP_SECS);
             if grouped.is_empty() {
                 continue;

@@ -730,6 +730,19 @@ impl Storage for EmbeddedIndex {
         .await
     }
 
+    async fn delete_spans_by_operator(&self, track: TrackId, operator: &str) -> Result<u64> {
+        let operator = operator.to_string();
+        self.with_conn(move |c| {
+            let n = c.execute(
+                "DELETE FROM transcript_spans WHERE track_id = ?1
+                 AND provenance_id IN (SELECT id FROM provenance WHERE operator = ?2)",
+                params![track.to_string(), operator],
+            )?;
+            Ok(n as u64)
+        })
+        .await
+    }
+
     async fn put_descriptions(&self, d: &[Description]) -> Result<()> {
         let d = d.to_vec();
         self.with_conn(move |c| {

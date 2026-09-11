@@ -4,24 +4,33 @@ use vi_core::config::Config;
 
 use crate::operator::Operator;
 
+pub mod asr;
 pub mod phash;
 pub mod sample;
 pub mod subtitle_import;
 pub mod thumbnail;
+pub mod vad;
 
+pub use asr::Asr;
 pub use phash::PHash;
 pub use sample::Sample;
 pub use subtitle_import::SubtitleImport;
 pub use thumbnail::Thumbnail;
+pub use vad::Vad;
 
 /// Operators this build knows how to construct.
-pub const AVAILABLE: &[&str] = &["subtitle_import", "sample", "phash", "thumbnail"];
+pub const AVAILABLE: &[&str] = &[
+    "subtitle_import",
+    "sample",
+    "phash",
+    "thumbnail",
+    "vad",
+    "asr",
+];
 
 /// Operators named in the design but not yet implemented; listing them lets
 /// error messages distinguish "not yet" from "typo".
 pub const PLANNED: &[&str] = &[
-    "vad",
-    "asr",
     "shot_boundary",
     "image_embed",
     "ocr",
@@ -42,6 +51,8 @@ pub fn build(name: &str, config: &Config) -> Option<Box<dyn Operator>> {
             config.index.thumbnail_px,
             config.index.thumbnail_quality,
         ))),
+        "vad" => Some(Box::new(Vad::new())),
+        "asr" => Some(Box::new(Asr::new())),
         _ => None,
     }
 }

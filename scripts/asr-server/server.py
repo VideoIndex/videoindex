@@ -15,7 +15,7 @@ used to pick cut points in clips of 30 s or more).
 
 Environment: WHISPER_MODEL (default large-v3), WHISPER_DEVICE (cuda),
 WHISPER_COMPUTE (float16), WHISPER_DOWNLOAD_ROOT
-(/data/videoindex/models/whisper), WHISPER_BATCH (16), WHISPER_WORKERS (2).
+(/data/videoindex/models/whisper), WHISPER_BATCH (16), WHISPER_WORKERS (4).
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ DEVICE = os.environ.get("WHISPER_DEVICE", "cuda")
 COMPUTE = os.environ.get("WHISPER_COMPUTE", "float16")
 DOWNLOAD_ROOT = os.environ.get("WHISPER_DOWNLOAD_ROOT", "/data/videoindex/models/whisper")
 BATCH = int(os.environ.get("WHISPER_BATCH", "16"))
-WORKERS = int(os.environ.get("WHISPER_WORKERS", "2"))
+WORKERS = int(os.environ.get("WHISPER_WORKERS", "4"))
 
 app = FastAPI(title="videoindex-asr")
 _pool = ThreadPoolExecutor(max_workers=WORKERS)

@@ -13,6 +13,7 @@ vi-core = { workspace = true }
 vi-media = { workspace = true }
 vi-perceive = { workspace = true }
 vi-index = { workspace = true }
+vi-providers = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 async-trait = { workspace = true }
@@ -20,6 +21,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
+blake3 = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

@@ -1,0 +1,45 @@
+# VideoIndex configuration for the GCP A100 indexing machine (docs/MACHINE.md).
+# Use with `vi --config config/gcp-a100.toml ...` or `export VI_CONFIG=$PWD/config/gcp-a100.toml`.
+
+default_policy = "coarse_local"
+
+[media]
+cache_dir = "/data/videoindex/videos"
+
+[models]
+dir = "/data/videoindex/models"
+device = "auto"          # cuda when built with --features cuda and the CUDA libs exist, else cpu
+
+[models.asr]
+language = "en"
+skip_if_human_subtitles = false
+concurrency = 4
+
+# Local Whisper server: scripts/asr_server.sh start
+[providers.whisper_local]
+adapter = "openai_compat"
+base_url = "http://127.0.0.1:9000/v1"
+model = "large-v3"
+concurrency = 4
+timeout_secs = 600
+max_retries = 4
+
+# In-process ONNX models (SigLIP, RapidOCR, bge-small).
+[providers.local]
+adapter = "onnx_local"
+model_dir = "/data/videoindex/models"
+
+[roles]
+asr = { provider = "whisper_local" }
+ocr = { provider = "local" }
+image_embed = { provider = "local" }
+text_embed = { provider = "local" }
+
+# Coarse pass with speech recognition; the rest of lecture_default lands
+# operator by operator.
+[policy.coarse_asr]
+sample_fps = 1.0
+coarse = ["subtitle_import", "vad", "asr", "sample", "phash", "thumbnail"]
+fine = []
+max_cost_usd_per_hour = 0.0
+max_wallclock_per_hour = "20m"

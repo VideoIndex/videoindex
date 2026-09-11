@@ -47,7 +47,7 @@ Hardware decode is auto-detected: VideoToolbox, NVDEC, VAAPI, else software. Dec
 | `Asr` | provider (Whisper via OpenAI-compatible or local server, Gemini, Deepgram-style) | TranscriptSpans with word timings when the provider gives them |
 | `Diarize` | provider, optional | speaker labels on spans |
 
-Only speech ranges are sent to ASR. An hour of lecture with 40 minutes of speech costs 40 minutes of ASR.
+Only speech ranges are sent to ASR. An hour of lecture with 40 minutes of speech costs 40 minutes of ASR. `Vad` decodes the whole track, scores it in one batched pass, merges speech across pauses under `models.vad.min_silence_ms`, drops runs under `min_speech_ms`, pads by `pad_ms`, and splits runs longer than `max_segment_secs` at their quietest window. Each `SpeechRange` item carries its PCM so `Asr` never re-decodes. `Asr` sends `models.asr.concurrency` requests at a time through the `asr` role, splits the returned segments on word timings into spans of about `span_secs`, and writes one `Provenance` row per request.
 
 ### Video operators
 

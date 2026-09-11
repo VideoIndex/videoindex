@@ -19,6 +19,7 @@ use vi_core::SegmentId;
 use vi_core::{Error, Event, EventBus, JobId, Result, VideoId};
 use vi_index::Storage;
 use vi_media::{Acquired, Acquirer, LocalFile, Source, YtDlp};
+use vi_providers::ProviderRegistry;
 
 use crate::dag::Dag;
 use crate::operator::*;
@@ -62,6 +63,7 @@ pub struct Scheduler {
     storage: Arc<dyn Storage>,
     config: Arc<Config>,
     events: EventBus,
+    providers: Arc<ProviderRegistry>,
 }
 
 impl std::fmt::Debug for Scheduler {
@@ -73,11 +75,32 @@ impl std::fmt::Debug for Scheduler {
 impl Scheduler {
     /// A scheduler over a storage backend.
     pub fn new(storage: Arc<dyn Storage>, config: Arc<Config>, events: EventBus) -> Self {
+        let providers = Arc::new(ProviderRegistry::new(
+            config.clone(),
+            CancellationToken::new(),
+        ));
+        Self::with_providers(storage, config, events, providers)
+    }
+
+    /// A scheduler sharing an existing provider registry (one per process
+    /// keeps rate limits global).
+    pub fn with_providers(
+        storage: Arc<dyn Storage>,
+        config: Arc<Config>,
+        events: EventBus,
+        providers: Arc<ProviderRegistry>,
+    ) -> Self {
         Self {
             storage,
             config,
             events,
+            providers,
         }
+    }
+
+    /// The provider registry.
+    pub fn providers(&self) -> &Arc<ProviderRegistry> {
+        &self.providers
     }
 
     /// Event bus, for subscribers.
@@ -111,6 +134,16 @@ impl Scheduler {
         }
         if operators.is_empty() {
             return Err(Error::invalid(format!("policy '{name}' has no operators")));
+        }
+        for op in &operators {
+            for role in op.required_roles() {
+                if !self.providers.has_role(role) {
+                    return Err(Error::Provider(format!(
+                        "operator '{}' in policy '{name}' needs a provider for role '{role}'; add `[roles] {role} = {{ provider = \"...\" }}` to the config (see config/gcp-a100.toml)",
+                        op.id()
+                    )));
+                }
+            }
         }
         let dag = Dag::build(operators)?;
         Ok((name, policy, dag))
@@ -406,6 +439,7 @@ impl Scheduler {
                 stage: stage.clone(),
                 storage: self.storage.clone(),
                 config: self.config.clone(),
+                providers: self.providers.clone(),
                 policy: policy.clone(),
                 worker: self.config.media.worker.clone(),
                 emitter: emitters[i].clone(),

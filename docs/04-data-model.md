@@ -97,6 +97,7 @@ pub trait Storage: Send + Sync {
     async fn delete_frame_samples(&self, track: TrackId) -> Result<u64>;
     async fn frame_samples(&self, track: TrackId, range: Option<TimeRange>) -> Result<Vec<FrameSample>>;
     async fn put_spans(&self, s: &[Span]) -> Result<()>;               // transcript + ocr
+    async fn delete_spans_by_operator(&self, track: TrackId, operator: &str) -> Result<u64>; // re-runs replace their own output
     async fn put_descriptions(&self, d: &[Description]) -> Result<()>;
     async fn put_embeddings(&self, e: &[Embedding]) -> Result<()>;
     async fn put_provenance(&self, p: &Provenance) -> Result<ProvenanceId>;

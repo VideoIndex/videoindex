@@ -76,6 +76,19 @@ struct Report {
     hwaccel: Vec<String>,
     etc_videoindex_exists: bool,
     config_source: String,
+    onnx_runtime: String,
+    onnx_device: String,
+    models_dir: String,
+    models: Vec<ModelFile>,
+    roles: Vec<vi_providers::registry::RoleReport>,
+}
+
+#[derive(Debug, Serialize)]
+struct ModelFile {
+    name: String,
+    path: String,
+    present: bool,
+    bytes: u64,
 }
 
 pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
@@ -147,6 +160,47 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
     let incoming = Path::new("/data/videoindex/videos/incoming");
     let incoming_files = incoming.is_dir().then(|| count_videos(incoming, 0));
 
+    let onnx_device = match vi_perceive::onnx::resolve_device(&config.models.device) {
+        Ok(d) => format!(
+            "{} (config: {}{})",
+            d.as_str(),
+            config.models.device,
+            if cfg!(feature = "cuda") {
+                ", cuda feature on"
+            } else {
+                ", built without the cuda feature"
+            }
+        ),
+        Err(e) => format!("error: {e}"),
+    };
+    let models = [
+        ("silero-vad", "silero-vad/silero_vad.onnx"),
+        ("siglip vision", "siglip-base-patch16-224/vision_model.onnx"),
+        ("siglip text", "siglip-base-patch16-224/text_model.onnx"),
+        ("siglip tokenizer", "siglip-base-patch16-224/tokenizer.json"),
+        ("bge-small", "bge-small-en-v1.5/model.onnx"),
+        ("rapidocr det", "rapidocr/ch_PP-OCRv4_det_infer.onnx"),
+        ("rapidocr rec (en)", "rapidocr/en_PP-OCRv3_rec_infer.onnx"),
+        ("rapidocr dict (en)", "rapidocr/en_dict.txt"),
+    ]
+    .iter()
+    .map(|(name, rel)| {
+        let path = config.models.dir.join(rel);
+        let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        ModelFile {
+            name: name.to_string(),
+            path: path.display().to_string(),
+            present: path.is_file(),
+            bytes,
+        }
+    })
+    .collect();
+    let registry = vi_providers::ProviderRegistry::new(
+        std::sync::Arc::new(config.clone()),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let roles = registry.report();
+
     let report = Report {
         vi_version: env!("CARGO_PKG_VERSION").into(),
         os: format!(
@@ -180,6 +234,11 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
         hwaccel,
         etc_videoindex_exists: Path::new("/etc/videoindex").is_dir(),
         config_source: std::env::var("VI_CONFIG").unwrap_or_else(|_| "defaults + VI_* env".into()),
+        onnx_runtime: vi_perceive::onnx::runtime_version(),
+        onnx_device,
+        models_dir: config.models.dir.display().to_string(),
+        models,
+        roles,
     };
 
     out.emit(&report, || {
@@ -250,6 +309,31 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
             "ffmpeg hwaccel methods: {}\n",
             if report.hwaccel.is_empty() { "none".to_string() } else { report.hwaccel.join(" ") }
         ));
+        s.push_str(&format!("onnx runtime: {}; device {}\n", report.onnx_runtime, report.onnx_device));
+        s.push_str(&format!("models dir: {}\n", report.models_dir));
+        for m in &report.models {
+            if m.present {
+                s.push_str(&format!("  {:<20} {}\n", m.name, bytes(m.bytes)));
+            } else {
+                s.push_str(&format!("  {:<20} MISSING ({})\n", m.name, m.path));
+            }
+        }
+        if report.roles.is_empty() {
+            s.push_str("provider roles: none configured (add [providers] and [roles]; see config/gcp-a100.toml)\n");
+        } else {
+            s.push_str("provider roles:\n");
+            for r in &report.roles {
+                s.push_str(&format!(
+                    "  {:<13} {} ({}{}{}){}\n",
+                    r.role,
+                    r.provider,
+                    r.adapter,
+                    r.model.as_deref().map(|m| format!(", {m}")).unwrap_or_default(),
+                    r.base_url.as_deref().map(|u| format!(", {u}")).unwrap_or_default(),
+                    r.problem.as_deref().map(|p| format!("  PROBLEM: {p}")).unwrap_or_default()
+                ));
+            }
+        }
         s.push_str("youtube: yt-dlp is blocked from datacenter IPs; transfer videos with sidecars into the incoming dir (docs/11-deployment.md)");
         s.trim_end().to_string()
     });
