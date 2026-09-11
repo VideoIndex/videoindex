@@ -11,7 +11,7 @@ use vi_core::IndexId;
 use crate::error::{IndexError, Result};
 
 /// Current on-disk schema version.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// File name inside the index directory.
 pub const MANIFEST_FILE: &str = "manifest.json";

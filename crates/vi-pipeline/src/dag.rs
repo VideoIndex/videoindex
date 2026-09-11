@@ -62,6 +62,7 @@ impl Dag {
                 }
                 match producers.get(k) {
                     Some(p) if !p.is_empty() => deps[i].extend(p.iter().copied()),
+                    _ if op.optional_inputs().contains(k) => {}
                     _ => {
                         return Err(Error::invalid(format!(
                             "operator '{}' needs {:?} but nothing in the policy produces it",
@@ -73,6 +74,13 @@ impl Dag {
             }
             if is_root {
                 roots.push(i);
+            }
+            if !is_root && deps[i].is_empty() {
+                return Err(Error::invalid(format!(
+                    "operator '{}' has no producer for any of its inputs {:?} in this policy",
+                    op.id(),
+                    op.inputs()
+                )));
             }
             if op.inputs().is_empty() {
                 return Err(Error::invalid(format!(

@@ -66,13 +66,13 @@ impl Operator for PHash {
         let hash = cpu::run(move || vi_perceive::phash::phash_frame(&f))
             .await?
             .ok_or_else(|| ctx.err("frame is not RGB24"))?;
-        drop(frame);
         self.pending.lock().await.push((sample.id, hash));
         let stored = self.flush(ctx, false).await?;
         ctx.emit(Item::Hashed {
             sample: sample.id,
             phash: hash,
             t: sample.t,
+            frame,
         })
         .await?;
         Ok(OpOutput { emitted: 1, stored })

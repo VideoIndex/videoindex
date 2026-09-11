@@ -38,6 +38,8 @@ pub enum ItemKind {
     OcrSpan,
     /// Image embeddings.
     ImageEmbedding,
+    /// Text embeddings.
+    TextEmbedding,
 }
 
 /// Input kinds, same enum.
@@ -109,7 +111,8 @@ pub enum Item {
     Media(Arc<MediaItem>),
     /// A frame.
     Frame(FrameItem),
-    /// A hashed frame sample.
+    /// A hashed frame sample, still carrying its pixels so consumers that
+    /// need them (embeddings, OCR) can read the frame once and drop it.
     Hashed {
         /// Sample id.
         sample: vi_core::FrameSampleId,
@@ -117,6 +120,9 @@ pub enum Item {
         phash: u64,
         /// Time, for downstream grouping.
         t: vi_core::Timestamp,
+        /// Pixels; holding this keeps a decoder slot busy, so consumers
+        /// copy what they need and drop it promptly.
+        frame: Arc<FrameBuffer>,
     },
     /// A stored thumbnail.
     Thumbnail {
@@ -131,6 +137,8 @@ pub enum Item {
     SpeechRange(Arc<SpeechItem>),
     /// A shot segment that has been persisted.
     Shot(Arc<vi_core::model::Segment>),
+    /// An OCR span that has been persisted.
+    OcrSpan(Arc<vi_core::model::OcrSpan>),
 }
 
 impl Item {
@@ -144,6 +152,7 @@ impl Item {
             Item::TranscriptSpan(_) => ItemKind::TranscriptSpan,
             Item::SpeechRange(_) => ItemKind::SpeechRange,
             Item::Shot(_) => ItemKind::Shot,
+            Item::OcrSpan(_) => ItemKind::OcrSpan,
         }
     }
 }
@@ -327,6 +336,12 @@ pub trait Operator: Send + Sync {
     fn inputs(&self) -> &[InputKind];
     /// What it produces.
     fn outputs(&self) -> &[OutputKind];
+    /// Inputs the operator can use but does not need: the DAG builds when
+    /// nothing in the policy produces them (e.g. `text_embed` embeds OCR
+    /// spans when `ocr` runs and transcript spans otherwise).
+    fn optional_inputs(&self) -> &[InputKind] {
+        &[]
+    }
     /// Provider roles (`vi_core::config::roles`) that must be bound for the
     /// operator to run; checked at plan time so a missing provider fails
     /// before any decoding.

@@ -5,18 +5,22 @@ use vi_core::config::Config;
 use crate::operator::Operator;
 
 pub mod asr;
+pub mod image_embed;
 pub mod phash;
 pub mod sample;
 pub mod shot_boundary;
 pub mod subtitle_import;
+pub mod text_embed;
 pub mod thumbnail;
 pub mod vad;
 
 pub use asr::Asr;
+pub use image_embed::ImageEmbed;
 pub use phash::PHash;
 pub use sample::Sample;
 pub use shot_boundary::ShotBoundary;
 pub use subtitle_import::SubtitleImport;
+pub use text_embed::TextEmbed;
 pub use thumbnail::Thumbnail;
 pub use vad::Vad;
 
@@ -29,18 +33,18 @@ pub const AVAILABLE: &[&str] = &[
     "vad",
     "asr",
     "shot_boundary",
+    "image_embed",
+    "text_embed",
 ];
 
 /// Operators named in the design but not yet implemented; listing them lets
 /// error messages distinguish "not yet" from "typo".
 pub const PLANNED: &[&str] = &[
-    "image_embed",
     "ocr",
     "scenes",
     "chapters",
     "vlm_describe",
     "entities_events",
-    "text_embed",
 ];
 
 /// Construct an operator by policy name.
@@ -56,6 +60,8 @@ pub fn build(name: &str, config: &Config) -> Option<Box<dyn Operator>> {
         "vad" => Some(Box::new(Vad::new())),
         "asr" => Some(Box::new(Asr::new())),
         "shot_boundary" => Some(Box::new(ShotBoundary::new())),
+        "image_embed" => Some(Box::new(ImageEmbed::new())),
+        "text_embed" => Some(Box::new(TextEmbed::new())),
         _ => None,
     }
 }

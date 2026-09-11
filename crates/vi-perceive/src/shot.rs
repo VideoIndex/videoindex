@@ -37,6 +37,9 @@ pub struct FrameSignature {
     pub edge_h: usize,
     /// Number of edge pixels.
     pub edge_count: usize,
+    /// Grey image the edges were computed from (`edge_w * edge_h`), kept
+    /// for the pixel-change measure.
+    pub gray: Vec<f32>,
 }
 
 impl FrameSignature {
@@ -129,7 +132,25 @@ impl FrameSignature {
             edge_w,
             edge_h,
             edge_count,
+            gray,
         }
+    }
+
+    /// Fraction of the grey image whose brightness moved by at least
+    /// `threshold` (0-255). Thin text on a plain slide barely moves the
+    /// histogram, but its lines darken whole cells of the small grey image,
+    /// so this catches slide changes the histogram misses.
+    pub fn pixel_change(&self, other: &Self, threshold: f32) -> f32 {
+        if self.gray.len() != other.gray.len() || self.gray.is_empty() {
+            return 1.0;
+        }
+        let changed = self
+            .gray
+            .iter()
+            .zip(other.gray.iter())
+            .filter(|(a, b)| (*a - *b).abs() >= threshold)
+            .count();
+        changed as f32 / self.gray.len() as f32
     }
 
     /// Histogram distance in `[0, 1]`: one minus the histogram intersection.

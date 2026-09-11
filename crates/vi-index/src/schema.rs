@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Migration functions in order; index `i` brings the schema to version `i + 1`.
-pub const MIGRATIONS: &[fn(&Connection) -> Result<()>] = &[v1];
+pub const MIGRATIONS: &[fn(&Connection) -> Result<()>] = &[v1, v2];
 
 /// Schema version recorded in `schema_meta`.
 pub fn current_version(conn: &Connection) -> Result<u32> {
@@ -280,6 +280,18 @@ CREATE TABLE sessions (
   expires_at TEXT NOT NULL,
   state      TEXT NOT NULL
 );
+"#,
+    )?;
+    Ok(())
+}
+
+/// v2: embeddings know their row in the model's vector file.
+fn v2(c: &Connection) -> Result<()> {
+    c.execute_batch(
+        r#"
+ALTER TABLE embeddings ADD COLUMN row INTEGER;
+CREATE INDEX IF NOT EXISTS embeddings_target ON embeddings(target_kind, target_id);
+CREATE INDEX IF NOT EXISTS embeddings_model_row ON embeddings(model, row);
 "#,
     )?;
     Ok(())

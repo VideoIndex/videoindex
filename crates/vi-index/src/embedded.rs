@@ -28,7 +28,7 @@ pub struct EmbeddedIndex {
     dir: PathBuf,
     conn: Arc<Mutex<Connection>>,
     blobs: BlobStore,
-    vectors: VectorStore,
+    vectors: Arc<VectorStore>,
 }
 
 impl EmbeddedIndex {
@@ -87,7 +87,7 @@ impl EmbeddedIndex {
             dir: dir.to_path_buf(),
             conn: Arc::new(Mutex::new(conn)),
             blobs: BlobStore::new(dir.join("blobs")),
-            vectors: VectorStore::new(dir.join("vectors")),
+            vectors: Arc::new(VectorStore::new(dir.join("vectors"))),
         }
     }
 
@@ -172,6 +172,115 @@ fn dir_size(dir: &Path) -> Result<u64> {
         }
     }
     Ok(total)
+}
+
+/// Video that owns an embedding target.
+fn video_of_target(c: &Connection, kind: TargetKind, target_id: &str) -> Result<Option<VideoId>> {
+    let sql = match kind {
+        TargetKind::Segment => "SELECT video_id FROM segments WHERE id = ?1",
+        TargetKind::Frame => {
+            "SELECT tr.video_id FROM frame_samples f JOIN tracks tr ON tr.id = f.track_id WHERE f.id = ?1"
+        }
+        TargetKind::TranscriptSpan => {
+            "SELECT tr.video_id FROM transcript_spans s JOIN tracks tr ON tr.id = s.track_id WHERE s.id = ?1"
+        }
+        TargetKind::OcrSpan => {
+            "SELECT tr.video_id FROM ocr_spans o JOIN frame_samples f ON f.id = o.frame_sample_id JOIN tracks tr ON tr.id = f.track_id WHERE o.id = ?1"
+        }
+        TargetKind::Description => {
+            "SELECT COALESCE(
+                (SELECT video_id FROM segments WHERE id = d.target_id),
+                (SELECT tr.video_id FROM frame_samples f JOIN tracks tr ON tr.id = f.track_id WHERE f.id = d.target_id))
+             FROM descriptions d WHERE d.id = ?1"
+        }
+    };
+    let v: Option<Option<String>> = c.query_row(sql, [target_id], |r| r.get(0)).optional()?;
+    Ok(v.flatten().and_then(|s| VideoId::parse(&s).ok()))
+}
+
+/// Time range and text of an embedding target, as a search hit needs them.
+fn resolve_target(
+    c: &Connection,
+    kind: TargetKind,
+    target_id: &str,
+) -> Result<Option<(Kind, Timestamp, Timestamp, String)>> {
+    let row: Option<(i64, i64, i64, i64, String)> = match kind {
+        TargetKind::Frame => c
+            .query_row(
+                "SELECT t_num, t_den, t_num, t_den, '' FROM frame_samples WHERE id = ?1",
+                [target_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .optional()?,
+        TargetKind::TranscriptSpan => c
+            .query_row(
+                "SELECT t0_num, t0_den, t1_num, t1_den, text FROM transcript_spans WHERE id = ?1",
+                [target_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .optional()?,
+        TargetKind::OcrSpan => c
+            .query_row(
+                "SELECT t_num, t_den, t_num, t_den, text FROM ocr_spans WHERE id = ?1",
+                [target_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .optional()?,
+        TargetKind::Segment => c
+            .query_row(
+                "SELECT t0_num, t0_den, t1_num, t1_den, COALESCE(summary, title, '') FROM segments WHERE id = ?1",
+                [target_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .optional()?,
+        TargetKind::Description => c
+            .query_row(
+                "SELECT COALESCE(seg.t0_num, f.t_num), COALESCE(seg.t0_den, f.t_den), COALESCE(seg.t1_num, f.t_num), COALESCE(seg.t1_den, f.t_den), d.text
+                 FROM descriptions d
+                 LEFT JOIN segments seg ON seg.id = d.target_id AND d.target_kind = 'segment'
+                 LEFT JOIN frame_samples f ON f.id = d.target_id AND d.target_kind = 'frame'
+                 WHERE d.id = ?1",
+                [target_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .optional()?,
+    };
+    let hit_kind = match kind {
+        TargetKind::Frame => Kind::Frame,
+        TargetKind::TranscriptSpan => Kind::Transcript,
+        TargetKind::OcrSpan => Kind::Ocr,
+        TargetKind::Segment => Kind::Segment,
+        TargetKind::Description => Kind::Description,
+    };
+    Ok(row.map(|(a, b, c2, d, text)| (hit_kind, ts(a, b), ts(c2, d), text)))
+}
+
+/// Tombstone and delete the embeddings of targets matched by `where_sql`.
+fn drop_embeddings_for(
+    c: &Connection,
+    vectors: &VectorStore,
+    where_sql: &str,
+    params: &[&dyn rusqlite::ToSql],
+) -> Result<u64> {
+    let mut st = c.prepare(&format!(
+        "SELECT id, model, row FROM embeddings WHERE {where_sql}"
+    ))?;
+    let rows: Vec<(String, String, Option<i64>)> = st
+        .query_map(params, |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+    drop(st);
+    let mut by_model: std::collections::BTreeMap<String, Vec<u64>> =
+        std::collections::BTreeMap::new();
+    for (_, model, row) in &rows {
+        if let Some(r) = row {
+            by_model.entry(model.clone()).or_default().push(*r as u64);
+        }
+    }
+    for (model, r) in by_model {
+        vectors.tombstone(&model, &r)?;
+    }
+    c.execute(&format!("DELETE FROM embeddings WHERE {where_sql}"), params)?;
+    Ok(rows.len() as u64)
 }
 
 // ---------------------------------------------------------------- rows ---
@@ -643,11 +752,20 @@ impl Storage for EmbeddedIndex {
     }
 
     async fn delete_frame_samples(&self, track: TrackId) -> Result<u64> {
+        let vectors = self.vectors.clone();
         self.with_conn(move |c| {
-            let n = c.execute(
+            let tx = c.unchecked_transaction()?;
+            drop_embeddings_for(
+                &tx,
+                &vectors,
+                "target_kind = 'frame' AND target_id IN (SELECT id FROM frame_samples WHERE track_id = ?1)",
+                &[&track.to_string()],
+            )?;
+            let n = tx.execute(
                 "DELETE FROM frame_samples WHERE track_id = ?1",
                 [track.to_string()],
             )?;
+            tx.commit()?;
             Ok(n as u64)
         })
         .await
@@ -732,12 +850,21 @@ impl Storage for EmbeddedIndex {
 
     async fn delete_spans_by_operator(&self, track: TrackId, operator: &str) -> Result<u64> {
         let operator = operator.to_string();
+        let vectors = self.vectors.clone();
         self.with_conn(move |c| {
-            let n = c.execute(
+            let tx = c.unchecked_transaction()?;
+            drop_embeddings_for(
+                &tx,
+                &vectors,
+                "target_kind = 'transcript_span' AND target_id IN (SELECT id FROM transcript_spans WHERE track_id = ?1 AND provenance_id IN (SELECT id FROM provenance WHERE operator = ?2))",
+                &[&track.to_string(), &operator],
+            )?;
+            let n = tx.execute(
                 "DELETE FROM transcript_spans WHERE track_id = ?1
                  AND provenance_id IN (SELECT id FROM provenance WHERE operator = ?2)",
                 params![track.to_string(), operator],
             )?;
+            tx.commit()?;
             Ok(n as u64)
         })
         .await
@@ -771,19 +898,65 @@ impl Storage for EmbeddedIndex {
     }
 
     async fn put_embeddings(&self, e: &[Embedding]) -> Result<()> {
+        if e.is_empty() {
+            return Ok(());
+        }
         let e = e.to_vec();
-        debug!(
-            "vector store is a stub; storing metadata for {} embeddings only",
-            e.len()
-        );
+        let vectors = self.vectors.clone();
         self.with_conn(move |c| {
             let tx = c.unchecked_transaction()?;
-            {
-                let mut st = tx.prepare_cached(
-                    "INSERT OR REPLACE INTO embeddings(id, target_kind, target_id, model, dim, provenance_id)
-                     VALUES (?1,?2,?3,?4,?5,?6)",
-                )?;
-                for emb in &e {
+            // Resolve each target's video so the vector file can filter
+            // by video without SQLite.
+            let mut by_model: std::collections::BTreeMap<(String, u32), Vec<usize>> =
+                std::collections::BTreeMap::new();
+            let mut videos: Vec<Option<VideoId>> = Vec::with_capacity(e.len());
+            for (i, emb) in e.iter().enumerate() {
+                if emb.vector.len() != emb.dim as usize {
+                    return Err(IndexError::Invalid(format!(
+                        "embedding {} has {} values but dim {}",
+                        emb.id,
+                        emb.vector.len(),
+                        emb.dim
+                    )));
+                }
+                let vid = video_of_target(&tx, emb.target_kind, &emb.target_id)?;
+                videos.push(vid);
+                // Replace an earlier vector for the same (target, model).
+                let old: Option<(String, Option<i64>)> = tx
+                    .query_row(
+                        "SELECT id, row FROM embeddings WHERE target_kind = ?1 AND target_id = ?2 AND model = ?3",
+                        params![emb.target_kind.as_str(), emb.target_id, emb.model],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()?;
+                if let Some((old_id, Some(row))) = old {
+                    if old_id != emb.id.to_string() {
+                        vectors.tombstone(&emb.model, &[row as u64])?;
+                        tx.execute("DELETE FROM embeddings WHERE id = ?1", [old_id])?;
+                    }
+                }
+                by_model.entry((emb.model.clone(), emb.dim)).or_default().push(i);
+            }
+            let mut st = tx.prepare_cached(
+                "INSERT OR REPLACE INTO embeddings(id, target_kind, target_id, model, dim, provenance_id, row)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            )?;
+            for ((model, dim), idxs) in by_model {
+                let rows: Vec<(EmbeddingId, VideoId, TargetKind, &[f32])> = idxs
+                    .iter()
+                    .map(|i| {
+                        let emb = &e[*i];
+                        (
+                            emb.id,
+                            videos[*i].unwrap_or(VideoId::nil()),
+                            emb.target_kind,
+                            emb.vector.as_slice(),
+                        )
+                    })
+                    .collect();
+                let positions = vectors.append(&model, dim, &rows)?;
+                for (i, row) in idxs.iter().zip(positions) {
+                    let emb = &e[*i];
                     st.execute(params![
                         emb.id.to_string(),
                         emb.target_kind.as_str(),
@@ -791,9 +964,11 @@ impl Storage for EmbeddedIndex {
                         emb.model,
                         emb.dim,
                         emb.provenance_id.to_string(),
+                        row as i64,
                     ])?;
                 }
             }
+            drop(st);
             tx.commit()?;
             Ok(())
         })
@@ -905,9 +1080,53 @@ impl Storage for EmbeddedIndex {
         .await
     }
 
-    async fn vector_search(&self, _q: &VectorQuery) -> Result<Vec<Hit>> {
-        // M0 stub: no vectors are stored.
-        Ok(Vec::new())
+    async fn vector_search(&self, q: &VectorQuery) -> Result<Vec<Hit>> {
+        let q = q.clone();
+        let vectors = self.vectors.clone();
+        // Over-fetch so hits whose targets vanished can be dropped.
+        let raw = tokio::task::spawn_blocking(move || {
+            vectors.search(&q.model, &q.vector, &q.videos, &q.kinds, q.k.max(1) * 2)
+        })
+        .await??;
+        if raw.is_empty() {
+            return Ok(Vec::new());
+        }
+        let k = q.k.max(1);
+        self.with_conn(move |c| {
+            let mut hits = Vec::with_capacity(raw.len());
+            for h in raw {
+                let target: Option<(String, String)> = c
+                    .query_row(
+                        "SELECT target_kind, target_id FROM embeddings WHERE id = ?1",
+                        [h.embedding.to_string()],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()?;
+                let Some((kind_s, target_id)) = target else {
+                    continue;
+                };
+                let Some(kind) = TargetKind::parse(&kind_s) else {
+                    continue;
+                };
+                let Some((hit_kind, t0, t1, text)) = resolve_target(c, kind, &target_id)? else {
+                    continue;
+                };
+                hits.push(Hit {
+                    kind: hit_kind,
+                    id: target_id,
+                    video_id: h.video,
+                    t0,
+                    t1,
+                    text,
+                    score: f64::from(h.score),
+                });
+                if hits.len() >= k {
+                    break;
+                }
+            }
+            Ok(hits)
+        })
+        .await
     }
 
     async fn time_window(
@@ -1105,6 +1324,24 @@ impl Storage for EmbeddedIndex {
     }
 
     async fn compact(&self) -> Result<()> {
+        // Rewrite vector files without dead rows and record the new rows.
+        let vectors = self.vectors.clone();
+        self.with_conn(move |c| {
+            for model in vectors.models()? {
+                let map = vectors.compact_model(&model)?;
+                let tx = c.unchecked_transaction()?;
+                {
+                    let mut st =
+                        tx.prepare_cached("UPDATE embeddings SET row = ?1 WHERE id = ?2")?;
+                    for (id, row) in &map {
+                        st.execute(params![*row as i64, id.to_string()])?;
+                    }
+                }
+                tx.commit()?;
+            }
+            Ok(())
+        })
+        .await?;
         self.with_conn(|c| {
             c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
             Ok(())
@@ -1438,18 +1675,31 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(w.segments, vec![seg]);
-        assert_eq!(w.descriptions, vec![desc]);
+        assert_eq!(w.segments, vec![seg.clone()]);
+        assert_eq!(w.descriptions, vec![desc.clone()]);
 
-        idx.put_embeddings(&[Embedding {
-            id: EmbeddingId::new(),
-            target_kind: TargetKind::Description,
-            target_id: "x".into(),
-            model: "bge-small".into(),
-            dim: 3,
-            vector: vec![0.1, 0.2, 0.3],
-            provenance_id: prov.id,
-        }])
+        // Vectors: a description and the segment itself, in one model.
+        let e_desc = EmbeddingId::new();
+        idx.put_embeddings(&[
+            Embedding {
+                id: e_desc,
+                target_kind: TargetKind::Description,
+                target_id: desc.id.to_string(),
+                model: "bge-small".into(),
+                dim: 3,
+                vector: vec![0.1, 0.2, 0.3],
+                provenance_id: prov.id,
+            },
+            Embedding {
+                id: EmbeddingId::new(),
+                target_kind: TargetKind::Segment,
+                target_id: seg.id.to_string(),
+                model: "bge-small".into(),
+                dim: 3,
+                vector: vec![1.0, 0.0, 0.0],
+                provenance_id: prov.id,
+            },
+        ])
         .await
         .unwrap();
         let hits = idx
@@ -1462,7 +1712,145 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(hits.is_empty(), "vector store is a stub in M0");
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        assert_eq!(hits[0].kind, Kind::Description);
+        assert_eq!(hits[0].id, desc.id.to_string());
+        assert_eq!(hits[0].video_id, v.id);
+        assert_eq!(hits[0].t0, seg.t0);
+        assert_eq!(hits[0].text, desc.text);
+        assert!((hits[0].score - 1.0).abs() < 1e-5);
+        assert_eq!(hits[1].kind, Kind::Segment);
+        // Filters by video and kind.
+        let none = idx
+            .vector_search(&VectorQuery {
+                model: "bge-small".into(),
+                vector: vec![0.1, 0.2, 0.3],
+                videos: vec![VideoId::new()],
+                kinds: vec![],
+                k: 5,
+            })
+            .await
+            .unwrap();
+        assert!(none.is_empty());
+        let segs_only = idx
+            .vector_search(&VectorQuery {
+                model: "bge-small".into(),
+                vector: vec![0.1, 0.2, 0.3],
+                videos: vec![v.id],
+                kinds: vec![TargetKind::Segment],
+                k: 5,
+            })
+            .await
+            .unwrap();
+        assert_eq!(segs_only.len(), 1);
+        assert_eq!(segs_only[0].kind, Kind::Segment);
+        // Re-embedding the same target with the same model replaces the row.
+        idx.put_embeddings(&[Embedding {
+            id: EmbeddingId::new(),
+            target_kind: TargetKind::Description,
+            target_id: desc.id.to_string(),
+            model: "bge-small".into(),
+            dim: 3,
+            vector: vec![0.0, 0.0, 1.0],
+            provenance_id: prov.id,
+        }])
+        .await
+        .unwrap();
+        let hits = idx
+            .vector_search(&VectorQuery {
+                model: "bge-small".into(),
+                vector: vec![0.0, 0.0, 1.0],
+                videos: vec![],
+                kinds: vec![TargetKind::Description],
+                k: 5,
+            })
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!((hits[0].score - 1.0).abs() < 1e-5);
+        assert_eq!(
+            idx.vectors().count("bge-small").unwrap(),
+            3,
+            "old row tombstoned, not removed"
+        );
+        idx.compact().await.unwrap();
+        assert_eq!(idx.vectors().count("bge-small").unwrap(), 2);
+        let hits = idx
+            .vector_search(&VectorQuery {
+                model: "bge-small".into(),
+                vector: vec![0.0, 0.0, 1.0],
+                videos: vec![],
+                kinds: vec![],
+                k: 5,
+            })
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 2, "rows still resolve after compaction");
+        assert_eq!(hits[0].kind, Kind::Description);
+    }
+
+    #[tokio::test]
+    async fn frame_embeddings_die_with_their_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        let idx = EmbeddedIndex::create(&dir.path().join("x.vidx")).unwrap();
+        let v = video("h1");
+        idx.put_video(&v).await.unwrap();
+        let t = track(v.id);
+        idx.put_tracks(std::slice::from_ref(&t)).await.unwrap();
+        let prov = Provenance::local("image_embed", 1, serde_json::json!({}));
+        idx.put_provenance(&prov).await.unwrap();
+        let samples: Vec<FrameSample> = (0..3)
+            .map(|i| FrameSample {
+                id: FrameSampleId::new(),
+                track_id: t.id,
+                t: Timestamp::from_secs(i),
+                pts: i * 1000,
+                is_keyframe: true,
+                phash: None,
+                thumbnail_blob: None,
+                width: 640,
+                height: 360,
+            })
+            .collect();
+        idx.put_frame_samples(&samples).await.unwrap();
+        let embs: Vec<Embedding> = samples
+            .iter()
+            .enumerate()
+            .map(|(i, s)| Embedding {
+                id: EmbeddingId::new(),
+                target_kind: TargetKind::Frame,
+                target_id: s.id.to_string(),
+                model: "siglip".into(),
+                dim: 2,
+                vector: if i == 1 {
+                    vec![0.0, 1.0]
+                } else {
+                    vec![1.0, 0.0]
+                },
+                provenance_id: prov.id,
+            })
+            .collect();
+        idx.put_embeddings(&embs).await.unwrap();
+        let q = VectorQuery {
+            model: "siglip".into(),
+            vector: vec![0.0, 1.0],
+            videos: vec![v.id],
+            kinds: vec![TargetKind::Frame],
+            k: 3,
+        };
+        let hits = idx.vector_search(&q).await.unwrap();
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0].id, samples[1].id.to_string());
+        assert_eq!(hits[0].kind, Kind::Frame);
+        assert_eq!(hits[0].t0, Timestamp::from_secs(1));
+        // Re-sampling removes the samples and their vectors.
+        assert_eq!(idx.delete_frame_samples(t.id).await.unwrap(), 3);
+        assert!(idx.vector_search(&q).await.unwrap().is_empty());
+        let n: i64 = idx
+            .with_conn(|c| Ok(c.query_row("SELECT COUNT(*) FROM embeddings", [], |r| r.get(0))?))
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
     }
 
     #[tokio::test]

@@ -79,6 +79,7 @@ impl Scheduler {
             config.clone(),
             CancellationToken::new(),
         ));
+        vi_perceive::OnnxLocal::register(&providers);
         Self::with_providers(storage, config, events, providers)
     }
 

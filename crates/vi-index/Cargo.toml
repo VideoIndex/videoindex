@@ -20,6 +20,9 @@ bytes = { workspace = true }
 blake3 = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
+memmap2 = { workspace = true }
+rayon = { workspace = true }
+ulid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

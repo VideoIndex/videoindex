@@ -123,7 +123,7 @@ Implementations:
 
 | Backend | Metadata + FTS | Vectors | Blobs | Use |
 |---|---|---|---|---|
-| **Embedded** (default) | SQLite + FTS5 | Lance (default) or usearch index files | Files under `blobs/` | Local SDK, CLI, single-node server |
+| **Embedded** (default) | SQLite + FTS5 | Flat memory-mapped files per model (exact search); Lance or usearch later for approximate search | Files under `blobs/` | Local SDK, CLI, single-node server |
 | **Postgres** | Postgres + tsvector | pgvector | S3/GCS/R2 | Hosted, multi-tenant |
 | **Qdrant** | Postgres or SQLite | Qdrant | S3/GCS/R2 | Hosted at larger scale |
 
@@ -138,7 +138,8 @@ myindex.vidx/
   manifest.json           schema_version, created_by, index ids, content hashes, optional signature
   meta.sqlite             all tables above, FTS5 virtual tables for spans and descriptions
   vectors/
-    <model-name>.lance    one Lance dataset per embedding model (M0: directory exists, nothing stored)
+    <model-name>.vec      normalised f32 rows, append-only, memory-mapped for exact search
+    <model-name>.meta     per row: embedding id, video id, target kind, alive flag
   blobs/
     ab/cd/abcdef...       content-addressed: thumbnails (WebP), audio chunks (Opus), frame grids
   cache/
@@ -156,7 +157,7 @@ Properties:
 ## Full-text and vector search details
 
 - FTS5 with the `unicode61` tokenizer and prefix indexes for spans and descriptions. BM25 ranking. Tantivy is an alternative if FTS5 ranking quality proves limiting; the trait hides the choice.
-- Lance holds vectors with an IVF-PQ index built once the table exceeds a threshold; below that, flat search. Lance also stores the vector's target id so a hit can be joined back without a second lookup.
+- Vectors live in flat per-model files searched exactly (brute force, parallel); the `embeddings` table maps each row back to its target and the `.meta` file carries the video id and target kind so filters apply before scoring. An approximate index (Lance IVF-PQ or usearch HNSW) can replace the file behind the trait when tables grow past a few million rows.
 - Temporal fusion, described in [06-query-and-agents](06-query-and-agents.md), happens above the storage layer.
 
 ## Schema versioning

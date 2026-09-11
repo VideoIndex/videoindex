@@ -47,6 +47,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 
 # compute
 rayon = "1.12"
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "download-binaries", "tls-rustls", "copy-dylibs", "api-27"] }
 image = { version = "0.25", default-features = false }
 webp = "0.3"
