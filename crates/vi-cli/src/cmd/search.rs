@@ -22,9 +22,12 @@ pub struct Args {
     /// Restrict to a video id (repeatable).
     #[arg(long = "video")]
     pub videos: Vec<VideoId>,
-    /// Restrict to evidence kinds: transcript, ocr, description (repeatable).
+    /// Restrict to evidence kinds: transcript, ocr, description, frame (repeatable).
     #[arg(long = "kind", value_parser = parse_kind)]
     pub kinds: Vec<Kind>,
+    /// BM25 only: skip the text-vector and image-vector lists.
+    #[arg(long)]
+    pub text_only: bool,
 }
 
 fn parse_kind(s: &str) -> std::result::Result<Kind, String> {
@@ -32,22 +35,31 @@ fn parse_kind(s: &str) -> std::result::Result<Kind, String> {
         "transcript" => Ok(Kind::Transcript),
         "ocr" => Ok(Kind::Ocr),
         "description" => Ok(Kind::Description),
+        "frame" => Ok(Kind::Frame),
         other => Err(format!(
-            "unknown kind '{other}'; expected transcript, ocr, or description"
+            "unknown kind '{other}'; expected transcript, ocr, description, or frame"
         )),
     }
 }
 
-pub async fn run(args: Args, _config: &Config, out: &Output) -> Result<()> {
+pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
     let idx = EmbeddedIndex::open(&args.index_dir)
         .with_context(|| format!("opening index at {}", args.index_dir.display()))?;
+    let providers = vi_providers::ProviderRegistry::new(
+        std::sync::Arc::new(config.clone()),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    vi_perceive::OnnxLocal::register(&providers);
     let req = SearchRequest {
         query: args.query.clone(),
         videos: args.videos.clone(),
         kinds: args.kinds.clone(),
         k: args.k,
+        text_only: args.text_only,
     };
-    let resp = search(&idx, &req).await?;
+    let started = std::time::Instant::now();
+    let resp = search(&idx, Some(&providers), &req).await?;
+    let elapsed_ms = started.elapsed().as_millis();
     out.emit(&resp, || {
         if resp.hits.is_empty() {
             return format!("no results for \"{}\"", args.query);
@@ -75,9 +87,14 @@ pub async fn run(args: Args, _config: &Config, out: &Output) -> Result<()> {
                     ""
                 };
                 s.push_str(&format!(
-                    "    {:<10} [{}] {text}{ellipsis}\n",
+                    "    {:<10} [{}] {}{text}{ellipsis}\n",
                     format!("{:?}", e.kind).to_lowercase(),
-                    e.t0
+                    e.t0,
+                    if e.sources.len() > 1 || e.kind == Kind::Frame {
+                        format!("({}) ", e.sources.join("+"))
+                    } else {
+                        String::new()
+                    }
                 ));
             }
             if let Some(t) = &h.thumbnail {
@@ -85,9 +102,11 @@ pub async fn run(args: Args, _config: &Config, out: &Output) -> Result<()> {
             }
         }
         s.push_str(&format!(
-            "{} result(s) from {} candidate(s); index state {}",
+            "{} result(s) from {} candidate(s) in {elapsed_ms} ms; lists {}; grouped by {}; index state {}",
             resp.hits.len(),
             resp.candidates,
+            if resp.lists.is_empty() { "none".to_string() } else { resp.lists.join(", ") },
+            if resp.grouping.is_empty() { "-" } else { &resp.grouping },
             resp.index_state
                 .map(|st| st.as_str().to_string())
                 .unwrap_or_else(|| "unknown".into())

@@ -242,8 +242,13 @@ pub trait TextEmbedder: Send + Sync {
     fn dim(&self) -> u32;
     /// Largest batch the adapter accepts.
     fn max_batch(&self) -> usize;
-    /// Embed texts.
+    /// Embed passages.
     async fn embed(&self, texts: &[String]) -> Result<EmbedResponse>;
+    /// Embed a search query. Models with an asymmetric query prefix (bge)
+    /// override this; the default embeds the text as a passage.
+    async fn embed_query(&self, query: &str) -> Result<EmbedResponse> {
+        self.embed(&[query.to_string()]).await
+    }
 }
 
 /// Image and text into a shared space.

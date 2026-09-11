@@ -143,7 +143,7 @@ async fn fuses_kinds_and_groups_by_chapter() {
     let idx = EmbeddedIndex::create(&dir.path().join("q.vidx")).unwrap();
     let (vid, _) = seed(&idx).await;
 
-    let r = search(&idx, &SearchRequest::new("hybrid retrieval", 10))
+    let r = search(&idx, None, &SearchRequest::new("hybrid retrieval", 10))
         .await
         .unwrap();
     assert_eq!(r.index_state, Some(IndexState::Coarse));
@@ -163,6 +163,7 @@ async fn fuses_kinds_and_groups_by_chapter() {
 
     let only_first = search(
         &idx,
+        None,
         &SearchRequest {
             kinds: vec![Kind::Transcript],
             ..SearchRequest::new("lunch atrium", 10)
@@ -176,14 +177,19 @@ async fn fuses_kinds_and_groups_by_chapter() {
         Timestamp::from_secs(1900)
     );
 
-    let none = search(&idx, &SearchRequest::new("quantum chromodynamics", 10))
-        .await
-        .unwrap();
+    let none = search(
+        &idx,
+        None,
+        &SearchRequest::new("quantum chromodynamics", 10),
+    )
+    .await
+    .unwrap();
     assert!(none.hits.is_empty());
     assert_eq!(none.candidates, 0);
 
     let other_video = search(
         &idx,
+        None,
         &SearchRequest {
             videos: vec![VideoId::new()],
             ..SearchRequest::new("retrieval", 10)
@@ -202,11 +208,18 @@ async fn falls_back_to_windows_without_chapters() {
     idx.delete_segments(vid, SegmentLevel::Chapter)
         .await
         .unwrap();
-    let r = search(&idx, &SearchRequest::new("retriev", 10))
+    let r = search(&idx, None, &SearchRequest::new("retriev", 10))
         .await
         .unwrap();
     assert!(r.hits.len() >= 2);
     assert!(r.hits.iter().all(|h| h.segment_id.is_none()));
     // The hit at 1840 s sits in the 60 s window starting at 1800.
-    assert!(r.hits.iter().any(|h| h.t0 == Timestamp::from_secs(1840)));
+    assert!(
+        r.hits
+            .iter()
+            .any(|h| h.t0 == Timestamp::from_secs(1800) && h.t1 == Timestamp::from_secs(1860)),
+        "{:?}",
+        r.hits.iter().map(|h| (h.t0, h.t1)).collect::<Vec<_>>()
+    );
+    assert_eq!(r.grouping, "window");
 }

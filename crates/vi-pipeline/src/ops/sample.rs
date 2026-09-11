@@ -9,9 +9,6 @@ use vi_media::VideoDecodeRequest;
 
 use crate::operator::*;
 
-/// Rows buffered before a storage write.
-const BATCH: usize = 64;
-
 /// Frame sampler.
 #[derive(Debug, Default)]
 pub struct Sample;
@@ -70,7 +67,6 @@ impl Operator for Sample {
             ..VideoDecodeRequest::new(&media.acquired.path, fps, ctx.config.media.sample_max_dim)
         };
         let mut stream = vi_media::decode_video(&ctx.worker, req).await?;
-        let mut batch: Vec<FrameSample> = Vec::with_capacity(BATCH);
         let mut emitted = 0u64;
         let mut stored = 0u64;
         loop {
@@ -89,21 +85,19 @@ impl Operator for Sample {
                 width: frame.source_width,
                 height: frame.source_height,
             };
-            batch.push(sample.clone());
-            if batch.len() >= BATCH {
-                ctx.storage.put_frame_samples(&batch).await?;
-                stored += batch.len() as u64;
-                batch.clear();
-            }
+            // The row must exist before consumers see the frame: embeddings
+            // and OCR spans reference it, and batching rows here would
+            // either hold decoder slots or race those writes. One insert per
+            // sampled frame is a few thousand per hour of video.
+            ctx.storage
+                .put_frame_samples(std::slice::from_ref(&sample))
+                .await?;
+            stored += 1;
             ctx.emit(Item::Frame(FrameItem { sample, frame })).await?;
             emitted += 1;
             if emitted % 32 == 0 {
                 ctx.progress(emitted);
             }
-        }
-        if !batch.is_empty() {
-            ctx.storage.put_frame_samples(&batch).await?;
-            stored += batch.len() as u64;
         }
         ctx.progress(emitted);
         let _ = Arc::strong_count(&media);

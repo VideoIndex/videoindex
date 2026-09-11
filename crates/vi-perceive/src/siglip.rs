@@ -6,6 +6,7 @@
 //! `preprocessor_config.json` (optional; 224 px and mean/std 0.5 assumed).
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use tokenizers::Tokenizer;
 
@@ -121,14 +122,17 @@ pub fn normalize(v: &mut [f32]) {
     }
 }
 
-/// The two towers.
+/// The two towers. Each loads on first use: a query needs only the text
+/// tower (441 MB), indexing only the vision tower (372 MB).
 pub struct Siglip {
-    vision: OnnxSession,
-    text: OnnxSession,
+    vision: OnceLock<OnnxSession>,
+    text: OnceLock<OnnxSession>,
     tokenizer: Tokenizer,
     pre: Preprocess,
     dim: u32,
     dir: PathBuf,
+    device: Device,
+    threads: usize,
 }
 
 impl std::fmt::Debug for Siglip {
@@ -136,7 +140,7 @@ impl std::fmt::Debug for Siglip {
         f.debug_struct("Siglip")
             .field("dir", &self.dir)
             .field("dim", &self.dim)
-            .field("device", &self.vision.device())
+            .field("device", &self.device)
             .finish()
     }
 }
@@ -144,9 +148,6 @@ impl std::fmt::Debug for Siglip {
 impl Siglip {
     /// Load from `<models_dir>/<MODEL_DIR>` (or an explicit directory).
     pub fn load(dir: &Path, device: Device, threads: usize) -> Result<Self, PerceiveError> {
-        let vision =
-            OnnxSession::load(&dir.join("vision_model.onnx"), device, threads, MODEL_HINT)?;
-        let text = OnnxSession::load(&dir.join("text_model.onnx"), device, threads, MODEL_HINT)?;
         let tok_path = dir.join("tokenizer.json");
         if !tok_path.is_file() {
             return Err(PerceiveError::ModelMissing {
@@ -163,13 +164,29 @@ impl Siglip {
             .and_then(|v| v["text_config"]["hidden_size"].as_u64())
             .unwrap_or(768) as u32;
         Ok(Self {
-            vision,
-            text,
+            vision: OnceLock::new(),
+            text: OnceLock::new(),
             tokenizer,
             pre,
             dim,
             dir: dir.to_path_buf(),
+            device,
+            threads,
         })
+    }
+
+    fn tower<'a>(
+        &'a self,
+        cell: &'a OnceLock<OnnxSession>,
+        file: &str,
+    ) -> Result<&'a OnnxSession, PerceiveError> {
+        if let Some(s) = cell.get() {
+            return Ok(s);
+        }
+        let s = OnnxSession::load(&self.dir.join(file), self.device, self.threads, MODEL_HINT)?;
+        let _ = cell.set(s);
+        cell.get()
+            .ok_or_else(|| PerceiveError::Onnx("tower cell empty after load".into()))
     }
 
     /// Embedding size.
@@ -184,7 +201,7 @@ impl Siglip {
 
     /// Device in use.
     pub fn device(&self) -> Device {
-        self.vision.device()
+        self.device
     }
 
     /// Embed preprocessed CHW images (each `3 * size * size` floats).
@@ -206,7 +223,7 @@ impl Siglip {
         }
         let input = tensor_f32(&[images.len(), 3, s, s], flat)?;
         let (shape, data) = self
-            .vision
+            .tower(&self.vision, "vision_model.onnx")?
             .run(ort::inputs!["pixel_values" => input], |out| {
                 extract_f32(out, "pooler_output")
             })?;
@@ -249,9 +266,11 @@ impl Siglip {
             flat.extend(self.tokenize(t)?);
         }
         let input = tensor_i64(&[texts.len(), TEXT_LEN], flat)?;
-        let (shape, data) = self.text.run(ort::inputs!["input_ids" => input], |out| {
-            extract_f32(out, "pooler_output")
-        })?;
+        let (shape, data) = self
+            .tower(&self.text, "text_model.onnx")?
+            .run(ort::inputs!["input_ids" => input], |out| {
+                extract_f32(out, "pooler_output")
+            })?;
         split_rows(shape, data, texts.len(), self.dim as usize)
     }
 }

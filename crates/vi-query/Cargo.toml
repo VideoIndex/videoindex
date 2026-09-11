@@ -11,9 +11,10 @@ authors.workspace = true
 [dependencies]
 vi-core = { workspace = true }
 vi-index = { workspace = true }
+vi-providers = { workspace = true }
+tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
