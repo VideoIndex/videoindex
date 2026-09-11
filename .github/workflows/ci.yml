@@ -64,6 +64,46 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  python:
+    name: python wheel (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg pkg-config clang libclang-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install ffmpeg pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg)/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the decode worker used by the tests
+        run: cargo build -p vi-media --bin vi-media-worker
+      - name: Build and test the wheel
+        run: |
+          python -m pip install --upgrade pip maturin pytest numpy
+          cd bindings/python
+          maturin build --release --out dist
+          python -m pip install dist/*.whl
+          cd ../..
+          python -m pytest bindings/python/tests -q
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}
+          path: bindings/python/dist/*.whl
+
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest
