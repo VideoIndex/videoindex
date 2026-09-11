@@ -12,16 +12,16 @@ authors = ["VideoIndex contributors"]
 
 [workspace.dependencies]
 # internal
-vi-core = { path = "crates/vi-core" }
-vi-media = { path = "crates/vi-media" }
-vi-perceive = { path = "crates/vi-perceive" }
-vi-providers = { path = "crates/vi-providers" }
-vi-index = { path = "crates/vi-index" }
-vi-pipeline = { path = "crates/vi-pipeline" }
-vi-query = { path = "crates/vi-query" }
-vi-agent = { path = "crates/vi-agent" }
-vi-server = { path = "crates/vi-server" }
-vi-testkit = { path = "crates/vi-testkit" }
+vi-core = { path = "crates/vi-core", version = "0.1.0" }
+vi-media = { path = "crates/vi-media", version = "0.1.0" }
+vi-perceive = { path = "crates/vi-perceive", version = "0.1.0" }
+vi-providers = { path = "crates/vi-providers", version = "0.1.0" }
+vi-index = { path = "crates/vi-index", version = "0.1.0" }
+vi-pipeline = { path = "crates/vi-pipeline", version = "0.1.0" }
+vi-query = { path = "crates/vi-query", version = "0.1.0" }
+vi-agent = { path = "crates/vi-agent", version = "0.1.0" }
+vi-server = { path = "crates/vi-server", version = "0.1.0" }
+vi-testkit = { path = "crates/vi-testkit", version = "0.1.0" }
 
 # async
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "fs", "signal"] }

@@ -69,27 +69,6 @@ pub fn color_close(actual: [u8; 3], expected: [u8; 3], tol: u8) -> bool {
         .all(|(a, e)| (i16::from(*a) - i16::from(*e)).abs() <= i16::from(tol))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fixture_exists() {
-        let p = fixture_path();
-        assert!(p.is_file(), "missing {}", p.display());
-        assert!(std::fs::metadata(&p).unwrap().len() > 10_000);
-    }
-
-    #[test]
-    fn segments() {
-        assert_eq!(segment_at(0.0), 0);
-        assert_eq!(segment_at(9.99), 0);
-        assert_eq!(segment_at(10.0), 1);
-        assert_eq!(segment_at(119.9), 11);
-        assert_eq!(segment_at(500.0), 11);
-    }
-}
-
 /// Locate the `vi-media-worker` binary for tests in crates other than
 /// `vi-media` (where `CARGO_BIN_EXE_vi-media-worker` is not set).
 ///
@@ -150,4 +129,25 @@ pub fn worker_path() -> PathBuf {
         candidate
     })
     .clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixture_exists() {
+        let p = fixture_path();
+        assert!(p.is_file(), "missing {}", p.display());
+        assert!(std::fs::metadata(&p).unwrap().len() > 10_000);
+    }
+
+    #[test]
+    fn segments() {
+        assert_eq!(segment_at(0.0), 0);
+        assert_eq!(segment_at(9.99), 0);
+        assert_eq!(segment_at(10.0), 1);
+        assert_eq!(segment_at(119.9), 11);
+        assert_eq!(segment_at(500.0), 11);
+    }
 }
