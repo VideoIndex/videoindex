@@ -1,7 +1,7 @@
 //! `vi-media`: everything that touches media bytes.
 //!
 //! - [`acquire`]: the `Acquirer` trait and the `LocalFile` acquirer.
-//! - [`probe`]: container and stream facts via libav.
+//! - [`mod@probe`]: container and stream facts via libav.
 //! - [`frame`]: `Arc<FrameBuffer>` frames with a pixel-format tag.
 //! - [`worker`]: the decode worker process. All libav calls happen there, in
 //!   a child process, so a crash in a codec never takes the index down.

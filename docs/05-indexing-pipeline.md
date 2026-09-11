@@ -88,24 +88,25 @@ All TranscriptSpans, OcrSpans, Descriptions, and Segment summaries are embedded 
 ```rust
 #[async_trait]
 pub trait Operator: Send + Sync {
-    fn id(&self) -> OperatorId;             // e.g. "shot_boundary"
+    fn id(&self) -> &'static str;           // e.g. "shot_boundary"; also the stage name in checkpoints
     fn version(&self) -> u32;               // bump when output semantics change
     fn inputs(&self) -> &[InputKind];       // what it consumes
     fn outputs(&self) -> &[OutputKind];     // what it produces
     fn cost_estimate(&self, input: &InputSummary) -> CostEstimate;
-    async fn run(&self, ctx: &OpContext, input: OpInput) -> Result<OpOutput>;
+    async fn run(&self, ctx: &OpContext, input: OpInput) -> Result<OpOutput>;   // one input item per call
+    async fn finish(&self, ctx: &OpContext) -> Result<OpOutput> { Ok(Default::default()) } // after the last input
 }
 ```
 
-The scheduler derives the DAG from `inputs` and `outputs`. Adding an operator never requires editing the scheduler. `OpContext` gives access to providers, the blob store, the budget, and a cancellation token.
+The scheduler derives the DAG from `inputs` and `outputs`. Adding an operator never requires editing the scheduler. `OpContext` gives access to providers, storage and the blob store, the budget, a cancellation token, progress reporting, and `emit`: operators stream each output item through `ctx.emit(item)` rather than returning a `Vec`, so an hour of frames never sits in memory and backpressure from bounded channels reaches the decoder. `finish` runs once after the last input so operators can flush batched storage writes. Input kinds are one enum (`ItemKind`: `Media`, `Frame`, `Hashed`, `Thumbnail`, `AudioChunk`, ...); every job starts by feeding the single `Media` item to the operators that declare it as input.
 
 ## Scheduler
 
 - Builds the DAG for a job from the chosen `IndexPolicy` (which operators, which providers, sampling rates).
 - Runs operators as tokio tasks, with CPU-bound ones dispatched to the rayon pool and decode to the worker process.
-- Bounded channels between operators provide backpressure; at most N frames are in flight per job.
+- Bounded channels between operators provide backpressure; at most N frames are in flight per job. N is the decode worker's shared-memory slot count (`media.worker.max_in_flight_frames`), and channel capacities are derived from it so a slow consumer stalls the decoder instead of deadlocking it.
 - Provider calls go through per-provider semaphores and rate limiters. Batched where the provider supports it.
-- Every operator output is written to storage and the job checkpoint is updated. Restarting a job resumes from the last checkpoint.
+- Every operator output is written to storage and the job checkpoint (`jobs/<job-id>.json`) is updated when a stage starts, finishes, or fails. Restarting a job resumes from the last checkpoint. In M0 resumption is all-or-nothing per job: a stage can only be skipped when every stage it feeds is complete too, so partially finished jobs re-run every stage (`sample` first deletes its earlier rows).
 - Cancellation propagates through the DAG in under a second; partial results remain queryable.
 - Emits `Progress` events: stage, fraction complete, cost so far, ETA.
 

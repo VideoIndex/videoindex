@@ -83,10 +83,22 @@ Text a VLM produced about a Segment or a FrameSample. `id, target_kind (segment|
 #[async_trait]
 pub trait Storage: Send + Sync {
     // metadata
-    async fn put_video(&self, v: &Video) -> Result<()>;
+    async fn put_video(&self, v: &Video) -> Result<()>;                 // upsert; VideoId is stable per content hash
+    async fn get_video(&self, id: VideoId) -> Result<Option<Video>>;
+    async fn find_video_by_hash(&self, content_hash: &str) -> Result<Option<Video>>;
+    async fn list_videos(&self) -> Result<Vec<Video>>;
+    async fn set_index_state(&self, id: VideoId, state: IndexState) -> Result<()>;
+    async fn put_tracks(&self, t: &[Track]) -> Result<()>;
+    async fn tracks(&self, video: VideoId) -> Result<Vec<Track>>;
     async fn put_segments(&self, s: &[Segment]) -> Result<()>;
-    async fn put_spans(&self, s: &[Span]) -> Result<()>;          // transcript + ocr
+    async fn put_frame_samples(&self, s: &[FrameSample]) -> Result<()>;
+    async fn update_frame_phash(&self, updates: &[(FrameSampleId, u64)]) -> Result<()>;
+    async fn update_frame_thumbnail(&self, updates: &[(FrameSampleId, BlobKey)]) -> Result<()>;
+    async fn delete_frame_samples(&self, track: TrackId) -> Result<u64>;
+    async fn frame_samples(&self, track: TrackId, range: Option<TimeRange>) -> Result<Vec<FrameSample>>;
+    async fn put_spans(&self, s: &[Span]) -> Result<()>;               // transcript + ocr
     async fn put_descriptions(&self, d: &[Description]) -> Result<()>;
+    async fn put_embeddings(&self, e: &[Embedding]) -> Result<()>;
     async fn put_provenance(&self, p: &Provenance) -> Result<ProvenanceId>;
     // search
     async fn text_search(&self, q: &TextQuery) -> Result<Vec<Hit>>;    // BM25 / FTS
@@ -98,9 +110,11 @@ pub trait Storage: Send + Sync {
     // jobs
     async fn checkpoint(&self, job: JobId, state: &JobState) -> Result<()>;
     async fn load_checkpoint(&self, job: JobId) -> Result<Option<JobState>>;
+    async fn list_jobs(&self) -> Result<Vec<JobState>>;
     // maintenance
     async fn manifest(&self) -> Result<Manifest>;
-    async fn compact(&self) -> Result<()>;
+    async fn stats(&self) -> Result<IndexStats>;                        // sizes and per-video counts for `vi status`
+    async fn compact(&self) -> Result<()>;                              // VACUUM + refresh manifest hashes
 }
 ```
 
@@ -112,7 +126,9 @@ Implementations:
 | **Postgres** | Postgres + tsvector | pgvector | S3/GCS/R2 | Hosted, multi-tenant |
 | **Qdrant** | Postgres or SQLite | Qdrant | S3/GCS/R2 | Hosted at larger scale |
 
-Only the embedded backend ships in v1. The trait exists from day one so the pipeline and query layers never touch SQLite directly.
+Only the embedded backend ships in v1. The trait exists from day one so the pipeline and query layers never touch SQLite directly. The trait is implemented in `vi-index`; the record types live in `vi-core::model` so `vi-media` and `vi-pipeline` share them without depending on the storage crate.
+
+Writes to parent tables (videos, tracks, frame samples, segments) are upserts. `INSERT OR REPLACE` would delete and re-insert the row and the `ON DELETE CASCADE` constraints would silently drop every child row (see `DECISIONS.md`).
 
 ## Embedded index directory layout
 
@@ -121,7 +137,7 @@ myindex.vidx/
   manifest.json           schema_version, created_by, index ids, content hashes, optional signature
   meta.sqlite             all tables above, FTS5 virtual tables for spans and descriptions
   vectors/
-    <model-name>.lance    one Lance dataset per embedding model
+    <model-name>.lance    one Lance dataset per embedding model (M0: directory exists, nothing stored)
   blobs/
     ab/cd/abcdef...       content-addressed: thumbnails (WebP), audio chunks (Opus), frame grids
   cache/
