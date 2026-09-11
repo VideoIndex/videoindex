@@ -1,0 +1,81 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/videoindex/videoindex"
+authors = ["VideoIndex contributors"]
+
+[workspace.dependencies]
+# internal
+vi-core = { path = "crates/vi-core" }
+vi-media = { path = "crates/vi-media" }
+vi-perceive = { path = "crates/vi-perceive" }
+vi-providers = { path = "crates/vi-providers" }
+vi-index = { path = "crates/vi-index" }
+vi-pipeline = { path = "crates/vi-pipeline" }
+vi-query = { path = "crates/vi-query" }
+vi-agent = { path = "crates/vi-agent" }
+vi-server = { path = "crates/vi-server" }
+vi-testkit = { path = "crates/vi-testkit" }
+
+# async
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "fs", "signal"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# data
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1.1"
+figment = { version = "0.10", features = ["toml", "env"] }
+bytes = { version = "1", features = ["serde"] }
+ulid = { version = "3", features = ["serde", "std"] }
+blake3 = "1.8"
+chrono = { version = "0.4", features = ["serde", "clock"] }
+
+# errors and logging
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+# compute
+rayon = "1.12"
+image = { version = "0.25", default-features = false }
+webp = "0.3"
+
+# media and ipc
+ffmpeg-next = "9.0"
+memmap2 = "0.9"
+tempfile = "3"
+libc = "0.2"
+
+# storage
+rusqlite = { version = "0.40", features = ["bundled", "blob", "serde_json"] }
+
+# cli
+clap = { version = "4.6", features = ["derive", "env"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+which = "8"
+humansize = "2"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+undocumented_unsafe_blocks = "deny"
+dbg_macro = "deny"
+todo = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+debug = 1

@@ -1,0 +1,27 @@
+[package]
+name = "vi-core"
+description = "VideoIndex shared types: time model, ids, config, events, errors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+figment = { workspace = true, features = ["test"] }
+toml = { workspace = true }
+thiserror = { workspace = true }
+ulid = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+rayon = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "vi-cli"
+description = "The `vi` command-line interface for VideoIndex"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "vi"
+path = "src/main.rs"
+
+[dependencies]
+vi-core = { workspace = true }
+anyhow = { workspace = true }
+
+[lints]
+workspace = true
