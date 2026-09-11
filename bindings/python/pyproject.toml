@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "videoindex"
+description = "Index long videos and query them: transcripts, on-screen text, frames, and an agent with timestamp citations"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dynamic = ["version"]
+classifiers = [
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+]
+dependencies = ["numpy>=1.24"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "videoindex._core"
+features = ["pyo3/extension-module"]
+manifest-path = "Cargo.toml"

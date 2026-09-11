@@ -39,6 +39,53 @@ impl Scenes {
     }
 }
 
+/// Cut shots longer than [`MAX_SCENE_SECS`] into pieces of roughly
+/// `MAX_SCENE_SECS / 1.5`, moving each cut to the nearest transcript span
+/// boundary within 10 s when there is one. Pieces keep the shot's keyframe
+/// and provenance; they are not written back as shots.
+pub fn split_long_shots(shots: Vec<Segment>, spans: &[(f64, f64)]) -> Vec<Segment> {
+    let target = MAX_SCENE_SECS / 1.5;
+    let mut out = Vec::with_capacity(shots.len());
+    for shot in shots {
+        let (a, b) = (shot.t0.as_secs_f64(), shot.t1.as_secs_f64());
+        let len = b - a;
+        if len <= MAX_SCENE_SECS {
+            out.push(shot);
+            continue;
+        }
+        let n = (len / target).round().max(2.0) as usize;
+        let step = len / n as f64;
+        let mut cuts: Vec<f64> = (1..n).map(|i| a + step * i as f64).collect();
+        for c in &mut cuts {
+            // Snap to a span start within 10 s.
+            if let Some(best) = spans
+                .iter()
+                .map(|(s0, _)| *s0)
+                .filter(|s0| (*s0 - *c).abs() <= 10.0 && *s0 > a + 1.0 && *s0 < b - 1.0)
+                .min_by(|x, y| (x - *c).abs().total_cmp(&(y - *c).abs()))
+            {
+                *c = best;
+            }
+        }
+        let mut edges = vec![a];
+        edges.extend(cuts);
+        edges.push(b);
+        for w in edges.windows(2) {
+            let mut piece = shot.clone();
+            piece.t0 = Timestamp::from_secs_f64(w[0], 1000);
+            piece.t1 = Timestamp::from_secs_f64(w[1], 1000);
+            if w[0] == a {
+                piece.t0 = shot.t0;
+            }
+            if w[1] == b {
+                piece.t1 = shot.t1;
+            }
+            out.push(piece);
+        }
+    }
+    out
+}
+
 /// Boundary strength between consecutive shots: 1 means a clean break.
 /// Lower when the keyframes look alike or a transcript span crosses.
 fn boundary_strength(sim: Option<f32>, span_crosses: bool) -> f32 {
@@ -213,6 +260,13 @@ impl Operator for Scenes {
             return Ok(OpOutput::default());
         }
         shots.sort_by_key(|s| s.t0);
+        // A static camera can hold one shot for half an hour; scenes must
+        // still be a few minutes at most, so long shots are cut into equal
+        // pieces of about MAX_SCENE_SECS / 1.5 first, preferring a cut at a
+        // transcript span boundary when one is near.
+        let spans_for_split = st.spans.clone();
+        let original_shots = shots.clone();
+        shots = split_long_shots(shots, &spans_for_split);
         // Keyframe embeddings, when an image embedder is bound and vectors exist.
         let sims: Vec<Option<f32>> = match ctx.providers.image_embedder() {
             Ok(emb) => {
@@ -282,18 +336,23 @@ impl Operator for Scenes {
             l.t1 = l.t1.max(media.video.duration);
         }
         ctx.storage.put_segments(&scenes).await?;
-        // Point shots at their scenes.
-        for ((a, b), scene) in groups.iter().zip(&scenes) {
-            for s in &mut shots[*a..*b] {
+        // Point the original shots at the scene containing their start.
+        let mut originals = original_shots;
+        for s in &mut originals {
+            let mid = s.t0.as_secs_f64() + 0.001;
+            if let Some(scene) = scenes
+                .iter()
+                .find(|sc| mid >= sc.t0.as_secs_f64() && mid < sc.t1.as_secs_f64())
+            {
                 s.parent_id = Some(scene.id);
             }
         }
-        ctx.storage.put_segments(&shots).await?;
+        ctx.storage.put_segments(&originals).await?;
         let n = scenes.len() as u64;
         for s in scenes {
             ctx.emit(Item::Scene(Arc::new(s))).await?;
         }
-        tracing::info!(video = %video, shots = shots.len(), scenes = n, "scenes written");
+        tracing::info!(video = %video, shots = originals.len(), pieces = shots.len(), scenes = n, "scenes written");
         Ok(OpOutput {
             emitted: n,
             stored: n,
@@ -339,5 +398,34 @@ mod tests {
             .iter()
             .all(|(a, b)| shots[*b - 1].1 - shots[*a].0 <= MAX_SCENE_SECS));
         assert!(group(&[], &[], &[]).is_empty());
+    }
+
+    #[test]
+    fn long_shots_are_cut_into_pieces_at_span_starts() {
+        let shot = Segment {
+            id: SegmentId::new(),
+            video_id: vi_core::VideoId::new(),
+            level: SegmentLevel::Shot,
+            parent_id: None,
+            t0: Timestamp::ZERO,
+            t1: Timestamp::from_secs(600),
+            keyframe_sample_id: None,
+            title: None,
+            summary: None,
+            provenance_id: vi_core::ProvenanceId::new(),
+        };
+        let spans = vec![(118.0, 130.0), (245.0, 260.0)];
+        let pieces = split_long_shots(vec![shot], &spans);
+        assert_eq!(pieces.len(), 5, "{pieces:?}");
+        assert_eq!(pieces[0].t0, Timestamp::ZERO);
+        assert_eq!(pieces[4].t1, Timestamp::from_secs(600));
+        assert!(
+            (pieces[0].t1.as_secs_f64() - 118.0).abs() < 1e-6,
+            "snapped to a span start"
+        );
+        assert!((pieces[1].t1.as_secs_f64() - 245.0).abs() < 1e-6);
+        for w in pieces.windows(2) {
+            assert_eq!(w[0].t1, w[1].t0);
+        }
     }
 }

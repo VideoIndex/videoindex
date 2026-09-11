@@ -580,9 +580,11 @@ impl Scheduler {
             st.failures = failures.ranges();
             st.replayed = plan[i] == Plan::Replay;
             match result {
-                Ok(items) => {
+                Ok((items, stored)) => {
                     st.items_done = items;
-                    if st.items_failed > 0 && items == 0 {
+                    // A stage that stores without emitting (embeddings,
+                    // extraction) did work when `stored` is non-zero.
+                    if st.items_failed > 0 && items == 0 && stored == 0 {
                         // Nothing succeeded: the stage failed, even though
                         // it kept going past each failure.
                         ok = false;
@@ -734,13 +736,14 @@ async fn run_stage(
     mut rx: mpsc::Receiver<Item>,
     events: &EventBus,
     replay: bool,
-) -> Result<u64> {
+) -> Result<(u64, u64)> {
     let started = Instant::now();
     events.emit(Event::StageStarted {
         job: ctx.job,
         stage: ctx.stage.clone(),
     });
     let mut emitted = 0u64;
+    let mut stored = 0u64;
     let result: Result<()> = async {
         if replay {
             // Wait for the media item so the operator knows the video.
@@ -780,9 +783,11 @@ async fn run_stage(
             let Some(item) = item else { break };
             let out = op.run(&ctx, OpInput { item }).await?;
             emitted += out.emitted;
+            stored += out.stored;
         }
         let out = op.finish(&ctx).await?;
         emitted += out.emitted;
+        stored += out.stored;
         Ok(())
     }
     .await;
@@ -798,7 +803,7 @@ async fn run_stage(
                 items: emitted,
                 elapsed_ms,
             });
-            Ok(emitted)
+            Ok((emitted, stored))
         }
         Err(e) => {
             warn!(stage = %ctx.stage, error = %e, "stage failed");

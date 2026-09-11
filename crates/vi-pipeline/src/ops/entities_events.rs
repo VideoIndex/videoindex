@@ -40,6 +40,25 @@ impl EntitiesEvents {
     }
 }
 
+/// The first JSON object in a model reply, tolerating prose and code
+/// fences around it.
+pub fn extract_json(text: &str) -> Option<serde_json::Value> {
+    let t = text.trim();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) {
+        if v.is_object() {
+            return Some(v);
+        }
+    }
+    let start = t.find('{')?;
+    let end = t.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    serde_json::from_str(&t[start..=end])
+        .ok()
+        .filter(|v: &serde_json::Value| v.is_object())
+}
+
 fn canonical(name: &str) -> String {
     name.trim()
         .to_lowercase()
@@ -179,6 +198,7 @@ impl Operator for EntitiesEvents {
         let mut mentions: Vec<EntityMention> = Vec::new();
         let mut events: Vec<VideoEvent> = Vec::new();
         let mut windows = 0u64;
+        let mut ok_windows = 0u64;
         let mut w0 = 0.0;
         while w0 < total.max(1.0) {
             let w1 = (w0 + WINDOW_SECS).min(total.max(w0 + 1.0));
@@ -210,7 +230,7 @@ impl Operator for EntitiesEvents {
                     ),
                 ],
                 tools: vec![],
-                max_tokens: 2000,
+                max_tokens: 4000,
                 temperature: 0.0,
                 json_schema: None,
                 model: None,
@@ -248,19 +268,20 @@ impl Operator for EntitiesEvents {
                 serde_json::json!({"t0": w0, "t1": w1, "lines": window.len()}),
             );
             ctx.storage.put_provenance(&prov).await?;
-            let raw = out
-                .text
-                .trim()
-                .trim_start_matches("```json")
-                .trim_start_matches("```")
-                .trim_end_matches("```")
-                .trim()
-                .to_string();
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
-                ctx.record_failure(ts(w0), ts(w1), "extraction was not JSON");
+            let Some(v) = extract_json(&out.text) else {
+                ctx.record_failure(
+                    ts(w0),
+                    ts(w1),
+                    format!(
+                        "extraction was not JSON ({}): {}",
+                        out.finish_reason,
+                        out.text.chars().take(120).collect::<String>()
+                    ),
+                );
                 w0 = w1;
                 continue;
             };
+            ok_windows += 1;
             for e in v["entities"].as_array().into_iter().flatten() {
                 let Some(name) = e["name"].as_str().filter(|n| !n.trim().is_empty()) else {
                     continue;
@@ -319,8 +340,21 @@ impl Operator for EntitiesEvents {
         tracing::info!(video = %video, windows, entities = ents.len(), mentions = mentions.len(), events = events.len(), "entities and events written");
         ctx.progress(ctx.expected_items.unwrap_or(windows));
         Ok(OpOutput {
-            emitted: 0,
+            emitted: ok_windows,
             stored: (ents.len() + events.len()) as u64,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_is_found_inside_prose_and_fences() {
+        let v = extract_json("Here you go:\n```json\n{\"entities\": [], \"events\": [{\"t0\": 1, \"t1\": 2, \"text\": \"x\"}]}\n```\nDone.").unwrap();
+        assert_eq!(v["events"][0]["text"], "x");
+        assert!(extract_json("no json here").is_none());
+        assert!(extract_json("[1,2]").is_none());
     }
 }
