@@ -312,13 +312,72 @@ pub enum ContentPart {
         /// Duration in seconds, for cost estimates.
         duration_secs: f64,
     },
+    /// A tool call the model made earlier (assistant turns in history).
+    ToolCall {
+        /// Call id.
+        id: String,
+        /// Tool name.
+        name: String,
+        /// JSON arguments.
+        arguments: String,
+    },
     /// A tool call result being returned to the model.
     ToolResult {
         /// Call id.
         call_id: String,
+        /// Tool name (Gemini keys responses by name).
+        name: String,
         /// JSON result.
         content: String,
     },
+}
+
+impl Message {
+    /// A text-only message.
+    pub fn text(role: Role, text: impl Into<String>) -> Self {
+        Self {
+            role,
+            parts: vec![ContentPart::Text(text.into())],
+        }
+    }
+}
+
+impl GenerateRequest {
+    /// A request with defaults: 1024 output tokens, temperature 0.
+    pub fn new(messages: Vec<Message>) -> Self {
+        Self {
+            messages,
+            tools: Vec::new(),
+            max_tokens: 1024,
+            temperature: 0.0,
+            json_schema: None,
+            model: None,
+        }
+    }
+
+    /// Approximate input size in tokens (4 characters per token plus a
+    /// flat cost per image), for rate limiting and budgets.
+    pub fn estimated_tokens(&self) -> u64 {
+        let mut chars = 0usize;
+        let mut images = 0u64;
+        for m in &self.messages {
+            for p in &m.parts {
+                match p {
+                    ContentPart::Text(t) => chars += t.len(),
+                    ContentPart::Image(_) => images += 1,
+                    ContentPart::Video { duration_secs, .. } => {
+                        images += (*duration_secs).ceil() as u64
+                    }
+                    ContentPart::ToolCall { arguments, .. } => chars += arguments.len(),
+                    ContentPart::ToolResult { content, .. } => chars += content.len(),
+                }
+            }
+        }
+        for t in &self.tools {
+            chars += t.description.len() + t.parameters.to_string().len();
+        }
+        (chars / 4) as u64 + images * 1000
+    }
 }
 
 /// A chat message.

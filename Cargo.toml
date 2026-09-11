@@ -62,6 +62,7 @@ libc = "0.2"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "multipart", "http2", "charset", "stream"] }
 object_store = { version = "0.14", features = ["aws", "gcp", "azure"] }
 url = "2"
+base64 = "0.22"
 
 # storage
 rusqlite = { version = "0.40", features = ["bundled", "blob", "serde_json"] }

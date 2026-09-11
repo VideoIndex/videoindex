@@ -1,9 +1,9 @@
 //! `openai_compat`: the OpenAI HTTP API shape, which vLLM, Ollama, LM
 //! Studio, llama.cpp, Groq, Together and Whisper servers all speak.
 //!
-//! M1 implements the audio transcription endpoint (`Asr`). Chat completions
-//! and embeddings arrive in M2; until then those traits return
-//! [`ProviderError::Unsupported`].
+//! Implements audio transcription (`Asr`), chat completions with streaming,
+//! tool calls, images and JSON-schema output (`Llm`, `Vlm`), and
+//! embeddings (`TextEmbedder`).
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,10 +14,16 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 use vi_core::config::{Pricing, ProviderConfig, RoleBinding};
 
+use futures::StreamExt;
+use serde_json::json;
+
+use crate::adapters::common::{final_stats, image_base64, ToolCallBuilder};
 use crate::cost::{CallStats, Usage};
 use crate::error::{redact, short_body, ProviderError, Result};
 use crate::governor::Governor;
+use crate::pricing::default_pricing;
 use crate::retry;
+use crate::sse;
 use crate::traits::*;
 
 /// Longest clip the transcription endpoint takes; OpenAI's limit is 25 MB
@@ -85,16 +91,262 @@ impl OpenAiCompat {
                 provider: name.to_string(),
                 message: e.to_string(),
             })?;
+        let pricing = cfg.pricing.unwrap_or_else(|| default_pricing(&model));
         Ok(Self {
             name: name.to_string(),
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
             model,
-            pricing: cfg.pricing.unwrap_or_default(),
+            pricing,
             http,
             governor,
             cancel,
         })
+    }
+
+    /// Chat completions request body for a [`GenerateRequest`].
+    fn chat_body(&self, req: &GenerateRequest, stream: bool) -> Result<serde_json::Value> {
+        let mut messages = Vec::with_capacity(req.messages.len() + 1);
+        for m in &req.messages {
+            match m.role {
+                Role::Tool => {
+                    for p in &m.parts {
+                        if let ContentPart::ToolResult {
+                            call_id, content, ..
+                        } = p
+                        {
+                            messages.push(json!({"role": "tool", "tool_call_id": call_id, "content": content}));
+                        }
+                    }
+                }
+                _ => {
+                    let role = match m.role {
+                        Role::System => "system",
+                        Role::User => "user",
+                        Role::Assistant => "assistant",
+                        Role::Tool => "tool",
+                    };
+                    let mut content = Vec::new();
+                    let mut tool_calls = Vec::new();
+                    for p in &m.parts {
+                        match p {
+                            ContentPart::Text(t) => {
+                                content.push(json!({"type": "text", "text": t}))
+                            }
+                            ContentPart::Image(im) => {
+                                let (mime, b64) = image_base64(im)?;
+                                content.push(json!({"type": "image_url", "image_url": {"url": format!("data:{mime};base64,{b64}")}}));
+                            }
+                            ContentPart::Video { .. } => {
+                                return Err(ProviderError::Invalid(
+                                    "openai_compat has no native video input; send a frame grid"
+                                        .into(),
+                                ))
+                            }
+                            ContentPart::ToolCall {
+                                id,
+                                name,
+                                arguments,
+                            } => tool_calls.push(json!({
+                                "id": id, "type": "function",
+                                "function": {"name": name, "arguments": arguments}
+                            })),
+                            ContentPart::ToolResult {
+                                call_id,
+                                content: c,
+                                ..
+                            } => {
+                                messages.push(
+                                    json!({"role": "tool", "tool_call_id": call_id, "content": c}),
+                                );
+                            }
+                        }
+                    }
+                    let mut msg = json!({"role": role});
+                    // Plain string content when there is only text: some
+                    // servers reject arrays for system messages.
+                    if content.len() == 1 && content[0]["type"] == "text" {
+                        msg["content"] = content[0]["text"].clone();
+                    } else if content.is_empty() {
+                        msg["content"] = serde_json::Value::Null;
+                    } else {
+                        msg["content"] = serde_json::Value::Array(content);
+                    }
+                    if !tool_calls.is_empty() {
+                        msg["tool_calls"] = serde_json::Value::Array(tool_calls);
+                    }
+                    messages.push(msg);
+                }
+            }
+        }
+        let mut body = json!({
+            "model": req.model.clone().unwrap_or_else(|| self.model.clone()),
+            "messages": messages,
+            "max_tokens": req.max_tokens,
+            "temperature": req.temperature,
+            "stream": stream,
+        });
+        if stream {
+            body["stream_options"] = json!({"include_usage": true});
+        }
+        if !req.tools.is_empty() {
+            body["tools"] = serde_json::Value::Array(
+                req.tools
+                    .iter()
+                    .map(|t| json!({"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters}}))
+                    .collect(),
+            );
+        }
+        if let Some(schema) = &req.json_schema {
+            body["response_format"] = json!({"type": "json_schema", "json_schema": {"name": "output", "schema": schema, "strict": false}});
+        }
+        Ok(body)
+    }
+
+    /// Streaming chat completion.
+    async fn chat(&self, req: GenerateRequest) -> Result<EventStream> {
+        let started = Instant::now();
+        let permit = self.governor.acquire(req.estimated_tokens()).await?;
+        let body = self.chat_body(&req, true)?;
+        let url = self.url("chat/completions");
+        let model = body["model"].as_str().unwrap_or(&self.model).to_string();
+        let (resp, attempts) = retry::run(&self.governor.retry, &self.cancel, |_| {
+            let body = body.clone();
+            let url = url.clone();
+            async move {
+                let mut r = self.http.post(&url).json(&body);
+                if let Some(k) = &self.api_key {
+                    r = r.bearer_auth(k);
+                }
+                let resp = r.send().await.map_err(|e| self.transport(e))?;
+                self.check_status(resp).await
+            }
+        })
+        .await?;
+        let provider = self.name.clone();
+        let pricing = self.pricing;
+        let events = sse::events(resp.bytes_stream(), provider.clone());
+        struct St {
+            calls: std::collections::BTreeMap<u64, ToolCallBuilder>,
+            usage: Usage,
+            finish: Option<String>,
+            done: bool,
+            queue: std::collections::VecDeque<GenerateEvent>,
+        }
+        let st = St {
+            calls: Default::default(),
+            usage: Usage {
+                calls: 1,
+                ..Usage::default()
+            },
+            finish: None,
+            done: false,
+            queue: Default::default(),
+        };
+        let stream =
+            futures::stream::unfold((events, st, permit), move |(mut events, mut st, permit)| {
+                let provider = provider.clone();
+                let model = model.clone();
+                async move {
+                    loop {
+                        if let Some(ev) = st.queue.pop_front() {
+                            return Some((Ok(ev), (events, st, permit)));
+                        }
+                        if st.done {
+                            return None;
+                        }
+                        match events.next().await {
+                            Some(Ok(ev)) => {
+                                if ev.data.trim() == "[DONE]" {
+                                    continue;
+                                }
+                                let v: serde_json::Value = match serde_json::from_str(&ev.data) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        st.done = true;
+                                        return Some((
+                                            Err(ProviderError::Decode {
+                                                provider,
+                                                message: format!("{e}: {}", short_body(&ev.data)),
+                                            }),
+                                            (events, st, permit),
+                                        ));
+                                    }
+                                };
+                                if let Some(err) = v.get("error") {
+                                    st.done = true;
+                                    return Some((
+                                        Err(ProviderError::Http {
+                                            provider,
+                                            status: 500,
+                                            body: short_body(&err.to_string()),
+                                            retry_after: None,
+                                        }),
+                                        (events, st, permit),
+                                    ));
+                                }
+                                if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
+                                    st.usage.tokens_in =
+                                        u["prompt_tokens"].as_u64().unwrap_or(st.usage.tokens_in);
+                                    st.usage.tokens_out = u["completion_tokens"]
+                                        .as_u64()
+                                        .unwrap_or(st.usage.tokens_out);
+                                }
+                                for choice in v["choices"].as_array().into_iter().flatten() {
+                                    let delta = &choice["delta"];
+                                    if let Some(t) = delta["content"].as_str() {
+                                        if !t.is_empty() {
+                                            st.queue.push_back(GenerateEvent::Token {
+                                                text: t.to_string(),
+                                            });
+                                        }
+                                    }
+                                    for tc in delta["tool_calls"].as_array().into_iter().flatten() {
+                                        let idx = tc["index"].as_u64().unwrap_or(0);
+                                        let b = st.calls.entry(idx).or_default();
+                                        if let Some(id) = tc["id"].as_str() {
+                                            b.id = id.to_string();
+                                        }
+                                        if let Some(n) = tc["function"]["name"].as_str() {
+                                            b.name.push_str(n);
+                                        }
+                                        if let Some(a) = tc["function"]["arguments"].as_str() {
+                                            b.arguments.push_str(a);
+                                        }
+                                    }
+                                    if let Some(f) = choice["finish_reason"].as_str() {
+                                        st.finish = Some(f.to_string());
+                                    }
+                                }
+                            }
+                            Some(Err(e)) => {
+                                st.done = true;
+                                return Some((Err(e), (events, st, permit)));
+                            }
+                            None => {
+                                st.done = true;
+                                for (_, b) in std::mem::take(&mut st.calls) {
+                                    st.queue.push_back(b.finish());
+                                }
+                                let finish = st.finish.clone().unwrap_or_else(|| "stop".into());
+                                let finish = if finish == "tool_calls" {
+                                    "tool_use".to_string()
+                                } else {
+                                    finish
+                                };
+                                st.queue.push_back(GenerateEvent::Usage(st.usage));
+                                st.queue.push_back(GenerateEvent::Done {
+                                    finish_reason: finish,
+                                    stats: final_stats(
+                                        &provider, &model, st.usage, &pricing, started, attempts,
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+            });
+        Ok(Box::pin(stream))
     }
 
     fn url(&self, path: &str) -> String {
@@ -395,13 +647,101 @@ impl TextEmbedder for OpenAiCompat {
         0
     }
     fn max_batch(&self) -> usize {
-        1
+        256
     }
-    async fn embed(&self, _texts: &[String]) -> Result<EmbedResponse> {
-        Err(ProviderError::Unsupported {
-            provider: self.name.clone(),
-            capability: "text_embed (openai_compat embeddings arrive in M2)",
+    async fn embed(&self, texts: &[String]) -> Result<EmbedResponse> {
+        if texts.is_empty() {
+            return Ok(EmbedResponse {
+                vectors: Vec::new(),
+                stats: CallStats::new(&self.name, &self.model, Usage::default(), &self.pricing),
+            });
+        }
+        let started = Instant::now();
+        let est: u64 = texts.iter().map(|t| t.len() as u64 / 4).sum();
+        let _permit = self.governor.acquire(est).await?;
+        let body = json!({"model": self.model, "input": texts});
+        let url = self.url("embeddings");
+        let (v, attempts) = retry::run(&self.governor.retry, &self.cancel, |_| {
+            let body = body.clone();
+            let url = url.clone();
+            async move {
+                let mut r = self.http.post(&url).json(&body);
+                if let Some(k) = &self.api_key {
+                    r = r.bearer_auth(k);
+                }
+                let resp = r.send().await.map_err(|e| self.transport(e))?;
+                let resp = self.check_status(resp).await?;
+                resp.json::<serde_json::Value>()
+                    .await
+                    .map_err(|e| ProviderError::Decode {
+                        provider: self.name.clone(),
+                        message: e.to_string(),
+                    })
+            }
         })
+        .await?;
+        let mut rows: Vec<(u64, Vec<f32>)> = v["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|d| {
+                let idx = d["index"].as_u64().unwrap_or(0);
+                let vec: Vec<f32> = d["embedding"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|x| x.as_f64().map(|f| f as f32))
+                    .collect();
+                (idx, vec)
+            })
+            .collect();
+        rows.sort_by_key(|r| r.0);
+        let vectors: Vec<Vec<f32>> = rows.into_iter().map(|r| r.1).collect();
+        if vectors.len() != texts.len() {
+            return Err(ProviderError::Decode {
+                provider: self.name.clone(),
+                message: format!("{} embeddings for {} inputs", vectors.len(), texts.len()),
+            });
+        }
+        let usage = Usage {
+            tokens_in: v["usage"]["prompt_tokens"].as_u64().unwrap_or(est),
+            calls: 1,
+            ..Usage::default()
+        };
+        Ok(EmbedResponse {
+            vectors,
+            stats: final_stats(
+                &self.name,
+                &self.model,
+                usage,
+                &self.pricing,
+                started,
+                attempts,
+            ),
+        })
+    }
+}
+
+fn chat_caps(pricing: Pricing, model: &str) -> VlmCapabilities {
+    let m = model.to_ascii_lowercase();
+    let vision = m.contains("vl")
+        || m.contains("vision")
+        || m.contains("gpt-4o")
+        || m.contains("gpt-4.1")
+        || m.contains("gemma-3")
+        || m.contains("llava")
+        || m.contains("pixtral")
+        || m.contains("gpt-5");
+    VlmCapabilities {
+        native_video: false,
+        native_audio: false,
+        max_images_per_request: if vision { 16 } else { 0 },
+        max_image_pixels: 1_048_576,
+        supports_tools: true,
+        supports_streaming: true,
+        supports_json_schema: true,
+        context_tokens: 128_000,
+        price: pricing,
     }
 }
 
@@ -414,23 +754,10 @@ impl Llm for OpenAiCompat {
         &self.model
     }
     fn llm_capabilities(&self) -> VlmCapabilities {
-        VlmCapabilities {
-            native_video: false,
-            native_audio: false,
-            max_images_per_request: 16,
-            max_image_pixels: 1_048_576,
-            supports_tools: true,
-            supports_streaming: true,
-            supports_json_schema: false,
-            context_tokens: 32_768,
-            price: self.pricing,
-        }
+        chat_caps(self.pricing, &self.model)
     }
-    async fn generate(&self, _req: GenerateRequest) -> Result<EventStream> {
-        Err(ProviderError::Unsupported {
-            provider: self.name.clone(),
-            capability: "llm (openai_compat chat completions arrive in M2)",
-        })
+    async fn generate(&self, req: GenerateRequest) -> Result<EventStream> {
+        self.chat(req).await
     }
 }
 
@@ -443,14 +770,50 @@ impl Vlm for OpenAiCompat {
         &self.model
     }
     fn vlm_capabilities(&self) -> VlmCapabilities {
-        Llm::llm_capabilities(self)
+        chat_caps(self.pricing, &self.model)
     }
-    async fn generate(&self, _req: GenerateRequest) -> Result<EventStream> {
-        Err(ProviderError::Unsupported {
-            provider: self.name.clone(),
-            capability: "vlm (openai_compat chat completions arrive in M2)",
-        })
+    async fn generate(&self, req: GenerateRequest) -> Result<EventStream> {
+        self.chat(req).await
     }
+}
+
+/// Collect a whole stream into text, tool calls and the final stats.
+pub async fn collect_stream(mut stream: EventStream) -> Result<Collected> {
+    let mut out = Collected::default();
+    while let Some(ev) = stream.next().await {
+        match ev? {
+            GenerateEvent::Token { text } => out.text.push_str(&text),
+            GenerateEvent::ToolCall {
+                id,
+                name,
+                arguments,
+            } => out.tool_calls.push((id, name, arguments)),
+            GenerateEvent::Usage(u) => out.usage = u,
+            GenerateEvent::Done {
+                finish_reason,
+                stats,
+            } => {
+                out.finish_reason = finish_reason;
+                out.stats = Some(stats);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A fully collected generation.
+#[derive(Debug, Clone, Default)]
+pub struct Collected {
+    /// Text.
+    pub text: String,
+    /// `(id, name, arguments)`.
+    pub tool_calls: Vec<(String, String, String)>,
+    /// Usage.
+    pub usage: Usage,
+    /// Finish reason.
+    pub finish_reason: String,
+    /// Stats from the Done event.
+    pub stats: Option<CallStats>,
 }
 
 #[cfg(test)]
@@ -494,6 +857,100 @@ mod tests {
         assert_eq!(segs.len(), 1);
         assert_eq!((segs[0].start, segs[0].end), (0.0, 3.0));
         assert_eq!(dur, 3.0);
+    }
+
+    #[tokio::test]
+    async fn streams_chat_with_tool_calls_from_a_fake_server() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 1 << 16];
+            let mut n = 0;
+            loop {
+                let r = sock.read(&mut buf[n..]).await.unwrap();
+                if r == 0 {
+                    break;
+                }
+                n += r;
+                let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                if let Some(pos) = head.find("\r\n\r\n") {
+                    let len: usize = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length: "))
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(0);
+                    if n >= pos + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            assert!(req.starts_with("POST /v1/chat/completions"), "{req}");
+            assert!(req.contains("\"stream\":true"));
+            assert!(req.contains("\"tools\""));
+            assert!(req.contains("data:image/jpeg;base64,"));
+            let chunks = [
+                r#"{"choices":[{"delta":{"content":"Hel"}}]}"#,
+                r#"{"choices":[{"delta":{"content":"lo"}}]}"#,
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search","arguments":"{\"q\":"}}]}}]}"#,
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"x\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+                r#"{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":5}}"#,
+            ];
+            let mut body = String::new();
+            for c in chunks {
+                body.push_str(&format!("data: {c}\n\n"));
+            }
+            body.push_str("data: [DONE]\n\n");
+            let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            sock.write_all(resp.as_bytes()).await.unwrap();
+            sock.shutdown().await.unwrap();
+        });
+        let cfg = ProviderConfig {
+            adapter: "openai_compat".into(),
+            base_url: Some(format!("http://{addr}/v1")),
+            model: Some("gpt-4o-mini".into()),
+            ..ProviderConfig::default()
+        };
+        let gov = Arc::new(Governor::from_config("t", &cfg));
+        let a = OpenAiCompat::from_config("t", &cfg, None, gov, CancellationToken::new()).unwrap();
+        let mut req = GenerateRequest::new(vec![
+            Message::text(Role::System, "be brief"),
+            Message {
+                role: Role::User,
+                parts: vec![
+                    ContentPart::Text("what is this".into()),
+                    ContentPart::Image(ImageData::Rgb8 {
+                        width: 4,
+                        height: 4,
+                        data: Arc::from(vec![0u8; 48]),
+                    }),
+                ],
+            },
+        ]);
+        req.tools.push(ToolSpec {
+            name: "search".into(),
+            description: "search".into(),
+            parameters: serde_json::json!({"type":"object"}),
+        });
+        let out = collect_stream(Llm::generate(&a, req).await.unwrap())
+            .await
+            .unwrap();
+        assert_eq!(out.text, "Hello");
+        assert_eq!(
+            out.tool_calls,
+            vec![(
+                "call_1".to_string(),
+                "search".to_string(),
+                "{\"q\":\"x\"}".to_string()
+            )]
+        );
+        assert_eq!(out.finish_reason, "tool_use");
+        assert_eq!((out.usage.tokens_in, out.usage.tokens_out), (12, 5));
+        let stats = out.stats.unwrap();
+        assert!(stats.cost_usd > 0.0, "gpt-4o-mini has a default price");
+        assert!(a.llm_capabilities().max_images_per_request > 0);
     }
 
     #[tokio::test]

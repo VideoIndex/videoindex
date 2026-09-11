@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 use vi_core::config::{roles, Config, ProviderConfig, RoleBinding};
 
-use crate::adapters::OpenAiCompat;
+use crate::adapters::{Anthropic, Gemini, OpenAiCompat};
 use crate::error::{ProviderError, Result};
 use crate::governor::Governor;
 use crate::traits::*;
@@ -53,6 +53,8 @@ impl AdapterKind {
 /// A constructed adapter, whichever traits it implements.
 enum Adapter {
     OpenAiCompat(Arc<OpenAiCompat>),
+    Anthropic(Arc<Anthropic>),
+    Gemini(Arc<Gemini>),
     /// Registered by the caller (the `onnx_local` adapter lives in
     /// `vi-perceive`, which this crate does not depend on).
     External(Arc<dyn ExternalAdapter>),
@@ -211,6 +213,20 @@ impl ProviderRegistry {
                     self.cancel.clone(),
                 )?,
             )),
+            Some(AdapterKind::Anthropic) => Adapter::Anthropic(Arc::new(Anthropic::from_config(
+                &binding.provider,
+                cfg,
+                Some(binding),
+                governor,
+                self.cancel.clone(),
+            )?)),
+            Some(AdapterKind::Gemini) => Adapter::Gemini(Arc::new(Gemini::from_config(
+                &binding.provider,
+                cfg,
+                Some(binding),
+                governor,
+                self.cancel.clone(),
+            )?)),
             Some(kind) => {
                 let factory = self
                     .factories
@@ -261,6 +277,7 @@ impl ProviderRegistry {
             Adapter::External(e) => e
                 .as_asr()
                 .ok_or_else(|| self.unsupported(roles::ASR, "asr")),
+            _ => Err(self.unsupported(roles::ASR, "asr")),
         }
     }
 
@@ -270,7 +287,7 @@ impl ProviderRegistry {
             Adapter::External(e) => e
                 .as_ocr()
                 .ok_or_else(|| self.unsupported(roles::OCR, "ocr")),
-            Adapter::OpenAiCompat(_) => Err(self.unsupported(roles::OCR, "ocr")),
+            _ => Err(self.unsupported(roles::OCR, "ocr")),
         }
     }
 
@@ -280,7 +297,7 @@ impl ProviderRegistry {
             Adapter::External(e) => e
                 .as_image_embedder()
                 .ok_or_else(|| self.unsupported(roles::IMAGE_EMBED, "image_embed")),
-            Adapter::OpenAiCompat(_) => Err(self.unsupported(roles::IMAGE_EMBED, "image_embed")),
+            _ => Err(self.unsupported(roles::IMAGE_EMBED, "image_embed")),
         }
     }
 
@@ -291,6 +308,7 @@ impl ProviderRegistry {
             Adapter::External(e) => e
                 .as_text_embedder()
                 .ok_or_else(|| self.unsupported(roles::TEXT_EMBED, "text_embed")),
+            _ => Err(self.unsupported(roles::TEXT_EMBED, "text_embed")),
         }
     }
 
@@ -300,7 +318,7 @@ impl ProviderRegistry {
             Adapter::External(e) => e
                 .as_reranker()
                 .ok_or_else(|| self.unsupported(roles::RERANKER, "reranker")),
-            Adapter::OpenAiCompat(_) => Err(self.unsupported(roles::RERANKER, "reranker")),
+            _ => Err(self.unsupported(roles::RERANKER, "reranker")),
         }
     }
 
@@ -308,6 +326,8 @@ impl ProviderRegistry {
     pub fn llm(&self, role: &str) -> Result<Arc<dyn Llm>> {
         match &*self.adapter_for_role(role)? {
             Adapter::OpenAiCompat(a) => Ok(a.clone()),
+            Adapter::Anthropic(a) => Ok(a.clone()),
+            Adapter::Gemini(a) => Ok(a.clone()),
             Adapter::External(_) => Err(self.unsupported(role, "llm")),
         }
     }
@@ -316,7 +336,18 @@ impl ProviderRegistry {
     pub fn vlm(&self, role: &str) -> Result<Arc<dyn Vlm>> {
         match &*self.adapter_for_role(role)? {
             Adapter::OpenAiCompat(a) => Ok(a.clone()),
+            Adapter::Anthropic(a) => Ok(a.clone()),
+            Adapter::Gemini(a) => Ok(a.clone()),
             Adapter::External(_) => Err(self.unsupported(role, "vlm")),
+        }
+    }
+
+    /// The agent's multimodal model: `agent_vlm`, else `agent_llm`.
+    pub fn agent_vlm(&self) -> Result<Arc<dyn Vlm>> {
+        if self.has_role(roles::AGENT_VLM) {
+            self.vlm(roles::AGENT_VLM)
+        } else {
+            self.vlm(roles::AGENT_LLM)
         }
     }
 

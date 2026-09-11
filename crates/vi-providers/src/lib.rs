@@ -15,10 +15,13 @@ pub mod adapters;
 pub mod cost;
 pub mod error;
 pub mod governor;
+pub mod pricing;
 pub mod registry;
 pub mod retry;
+pub mod sse;
 pub mod traits;
 
+pub use adapters::{Anthropic, Gemini, OpenAiCompat};
 pub use cost::{provenance_for, CallStats, Usage};
 pub use error::{ProviderError, Result};
 pub use governor::Governor;
