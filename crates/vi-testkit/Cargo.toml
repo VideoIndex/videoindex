@@ -1,15 +1,16 @@
 [package]
 name = "vi-testkit"
-description = "VideoIndex vi-testkit (in progress)"
+description = "Test fixtures for VideoIndex: a synthetic 2-minute video generated with ffmpeg at build time"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+build = "build.rs"
+publish = false
 
 [dependencies]
-vi-core = { workspace = true }
 
 [lints]
 workspace = true

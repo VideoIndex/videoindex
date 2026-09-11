@@ -51,7 +51,7 @@ image = { version = "0.25", default-features = false }
 webp = "0.3"
 
 # media and ipc
-ffmpeg-next = "9.0"
+ffmpeg-next = { version = "9.0", default-features = false }
 memmap2 = "0.9"
 tempfile = "3"
 libc = "0.2"

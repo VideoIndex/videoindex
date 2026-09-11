@@ -1,6 +1,6 @@
 [package]
 name = "vi-media"
-description = "VideoIndex vi-media (in progress)"
+description = "VideoIndex media layer: acquire, probe, demux/decode in a sandboxed worker, frame buffers"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,8 +8,27 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[[bin]]
+name = "vi-media-worker"
+path = "src/bin/vi-media-worker.rs"
+
 [dependencies]
 vi-core = { workspace = true }
+ffmpeg-next = { workspace = true, features = ["codec", "format", "software-resampling", "software-scaling"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+memmap2 = { workspace = true }
+tempfile = { workspace = true }
+libc = { workspace = true }
+blake3 = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+vi-testkit = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
