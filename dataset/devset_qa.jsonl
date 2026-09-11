@@ -1,0 +1,52 @@
+{"id":"qa01","video":"CvZDJxd4LKM","question":"In Dawn Song's lecture, what does the hidden text in the attacker's resume instruct the model to print?","accept":["yes"],"anchor":"print yes"}
+{"id":"qa02","video":"CvZDJxd4LKM","question":"How many people joined the Agentic AI Summit at Berkeley in person, according to Dawn Song?","accept":["2,000","2000","two thousand"],"anchor":"2,000 joined in person"}
+{"id":"qa03","video":"iDhzzugMOLA","question":"By what year does the RoboCup community aim for humanoid robots to beat the human world champions, per Peter Stone?","accept":["2050"],"anchor":"2050"}
+{"id":"qa04","video":"iDhzzugMOLA","question":"How many images does the FHIBE dataset for evaluating bias contain, according to Peter Stone's talk?","accept":["10,000","10000","ten thousand"],"anchor":"10,000 images"}
+{"id":"qa05","video":"ntjOxjZMaac","question":"In Oriol Vinyals' lecture on AlphaStar, what are the agents called whose only job is to beat the main agent?","accept":["exploiter"],"anchor":"league exploiters"}
+{"id":"qa06","video":"ntjOxjZMaac","question":"Which rating system from chess does Vinyals mention for comparing agents?","accept":["elo"],"anchor":"Elo"}
+{"id":"qa07","video":"sfJM4LaiYsM","question":"According to Clay Bavor, how many years did the internet take to reach mass adoption, in his comparison with AI agents?","accept":["11"],"anchor":"Took the internet 11 years"}
+{"id":"qa08","video":"sfJM4LaiYsM","question":"What latency technique does Clay Bavor describe where the first of several parallel requests is used?","accept":["speculative request hedging","hedging"],"anchor":"speculative request hedging"}
+{"id":"qa09","video":"sfJM4LaiYsM","question":"Which benchmark does Clay Bavor say Google and others use to evaluate frontier models as agents?","accept":["tau-bench","taubench","tau bench","τ-bench","t-bench","tabench"],"anchor":"TaBench"}
+{"id":"qa10","video":"sfJM4LaiYsM","question":"What metaphor titles Clay Bavor's slide about the hidden complexity of agents?","accept":["iceberg"],"anchor":"iceberg"}
+{"id":"qa11","video":"yqPIsTTdUkc","question":"In James Zou's lecture, which structure-prediction model do the virtual lab agents use to design nanobodies?","accept":["alphafold"],"anchor":"AlphaFold"}
+{"id":"qa12","video":"yqPIsTTdUkc","question":"What is the name of the agent James Zou asks to look for causal genes?","accept":["alphagenome"],"anchor":"AlphaGenome"}
+{"id":"qa13","video":"HV8pugcFVO0","question":"In Sida Wang's lecture, which benchmark is said to often need hundreds of thousands of tokens per run?","accept":["terminal bench","terminal-bench","terminalbench"],"anchor":"terminal bench"}
+{"id":"qa14","video":"SrLcGdVOb9w","question":"What are the two most popular no-regret learning algorithms Noam Brown names?","accept":["regret matching"],"anchor":"regret matching"}
+{"id":"qa15","video":"SrLcGdVOb9w","question":"In Noam Brown's ultimatum-game example, how much money does Alice offer Bob?","accept":["$30","30 dollars","thirty"],"anchor":"$30"}
+{"id":"qa16","video":"SrLcGdVOb9w","question":"Which game did Noam Brown's team tackle where he recommends their approach for general games with natural language?","accept":["diplomacy"],"anchor":"diplomacy"}
+{"id":"qa17","video":"SrLcGdVOb9w","question":"What puzzle does Noam Brown use as an example of a task that can be attempted 10,000 times and easily verified?","accept":["sudoku"],"anchor":"Sudoku"}
+{"id":"qa18","video":"xNxrBHZPDvM","question":"In Weizhu Chen's lecture, which two components waiting for each other make large-scale RL training slow?","accept":["sampler"],"anchor":"sampler"}
+{"id":"qa19","video":"xqRAS6rAouo","question":"Which language-learning company does Yangqing Jia mention as using OpenAI models?","accept":["duolingo"],"anchor":"Duolingo"}
+{"id":"qa20","video":"xqRAS6rAouo","question":"How much per month does Yangqing Jia say he would happily pay for an AI that makes him better at his job?","accept":["$20","20 dollars","twenty"],"anchor":"$20"}
+{"id":"qa21","video":"r1qZpYAmqmg","question":"According to Yann Dubois, how many things do you need to consider when training an LLM, and what is the first?","accept":["five","5"],"anchor":"five things"}
+{"id":"qa22","video":"r1qZpYAmqmg","question":"Yann Dubois describes filtering web documents by how likely they are to be referenced by which website?","accept":["wikipedia"],"anchor":"referenced by Wikipedia"}
+{"id":"qa23","video":"r1qZpYAmqmg","question":"What range in millions of dollars does Yann Dubois give for the training cost he discusses?","accept":["50","80"],"anchor":"80 million"}
+{"id":"qa24","video":"r1qZpYAmqmg","question":"In Yann Dubois' example of a failed request, what did the model return instead of Python code?","accept":["joke about frogs","joke"],"anchor":"joke about frogs"}
+{"id":"qa25","video":"r1qZpYAmqmg","question":"How many bytes per parameter does Yann Dubois assume for FP32 when computing memory for parameters, gradients and optimizer states?","accept":["4","four"],"anchor":"optimizer states"}
+{"id":"qa26","video":"OkEGJ5G3foU","question":"Whose policy gradients book does Daniel Han recommend in his RL workshop?","accept":["nathan lambert","lambert"],"anchor":"Nathan Lambert"}
+{"id":"qa27","video":"OkEGJ5G3foU","question":"In Daniel Han's workshop, how much faster is float4 than float8 according to him?","accept":["two times","2x","twice","2 times"],"anchor":"Float 4"}
+{"id":"qa28","video":"OkEGJ5G3foU","question":"What temperature does the paper Daniel Han cites use together with min_p sampling?","accept":["1.5"],"anchor":"temperature 1.5"}
+{"id":"qa29","video":"bk0TmxoZlUY","question":"In Doug Guthrie's Evals 101 workshop, what kind of dataset of test cases does he say teams get stuck creating?","accept":["golden"],"anchor":"golden data set"}
+{"id":"qa30","video":"wXVvfFMTyzY","question":"Does Damien Murphy think A2A is ready for production, and what does he say about its maturity?","accept":["too early"],"anchor":"too early"}
+{"id":"qa31","video":"wXVvfFMTyzY","question":"What does Damien Murphy say you spawn to absorb the context flood?","accept":["sub-agent","subagent","sub agent"],"anchor":"context flood"}
+{"id":"qa32","video":"JfaLQqfXqPA","question":"To what kind of machine does Ilan Bigio compare fine-tuning, in contrast to prompting?","accept":["cnc"],"anchor":"CNC machine"}
+{"id":"qa33","video":"JfaLQqfXqPA","question":"How many examples does Ilan Bigio use in his two fine-tuning demos?","accept":["150","500"],"anchor":"500 examples"}
+{"id":"qa34","video":"nxuTVd7v7dg","question":"What does Mark Backman ask the voice bot to tell in order to test interruption?","accept":["long story","really long story"],"anchor":"really long story"}
+{"id":"qa35","video":"2HNSG990Ew8","question":"Which three tech-forward customers does Aman Khan of Arize name?","accept":["uber","reddit","instacart"],"anchor":"Instacart"}
+{"id":"qa36","video":"ZuiJjkbX0Og","question":"What everyday things does Ishan Anand use as an analogy for token IDs?","accept":["street address","addresses"],"anchor":"street addresses"}
+{"id":"qa37","video":"ZuiJjkbX0Og","question":"In Ishan Anand's DPO example, what does the chosen recipe tell you to grab a cup of?","accept":["sugar"],"anchor":"cup of sugar"}
+{"id":"qa38","video":"ZuiJjkbX0Og","question":"According to Ishan Anand, backpropagation is a generic what?","accept":["optimization algorithm","optimisation algorithm"],"anchor":"backpropagation is a generic"}
+{"id":"qa39","video":"Ahtaha9fEM0","question":"Which library does SGLang use for its attention kernels, according to the Baseten workshop?","accept":["flashinfer","flash infer"],"anchor":"flash infer"}
+{"id":"qa40","video":"hwCmfThIiS4","question":"In Suman Debnath's demo, what are trophic levels?","accept":["feeding position","feeding positions","food chain"],"anchor":"Trophic levels"}
+{"id":"qa41","video":"MPtCBaZn84A","question":"What German term meaning pleasure at another's misfortune comes up in Thor Schaeff's ElevenLabs workshop?","accept":["schadenfreude","shardan freder","schaden"],"anchor":"German term"}
+{"id":"qa42","video":"MPtCBaZn84A","question":"In the ElevenLabs workshop, which model identifies the language being spoken?","accept":["asr","speech recognition"],"anchor":"ASR model will actually identify"}
+{"id":"qa43","video":"tzRvcTEapzo","question":"In the Cerebras workshop, what kind of agent checks whether the proposed answers are feasible?","accept":["critique"],"anchor":"critique agent"}
+{"id":"qa44","video":"6YdPI9YbjbI","question":"What was Notion's first AI feature discussed by Sarah Sachs?","accept":["meeting notes"],"anchor":"AI meeting notes"}
+{"id":"qa45","video":"_FKeSzM9fPc","question":"Which company hired ComfyAnonymous about six months after he started Comfy?","accept":["stability"],"anchor":"stability AI"}
+{"id":"qa46","video":"N4vCBM5YbN0","question":"How does Cedric Vidal summarise what MCP is?","accept":["tool","function"],"anchor":"MCP is just a tool"}
+{"id":"qa47","video":"EAfP8pDs7h4","question":"Where does VS Code store secrets on a Mac, according to the Vibe Coding at Scale workshop?","accept":["keychain"],"anchor":"keychain"}
+{"id":"qa48","video":"G1hhmz6mXT0","question":"What do the Microsoft presenters ask the audience to do with their phones at the start?","accept":["silent","vibrate"],"anchor":"vibrate"}
+{"id":"qa49","video":"YYNXFsUutbM","question":"According to the VC talk speakers, do you need revenue to raise venture capital?","accept":["no","don't need","do not need","not need"],"anchor":"Show of hands"}
+{"id":"qa50","video":"CvZDJxd4LKM","question":"In Dawn Song's lecture, the earlier work on automatic privilege separation was done roughly how many decades ago?","accept":["two decades","two","20 years","twenty"],"anchor":"privilege separation"}
+{"id":"qa51","video":"89NuzmKokIk","question":"In Taylor Smith's evals workshop, GuideLLM is associated with which inference runtime project?","accept":["vllm"],"anchor":"inference runtime project"}
+{"id":"qa52","video":"3l0Zxus34es","question":"In Jiantao Jiao's lecture, what metric on the hardware-prompt side is said to be higher when things are easy?","accept":["collision"],"anchor":"collision"}
