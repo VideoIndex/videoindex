@@ -17,8 +17,9 @@ Read the documents in order the first time. After that, each stands alone.
 | 09 | [SDK and APIs](09-sdk-and-apis.md) | Python, Node, CLI, and server API surfaces, stability policy |
 | 10 | [Roadmap](10-roadmap.md) | Milestones M0 to M5, repo layout, license, open questions |
 | 11 | [Deployment](11-deployment.md) | videoindex.app on the azuremc machine |
-| — | [Kickoff prompt](KICKOFF.md) | The prompt to start development on azuremc |
-| — | [Machine facts](MACHINE.md) | What the current azuremc host is and what M0 measured on it |
+| — | [Kickoff prompt](KICKOFF.md) | The prompt that started development on azuremc (M0) |
+| — | [GCP kickoff prompt](KICKOFF-GCP.md) | The prompt to continue development on the GCP A100 machine (M1 onward) |
+| — | [azuremc facts](MACHINE-azuremc.md) | The first host and what M0 measured on it; `MACHINE.md` describes the current host |
 | — | [Machine recommendations](MACHINE-RECOMMENDATIONS.md) | Specs for the indexing/dev machine and the serving machine |
 | — | [Decisions](DECISIONS.md) | Dated choices made where the design was silent |
 

@@ -13,7 +13,7 @@ Milestones are ordered so that something queryable exists early and every later 
 
 Done when: `vi index` on a 1-hour MP4 produces an index directory with thumbnails and pHashes in under 5 minutes on 8 cores, and `vi status` reports it.
 
-**Status: done 2026-09-11.** Measured 2 min 48 s for a 1-hour 720p file on azuremc's 4 vCPUs (see `MACHINE.md`). The vector store is a stub and sandboxing is rlimits only; both are M1 work.
+**Status: done 2026-09-11.** Measured 2 min 48 s for a 1-hour 720p file on azuremc's 4 vCPUs (see `MACHINE-azuremc.md`). The vector store is a stub and sandboxing is rlimits only; both are M1 work.
 
 ## M1. Coarse index and search
 

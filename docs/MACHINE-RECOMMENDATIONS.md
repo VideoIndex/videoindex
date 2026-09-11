@@ -1,12 +1,12 @@
 # Machine recommendations: indexing and serving
 
-Written 2026-09-11 after M0, from measurements on the current azuremc host (see [MACHINE.md](MACHINE.md)) and the data volumes in [08-evaluation](08-evaluation.md) and [11-deployment](11-deployment.md). Two machines are recommended: a powerful indexing and development box that is deallocated between runs, and a small always-on serving box for videoindex.app.
+Written 2026-09-11 after M0, from measurements on the current azuremc host (see [MACHINE-azuremc.md](MACHINE-azuremc.md)) and the data volumes in [08-evaluation](08-evaluation.md) and [11-deployment](11-deployment.md). Two machines are recommended: a powerful indexing and development box that is deallocated between runs, and a small always-on serving box for videoindex.app.
 
 ## Sizing inputs
 
 | Fact | Value | Source |
 |---|---|---|
-| Coarse pass (1 fps sample, pHash, thumbnails) on 1 h of 720p H.264 | 168 s wall on 2 physical cores; about 2.4 cores busy per job; 90 MB peak RSS | `MACHINE.md`, M0 measurements |
+| Coarse pass (1 fps sample, pHash, thumbnails) on 1 h of 720p H.264 | 168 s wall on 2 physical cores; about 2.4 cores busy per job; 90 MB peak RSS | `MACHINE-azuremc.md`, M0 measurements |
 | Video to index | LVBench ~117 h (100 to 150 GB at 720p); dataset playlists ~40 to 60 h (30 to 60 GB); Minerva if obtainable ~100 GB | `08-evaluation.md` |
 | Index size | 30 to 80 MB per hour of video; 5 to 10 GB total for the benchmarks | `04-data-model.md`, `11-deployment.md` |
 | Model weights | Whisper-large ~3 GB, SigLIP so400m ~1.7 GB, a 7B VLM ~15 GB, a 32B VLM ~65 GB | vendor model cards |

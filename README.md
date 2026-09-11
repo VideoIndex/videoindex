@@ -2,7 +2,7 @@
 
 APIs to index and query long videos. A Rust core (decode, index, retrieval, agent loop) with Python and Node.js bindings, a `vi` CLI, and a server with HTTP, SSE and MCP. Applications such as the video QnA chat app are built on the SDK, never inside it.
 
-The design lives in [`docs/`](docs/README.md); read it in order the first time. [`docs/10-roadmap.md`](docs/10-roadmap.md) tracks milestones, [`docs/DECISIONS.md`](docs/DECISIONS.md) records choices made where the design was silent, and [`docs/MACHINE.md`](docs/MACHINE.md) describes the azuremc host.
+The design lives in [`docs/`](docs/README.md); read it in order the first time. [`docs/10-roadmap.md`](docs/10-roadmap.md) tracks milestones, [`docs/DECISIONS.md`](docs/DECISIONS.md) records choices made where the design was silent, and [`docs/MACHINE-azuremc.md`](docs/MACHINE-azuremc.md) describes the azuremc host.
 
 ## Status
 
