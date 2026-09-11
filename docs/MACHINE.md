@@ -57,6 +57,23 @@ Encoders available to ffmpeg for fixtures and thumbnails: `libx264`, `libwebp`, 
 - **Port conflicts with `docs/11-deployment.md`:** an unrelated Node app (`/azure_disk/arun/talkbox/server_nodejs/app.js`) already listens on `*:8080`, which the design assigns to `vi serve`. Ports 80 and 443 are held by nginx, which proxies `codewalk.app` and `talkboxdhs.com`. Redis is on 127.0.0.1:6379, Postgres on 0.0.0.0:5432. `vi serve` will need a different port (candidate: 127.0.0.1:8090) and must be added as an nginx site rather than replacing the proxy with Caddy. This is an M3 concern; nothing was changed.
 - DNS: `videoindex.app` and `www.videoindex.app` resolve (Cloudflare, AAAA `2606:4700:3033::ac43:8bdf` and `2606:4700:3036::6815:411b`). `app.videoindex.app` and `api.videoindex.app` have **no records** yet.
 
+## M0 measurements (2026-09-11, release build)
+
+`vi index ./m0-timing.vidx synthetic-1h-720p.mp4 --compact` on the 1-hour 720p H.264 30 fps fixture, policy `m0` (sample at 1 fps, pHash, WebP thumbnails at 320 px), 4 vCPUs, no GPU:
+
+| Metric | Value |
+|---|---|
+| Wall clock, whole job | 167.6 s (2 min 48 s); target under 5 min |
+| Acquire (blake3 of 920 MB) + probe | 0.9 s |
+| CPU time | 418 s user + 11 s system, 255% of one CPU |
+| Frames decoded / delivered | 65,096 of 108,000 (non-reference frames skipped) / 3,600 |
+| Peak RSS, parent process | 90 MB (frames stay in shared memory slots, 16 in flight) |
+| Index size | 14.6 MB: 1.0 MB SQLite, 13.5 MB in 3,600 WebP blobs (synthetic frames compress unusually well; expect 30 to 50 MB per hour on real video) |
+
+ffmpeg CLI baselines on the same file (`-f null`): plain decode 259 s; `-skip_frame noref` 139 s; `noref` + `-skip_loop_filter all` 120 s; keyframes only 13 s. The worker is within about 8% of the CLI for the same decode settings; the decode is the bottleneck and the hashing and encoding stages finish in its shadow.
+
+`vi doctor` output at kickoff is reproduced by running it; it reports every line of the tables above (host, CPU, memory, GPU, disks, tools, libav via the worker, sandbox state, incoming directory contents).
+
 ## Other
 
 - User `azureuser` has passwordless sudo and is in the `docker` group.
