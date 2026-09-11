@@ -144,9 +144,23 @@ pub fn choose_boundaries(
     starts
 }
 
+/// A slide title: a few words of mostly letters, not a logo or a URL.
 fn looks_like_title(text: &str) -> bool {
     let n = text.chars().count();
-    (8..=80).contains(&n) && text.chars().filter(|c| c.is_alphabetic()).count() >= n / 2
+    let words = text.split_whitespace().count();
+    (12..=90).contains(&n)
+        && words >= 3
+        && text.chars().filter(|c| c.is_alphabetic()).count() >= n / 2
+        && !text.contains("://")
+        && !text.contains('@')
+}
+
+/// Where a title sits: the upper part of the frame, large enough to read.
+fn title_position_ok(o: &OcrSpan) -> bool {
+    match o.bbox {
+        Some(b) => b.y < 0.6 && b.h >= 0.03,
+        None => true,
+    }
 }
 
 #[async_trait]
@@ -311,7 +325,10 @@ impl Operator for Chapters {
             let (a, b) = (s.t0.as_secs_f64(), s.t1.as_secs_f64());
             ocr.iter()
                 .filter(|o| {
-                    o.t.as_secs_f64() >= a && o.t.as_secs_f64() < b && looks_like_title(&o.text)
+                    o.t.as_secs_f64() >= a
+                        && o.t.as_secs_f64() < b
+                        && looks_like_title(&o.text)
+                        && title_position_ok(o)
                 })
                 .min_by(|x, y| {
                     // Prefer the highest, widest line: largest box height then top.
