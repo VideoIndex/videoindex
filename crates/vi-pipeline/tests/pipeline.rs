@@ -179,6 +179,60 @@ async fn m0_policy_indexes_the_fixture() {
 }
 
 #[tokio::test]
+async fn shot_boundaries_cover_the_fixture_with_one_shot_per_segment() {
+    let dir = tempfile::tempdir().unwrap();
+    let idx = Arc::new(EmbeddedIndex::create(&dir.path().join("t.vidx")).unwrap());
+    let mut c = Config::default();
+    c.media.worker.path = Some(fx::worker_path());
+    c.media.sample_max_dim = 320;
+    c.policy.insert(
+        "shots".into(),
+        vi_core::config::IndexPolicy {
+            coarse: vec!["sample".into(), "shot_boundary".into()],
+            fine: vec![],
+            ..vi_core::config::IndexPolicy::m0()
+        },
+    );
+    let sched = Scheduler::new(idx.clone(), Arc::new(c), EventBus::default());
+    let report = sched
+        .run(
+            Source::Path(fx::fixture_path()),
+            JobOptions {
+                policy: Some("shots".into()),
+                ..JobOptions::default()
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(report.ok, "{report:?}");
+    let video = &idx.list_videos().await.unwrap()[0];
+    let shots = idx
+        .segments(video.id, vi_core::model::SegmentLevel::Shot)
+        .await
+        .unwrap();
+    // The fixture has a hard cut every 10 s: twelve shots.
+    assert_eq!(shots.len(), 12, "{shots:?}");
+    // The level covers the whole video with no gaps.
+    assert_eq!(shots[0].t0, vi_core::Timestamp::ZERO);
+    for w in shots.windows(2) {
+        assert_eq!(w[0].t1, w[1].t0, "gap between {:?} and {:?}", w[0], w[1]);
+    }
+    assert!((shots[11].t1.as_secs_f64() - video.duration.as_secs_f64()).abs() < 1e-6);
+    // Each cut lands within one sample (1 s) of the true cut.
+    for (i, s) in shots.iter().enumerate().skip(1) {
+        let expected = i as f64 * fx::SEGMENT_SECS;
+        assert!(
+            (s.t0.as_secs_f64() - expected).abs() <= 1.05,
+            "shot {i} starts at {} expected {expected}",
+            s.t0
+        );
+        assert!(s.keyframe_sample_id.is_some());
+    }
+    assert_eq!(report.stages["shot_boundary"].items_done, 12);
+}
+
+#[tokio::test]
 async fn unknown_and_planned_operators_are_clear_errors() {
     let dir = tempfile::tempdir().unwrap();
     let idx = Arc::new(EmbeddedIndex::create(&dir.path().join("t.vidx")).unwrap());

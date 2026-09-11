@@ -7,6 +7,7 @@ use crate::operator::Operator;
 pub mod asr;
 pub mod phash;
 pub mod sample;
+pub mod shot_boundary;
 pub mod subtitle_import;
 pub mod thumbnail;
 pub mod vad;
@@ -14,6 +15,7 @@ pub mod vad;
 pub use asr::Asr;
 pub use phash::PHash;
 pub use sample::Sample;
+pub use shot_boundary::ShotBoundary;
 pub use subtitle_import::SubtitleImport;
 pub use thumbnail::Thumbnail;
 pub use vad::Vad;
@@ -26,12 +28,12 @@ pub const AVAILABLE: &[&str] = &[
     "thumbnail",
     "vad",
     "asr",
+    "shot_boundary",
 ];
 
 /// Operators named in the design but not yet implemented; listing them lets
 /// error messages distinguish "not yet" from "typo".
 pub const PLANNED: &[&str] = &[
-    "shot_boundary",
     "image_embed",
     "ocr",
     "scenes",
@@ -53,6 +55,7 @@ pub fn build(name: &str, config: &Config) -> Option<Box<dyn Operator>> {
         ))),
         "vad" => Some(Box::new(Vad::new())),
         "asr" => Some(Box::new(Asr::new())),
+        "shot_boundary" => Some(Box::new(ShotBoundary::new())),
         _ => None,
     }
 }

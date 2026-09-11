@@ -39,7 +39,15 @@ text_embed = { provider = "local" }
 # operator by operator.
 [policy.coarse_asr]
 sample_fps = 1.0
-coarse = ["subtitle_import", "vad", "asr", "sample", "phash", "thumbnail"]
+coarse = ["subtitle_import", "vad", "asr", "sample", "shot_boundary", "phash", "thumbnail"]
 fine = []
 max_cost_usd_per_hour = 0.0
 max_wallclock_per_hour = "20m"
+
+# Visual-only pass for checking shot detection and thumbnails quickly.
+[policy.visual]
+sample_fps = 1.0
+coarse = ["sample", "shot_boundary", "phash", "thumbnail"]
+fine = []
+max_cost_usd_per_hour = 0.0
+max_wallclock_per_hour = "10m"

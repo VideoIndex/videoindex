@@ -11,11 +11,13 @@
 
 pub mod onnx;
 pub mod phash;
+pub mod shot;
 pub mod thumbnail;
 pub mod vad;
 
 pub use onnx::{Device, OnnxSession};
 pub use phash::{hamming, phash_rgb, PHASH_DEDUP_DISTANCE};
+pub use shot::{FrameSignature, ShotDetector, ShotParams};
 pub use thumbnail::{encode_webp_thumbnail, ThumbnailError};
 pub use vad::{SpeechSegment, Vad};
 

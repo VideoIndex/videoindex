@@ -129,6 +129,8 @@ pub enum Item {
     TranscriptSpan(Arc<vi_core::model::TranscriptSpan>),
     /// Speech audio for ASR.
     SpeechRange(Arc<SpeechItem>),
+    /// A shot segment that has been persisted.
+    Shot(Arc<vi_core::model::Segment>),
 }
 
 impl Item {
@@ -141,6 +143,7 @@ impl Item {
             Item::Thumbnail { .. } => ItemKind::Thumbnail,
             Item::TranscriptSpan(_) => ItemKind::TranscriptSpan,
             Item::SpeechRange(_) => ItemKind::SpeechRange,
+            Item::Shot(_) => ItemKind::Shot,
         }
     }
 }
