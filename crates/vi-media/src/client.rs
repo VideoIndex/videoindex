@@ -36,6 +36,17 @@ pub fn worker_executable(cfg: &WorkerConfig) -> Result<PathBuf> {
     if let Some(p) = std::env::var_os(WORKER_PATH_ENV) {
         return Ok(PathBuf::from(p));
     }
+    // On Linux use the kernel's handle to the running image rather than its
+    // path: a rebuild replaces the binary on disk mid-run and the old path
+    // no longer exists ("failed to spawn .../vi"), while /proc/self/exe
+    // keeps working for the life of the process.
+    #[cfg(target_os = "linux")]
+    {
+        let proc_exe = PathBuf::from("/proc/self/exe");
+        if proc_exe.exists() {
+            return Ok(proc_exe);
+        }
+    }
     Ok(std::env::current_exe()?)
 }
 

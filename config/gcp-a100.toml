@@ -45,6 +45,16 @@ agent_llm = { provider = "claude" }
 vlm_describe = { provider = "claude" }
 extract_llm = { provider = "claude" }
 
+# The built-in coarse_only policy without a wall-clock limit: this machine
+# also builds and tests while it indexes, and a cut-off would skip OCR and
+# embeddings instead of waiting.
+[policy.coarse_only]
+sample_fps = 1.0
+coarse = ["subtitle_import", "vad", "asr", "sample", "shot_boundary", "phash", "thumbnail", "image_embed", "ocr", "text_embed"]
+fine = []
+max_cost_usd_per_hour = 0.0
+max_wallclock_per_hour = "0"
+
 # Coarse pass with speech recognition; the rest of lecture_default lands
 # operator by operator.
 [policy.coarse_asr]

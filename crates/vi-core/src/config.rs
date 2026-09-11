@@ -355,7 +355,11 @@ impl IndexPolicy {
                 .collect(),
             vlm_grid: "3x3".to_string(),
             max_cost_usd_per_hour: 2.0,
-            max_wallclock_per_hour: "20m".to_string(),
+            // The design says 20 min; with ONNX Runtime on the CPU and a
+            // loaded machine the coarse pass alone can take that, and a
+            // wall-clock cut-off skips OCR and embeddings rather than
+            // slowing anything down, so the default is generous.
+            max_wallclock_per_hour: "60m".to_string(),
         }
     }
 
