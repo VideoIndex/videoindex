@@ -1,3 +1,29 @@
+ The download completed properly. All 30 videos are present and intact.
+
+  Counts match the playlists. The AI Engineer playlist ("Full Workshops: AI Engineer World's Fair 2025") lists 19 entries and 19 MP4s were downloaded. The Berkeley playlist ("Agentic AI MOOC Fall 2025") lists 11 and 11 were downloaded. The download
+  archive has 30 entries, so a re-run would fetch nothing.
+
+  Every file probes cleanly. Each MP4 has one video stream at 720p and one audio stream. Durations range from 32 to 162 minutes. No partial, temp, or unmerged fragment files were left behind.
+  
+  ┌─────────┬─────────────┬───────────────┬─────────┐                                                                                                                                     
+  │         │ AI Engineer │ Berkeley MOOC │  Total  │
+  ├─────────┼─────────────┼───────────────┼─────────┤
+  │ Videos  │ 19          │ 11            │ 30      │
+  ├─────────┼─────────────┼───────────────┼─────────┤
+  │ Size    │ 3.6 GB      │ 1.6 GB        │ 5.2 GB  │
+  ├─────────┼─────────────┼───────────────┼─────────┤
+  │ Runtime │ ~23.5 h     │ ~13.0 h       │ ~36.6 h │
+  └─────────┴─────────────┴───────────────┴─────────┘
+
+  Sidecars are complete. Every video has its .info.json plus an English subtitle in two variants: en-orig (auto-generated) and en. Nine of the MOOC videos also have extra caption tracks with odd suffixes like .en-j3PyPqV-e1s.srt. Those are additional
+  caption tracks YouTube exposes and are harmless, but the sidecar importer should pick en first and treat the rest as optional.
+
+  One thing to plan for. This Mac has about 95 GB free with the disk at 90%. The dataset fits, but LVBench at 100 to 150 GB will not without freeing space or pointing OUT_DIR at an external drive.
+
+  You can transfer now with:
+
+  rsync -avP --partial dataset/videos/ azuremc:/data/videoindex/videos/incoming/
+------------------------------------------------------------------------------------------------------------------------
 ● The extra modified file is your paste of my M0 report into docs/vibe_summaries/summaries.md, which I'll leave uncommitted for you. Now pushing the 17 local commits to GitHub as a fast-forward so the new machine can clone them. · summarized
 
 ● Bash(git push origin main 2>&1 | tail -3; git log --oneline origin/main | head -1)
