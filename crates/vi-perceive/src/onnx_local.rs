@@ -36,9 +36,11 @@ pub struct OnnxLocal {
     ocr_model: String,
     device: Device,
     threads: usize,
-    siglip: OnceLock<Arc<siglip::Siglip>>,
-    bge: OnceLock<Arc<bge::TextEmbedder>>,
-    ocr: OnceLock<Arc<ocr::RapidOcr>>,
+    /// Loaded models, shared by every handle the registry hands out so a
+    /// model loads once per process, not once per call.
+    siglip: Arc<OnceLock<Arc<siglip::Siglip>>>,
+    bge: Arc<OnceLock<Arc<bge::TextEmbedder>>>,
+    ocr: Arc<OnceLock<Arc<ocr::RapidOcr>>>,
     load_error: Mutex<Option<String>>,
 }
 
@@ -97,9 +99,9 @@ impl OnnxLocal {
                 .and_then(|v| v.as_integer())
                 .map(|t| t.max(0) as usize)
                 .unwrap_or(default_threads),
-            siglip: OnceLock::new(),
-            bge: OnceLock::new(),
-            ocr: OnceLock::new(),
+            siglip: Arc::new(OnceLock::new()),
+            bge: Arc::new(OnceLock::new()),
+            ocr: Arc::new(OnceLock::new()),
             load_error: Mutex::new(None),
         })
     }
@@ -224,11 +226,10 @@ impl ExternalAdapter for OnnxLocal {
 }
 
 impl OnnxLocal {
-    /// The registry holds the adapter in an `Arc`; the trait objects need
-    /// their own handle, so the adapter keeps a self-reference set at
-    /// construction through [`Self::factory`].
+    /// The registry holds the adapter behind `ExternalAdapter`; trait
+    /// objects need their own `Arc`, so hand out a copy that shares the
+    /// same lazily loaded models (the `OnceLock`s are behind `Arc`s).
     fn shared(&self) -> Arc<OnnxLocal> {
-        // Rebuild a lightweight adapter sharing the loaded models.
         Arc::new(OnnxLocal {
             name: self.name.clone(),
             model_dir: self.model_dir.clone(),
@@ -237,18 +238,9 @@ impl OnnxLocal {
             ocr_model: self.ocr_model.clone(),
             device: self.device,
             threads: self.threads,
-            siglip: match self.siglip.get() {
-                Some(m) => OnceLock::from(m.clone()),
-                None => OnceLock::new(),
-            },
-            bge: match self.bge.get() {
-                Some(m) => OnceLock::from(m.clone()),
-                None => OnceLock::new(),
-            },
-            ocr: match self.ocr.get() {
-                Some(m) => OnceLock::from(m.clone()),
-                None => OnceLock::new(),
-            },
+            siglip: self.siglip.clone(),
+            bge: self.bge.clone(),
+            ocr: self.ocr.clone(),
             load_error: Mutex::new(None),
         })
     }

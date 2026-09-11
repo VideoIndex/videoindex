@@ -20,6 +20,8 @@ sudo apt install ffmpeg pkg-config clang libclang-dev libavcodec-dev libavformat
 brew install ffmpeg pkg-config
 
 cargo build --release
+# with an NVIDIA GPU and CUDA 13 + cuDNN 9 installed (ONNX models on the GPU):
+cargo build --release -p vi-cli --features cuda
 cargo test
 ```
 
