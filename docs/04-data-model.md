@@ -102,6 +102,13 @@ pub trait Storage: Send + Sync {
     async fn put_descriptions(&self, d: &[Description]) -> Result<()>;
     async fn put_embeddings(&self, e: &[Embedding]) -> Result<()>;
     async fn put_provenance(&self, p: &Provenance) -> Result<ProvenanceId>;
+    async fn get_embeddings(&self, model: &str, targets: &[(TargetKind, String)]) -> Result<Vec<Option<Vec<f32>>>>;
+    async fn descriptions(&self, video: VideoId) -> Result<Vec<Description>>;
+    async fn put_entities(&self, e: &[Entity], m: &[EntityMention]) -> Result<()>;
+    async fn entities(&self, video: VideoId) -> Result<Vec<Entity>>;
+    async fn put_events(&self, e: &[Event]) -> Result<()>;
+    async fn events(&self, video: VideoId) -> Result<Vec<Event>>;
+    async fn delete_extractions(&self, video: VideoId) -> Result<u64>;
     // search
     async fn text_search(&self, q: &TextQuery) -> Result<Vec<Hit>>;    // BM25 / FTS
     async fn vector_search(&self, q: &VectorQuery) -> Result<Vec<Hit>>;

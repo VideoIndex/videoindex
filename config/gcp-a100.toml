@@ -43,6 +43,7 @@ image_embed = { provider = "local" }
 text_embed = { provider = "local" }
 agent_llm = { provider = "claude" }
 vlm_describe = { provider = "claude" }
+extract_llm = { provider = "claude" }
 
 # Coarse pass with speech recognition; the rest of lecture_default lands
 # operator by operator.
@@ -60,3 +61,12 @@ coarse = ["sample", "shot_boundary", "phash", "thumbnail", "image_embed", "ocr",
 fine = []
 max_cost_usd_per_hour = 0.0
 max_wallclock_per_hour = "10m"
+
+# Full pass with the fine stages (VLM descriptions and extraction cost money).
+[policy.full]
+sample_fps = 1.0
+coarse = ["subtitle_import", "vad", "asr", "sample", "shot_boundary", "phash", "thumbnail", "image_embed", "ocr"]
+fine = ["scenes", "chapters", "vlm_describe", "entities_events", "text_embed"]
+vlm_grid = "3x3"
+max_cost_usd_per_hour = 3.0
+max_wallclock_per_hour = "30m"

@@ -3406,6 +3406,7 @@ dependencies = [
  "blake3",
  "bytes",
  "chrono",
+ "image",
  "serde",
  "serde_json",
  "tempfile",

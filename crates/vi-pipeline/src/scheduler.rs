@@ -611,10 +611,12 @@ impl Scheduler {
             self.storage.checkpoint(job_id, &state).await?;
         }
 
-        let index_state = if ok {
+        let index_state = if !ok {
+            IndexState::Failed
+        } else if policy.fine.is_empty() {
             IndexState::Coarse
         } else {
-            IndexState::Failed
+            IndexState::Fine
         };
         self.storage.set_index_state(video.id, index_state).await?;
         state.finished = true;

@@ -31,7 +31,7 @@ Done when: the two playlists in `dataset/videolist.md` index to `coarse` unatten
 
 ## M2. Fine index, agent, Python
 
-**Progress 2026-09-11 (GCP machine):** `vi-providers` adapters for `openai_compat` chat and embeddings, `anthropic` and `gemini` (streaming, tools, images, native video for Gemini, cost accounting, price tables, prompt registry) and `vi-agent` (tool-using loop, budgets, citations, sessions, `RetrievalOnlyPolicy`, `vi ask`, `vi view`, `vi timeline`) are done. Remaining: `scenes`, `chapters`, `vlm_describe`, `entities_events` operators, the Python binding, and the QA dev set.
+**Progress 2026-09-11 (GCP machine):** `vi-providers` adapters for `openai_compat` chat and embeddings, `anthropic` and `gemini` (streaming, tools, images, native video for Gemini, cost accounting, price tables, prompt registry) and `vi-agent` (tool-using loop, budgets, citations, sessions, `RetrievalOnlyPolicy`, `vi ask`, `vi view`, `vi timeline`) are done. The fine-pass operators `scenes`, `chapters`, `vlm_describe` and `entities_events` exist and `lecture_default` plans end to end when the roles are bound. Remaining: the Python binding, the QA dev set with answers, and a measured fine-pass run over the dataset.
 
 - Scenes and chapters; VLM describe with frame grids and native video; entities and events; text embeddings.
 - `vi-providers`: gemini, anthropic, openai_compat adapters with capabilities, rate limits, cost accounting, prompt registry.

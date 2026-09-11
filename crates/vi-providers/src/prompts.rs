@@ -20,6 +20,10 @@ pub struct Prompt {
 const BUILTIN: &[(&str, &str)] = &[
     ("agent_system", include_str!("../prompts/agent_system.md")),
     ("vlm_describe", include_str!("../prompts/vlm_describe.md")),
+    (
+        "entities_events",
+        include_str!("../prompts/entities_events.md"),
+    ),
 ];
 
 fn overrides() -> &'static RwLock<BTreeMap<String, String>> {

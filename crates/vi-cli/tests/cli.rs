@@ -194,10 +194,12 @@ fn errors_have_stable_exit_codes() {
         ])
         .output()
         .unwrap();
+    // lecture_default's operators all exist now; without provider roles
+    // the missing role is a provider error (exit 8).
     assert_eq!(
         st.status.code(),
-        Some(6),
-        "unsupported operators exit 6: {}",
+        Some(8),
+        "missing provider role exits 8: {}",
         String::from_utf8_lossy(&st.stderr)
     );
     let st = vi()

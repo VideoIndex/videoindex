@@ -237,8 +237,11 @@ async fn unknown_and_planned_operators_are_clear_errors() {
     let dir = tempfile::tempdir().unwrap();
     let idx = Arc::new(EmbeddedIndex::create(&dir.path().join("t.vidx")).unwrap());
     let sched = Scheduler::new(idx, config(), EventBus::default());
+    // Every operator of the design's default policy exists now; without
+    // provider roles it fails at plan time naming the missing role.
     let err = sched.plan(Some("lecture_default")).unwrap_err();
-    assert!(matches!(err, vi_core::Error::Unsupported(_)), "{err}");
+    assert!(matches!(err, vi_core::Error::Provider(_)), "{err}");
+    assert!(err.to_string().contains("role"), "{err}");
     assert!(sched.plan(Some("does_not_exist")).is_err());
     let (name, _, dag) = sched.plan(None).unwrap();
     assert_eq!(name, "coarse_local");
@@ -485,6 +488,105 @@ async fn budget_exhaustion_skips_provider_calls_and_failures_are_reported() {
     assert_eq!(r2.index_state, IndexState::Failed);
     // subtitle_import still completed and is cached.
     assert_eq!(r2.stages["subtitle_import"].status, StageStatus::Complete);
+}
+
+#[tokio::test]
+async fn scenes_cover_the_video_and_imported_chapters_are_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("videos");
+    let media = seed_incoming(&cache);
+    let idx = Arc::new(EmbeddedIndex::create(&dir.path().join("t.vidx")).unwrap());
+    let mut c = Config::default();
+    c.media.worker.path = Some(fx::worker_path());
+    c.media.sample_max_dim = 320;
+    c.media.cache_dir = cache.clone();
+    // chapters needs a text_embed role bound; imported chapters mean it is
+    // never called, so a model-less local provider is fine.
+    c.providers.insert(
+        "local".into(),
+        vi_core::config::ProviderConfig {
+            adapter: "onnx_local".into(),
+            model_dir: Some(dir.path().join("no-models")),
+            ..Default::default()
+        },
+    );
+    c.roles.insert(
+        "text_embed".into(),
+        vi_core::config::RoleBinding {
+            provider: "local".into(),
+            ..Default::default()
+        },
+    );
+    let mut pol = policy(&[
+        "subtitle_import",
+        "sample",
+        "shot_boundary",
+        "scenes",
+        "chapters",
+    ]);
+    pol.fine = vec![];
+    c.policy.insert("fine".into(), pol);
+    // Add chapters to the sidecar.
+    let info = cache.join("incoming/PLtest/001-fixture.info.json");
+    let mut v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&info).unwrap()).unwrap();
+    v["chapters"] = serde_json::json!([
+        {"start_time": 0.0, "end_time": 60.0, "title": "First half"},
+        {"start_time": 60.0, "end_time": 120.0, "title": "Second half"}
+    ]);
+    std::fs::write(&info, v.to_string()).unwrap();
+    let sched = Scheduler::new(idx.clone(), Arc::new(c), EventBus::default());
+    let r = sched
+        .run(
+            Source::Path(media),
+            JobOptions {
+                policy: Some("fine".into()),
+                ..JobOptions::default()
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(r.ok, "{r:?}");
+    let video = &idx.list_videos().await.unwrap()[0];
+    let scenes = idx
+        .segments(video.id, vi_core::model::SegmentLevel::Scene)
+        .await
+        .unwrap();
+    // The synthetic captions are 15 s spans crossing every 10 s cut, so
+    // transcript continuity merges the shots into few scenes.
+    assert!(!scenes.is_empty() && scenes.len() <= 6, "{scenes:?}");
+    assert_eq!(scenes[0].t0, vi_core::Timestamp::ZERO);
+    for w in scenes.windows(2) {
+        assert_eq!(w[0].t1, w[1].t0, "gap between scenes");
+    }
+    assert!(
+        (scenes[scenes.len() - 1].t1.as_secs_f64() - video.duration.as_secs_f64()).abs() < 1e-6
+    );
+    assert!(
+        scenes
+            .iter()
+            .all(|s| s.t1.as_secs_f64() - s.t0.as_secs_f64() >= 20.0 - 1e-6),
+        "{scenes:?}"
+    );
+    let shots = idx
+        .segments(video.id, vi_core::model::SegmentLevel::Shot)
+        .await
+        .unwrap();
+    assert!(
+        shots.iter().all(|s| s.parent_id.is_some()),
+        "shots point at scenes"
+    );
+    assert!(shots
+        .iter()
+        .all(|s| scenes.iter().any(|sc| Some(sc.id) == s.parent_id)));
+    let chapters = idx
+        .segments(video.id, vi_core::model::SegmentLevel::Chapter)
+        .await
+        .unwrap();
+    assert_eq!(chapters.len(), 2, "imported chapters kept");
+    assert_eq!(chapters[0].title.as_deref(), Some("First half"));
+    assert_eq!(r.stages["chapters"].items_done, 2);
 }
 
 #[tokio::test]

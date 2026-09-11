@@ -402,6 +402,29 @@ impl VectorStore {
             .collect())
     }
 
+    /// Read one stored (normalised) vector by row.
+    pub fn get(&self, model: &str, row: u64) -> Result<Option<Vec<f32>>> {
+        let (vec_path, dim, count) = {
+            let mut tables = self.lock()?;
+            match self.table(&mut tables, model, None)? {
+                Some(t) => (t.vec_path.clone(), t.dim, t.count),
+                None => return Ok(None),
+            }
+        };
+        if row >= count {
+            return Ok(None);
+        }
+        let mut f = File::open(&vec_path)?;
+        f.seek(SeekFrom::Start(HEADER + row * u64::from(dim) * 4))?;
+        let mut buf = vec![0u8; dim as usize * 4];
+        f.read_exact(&mut buf)?;
+        Ok(Some(
+            buf.chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect(),
+        ))
+    }
+
     /// Rewrite a model's files without dead rows. Returns the new row index
     /// of every surviving embedding so the caller can update its metadata.
     pub fn compact_model(&self, model: &str) -> Result<BTreeMap<EmbeddingId, u64>> {
@@ -471,6 +494,12 @@ mod tests {
         assert_eq!(store.append("m", 3, &rows).unwrap(), vec![0, 1, 2, 3]);
         assert_eq!(store.count("m").unwrap(), 4);
         assert_eq!(store.dim("m").unwrap(), Some(3));
+        let v1n = store.get("m", 1).unwrap().unwrap();
+        assert!(
+            (v1n[1] - 1.0).abs() < 1e-6 && v1n[0].abs() < 1e-6,
+            "{v1n:?}"
+        );
+        assert!(store.get("m", 9).unwrap().is_none());
         assert!(!store.is_empty());
 
         let hits = store.search("m", &[1.0, 0.0, 0.0], &[], &[], 10).unwrap();

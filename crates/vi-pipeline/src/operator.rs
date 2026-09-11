@@ -42,6 +42,14 @@ pub enum ItemKind {
     ImageEmbedding,
     /// Text embeddings.
     TextEmbedding,
+    /// Scene segments.
+    Scene,
+    /// Chapter segments.
+    Chapter,
+    /// VLM descriptions.
+    Description,
+    /// Entities and events.
+    Extraction,
 }
 
 /// Input kinds, same enum.
@@ -141,6 +149,12 @@ pub enum Item {
     Shot(Arc<vi_core::model::Segment>),
     /// An OCR span that has been persisted.
     OcrSpan(Arc<vi_core::model::OcrSpan>),
+    /// A scene segment that has been persisted.
+    Scene(Arc<vi_core::model::Segment>),
+    /// A chapter segment that has been persisted.
+    Chapter(Arc<vi_core::model::Segment>),
+    /// A description that has been persisted.
+    Description(Arc<vi_core::model::Description>),
 }
 
 impl Item {
@@ -155,6 +169,9 @@ impl Item {
             Item::SpeechRange(_) => ItemKind::SpeechRange,
             Item::Shot(_) => ItemKind::Shot,
             Item::OcrSpan(_) => ItemKind::OcrSpan,
+            Item::Scene(_) => ItemKind::Scene,
+            Item::Chapter(_) => ItemKind::Chapter,
+            Item::Description(_) => ItemKind::Description,
         }
     }
 }

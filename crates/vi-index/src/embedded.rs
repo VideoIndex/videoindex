@@ -1038,6 +1038,218 @@ impl Storage for EmbeddedIndex {
         .await
     }
 
+    async fn get_embeddings(
+        &self,
+        model: &str,
+        targets: &[(TargetKind, String)],
+    ) -> Result<Vec<Option<Vec<f32>>>> {
+        let model = model.to_string();
+        let targets = targets.to_vec();
+        let vectors = self.vectors.clone();
+        self.with_conn(move |c| {
+            let mut st = c.prepare_cached(
+                "SELECT row FROM embeddings WHERE model = ?1 AND target_kind = ?2 AND target_id = ?3",
+            )?;
+            let mut out = Vec::with_capacity(targets.len());
+            for (kind, id) in &targets {
+                let row: Option<Option<i64>> = st
+                    .query_row(params![model, kind.as_str(), id], |r| r.get(0))
+                    .optional()?;
+                out.push(match row.flatten() {
+                    Some(r) if r >= 0 => vectors.get(&model, r as u64)?,
+                    _ => None,
+                });
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    async fn descriptions(&self, video: VideoId) -> Result<Vec<Description>> {
+        self.with_conn(move |c| {
+            let vid = video.to_string();
+            let mut st = c.prepare_cached(
+                "SELECT d.* FROM descriptions d
+                 LEFT JOIN segments seg ON seg.id = d.target_id AND d.target_kind = 'segment'
+                 LEFT JOIN frame_samples f ON f.id = d.target_id AND d.target_kind = 'frame'
+                 LEFT JOIN tracks tr ON tr.id = f.track_id
+                 WHERE seg.video_id = ?1 OR tr.video_id = ?1
+                 ORDER BY COALESCE(seg.t0_secs, f.t_secs)",
+            )?;
+            let rows = st
+                .query_map([vid], |r| Ok(description_from_row(r)))?
+                .map(|r| r?)
+                .collect::<Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn put_entities(&self, entities: &[Entity], mentions: &[EntityMention]) -> Result<()> {
+        let entities = entities.to_vec();
+        let mentions = mentions.to_vec();
+        self.with_conn(move |c| {
+            let tx = c.unchecked_transaction()?;
+            {
+                let mut st = tx.prepare_cached(
+                    "INSERT INTO entities(id, video_id, kind, name, canonical_name, attributes) VALUES (?1,?2,?3,?4,?5,?6)
+                     ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, name = excluded.name, canonical_name = excluded.canonical_name, attributes = excluded.attributes",
+                )?;
+                for e in &entities {
+                    st.execute(params![
+                        e.id.to_string(),
+                        e.video_id.to_string(),
+                        e.kind.as_str(),
+                        e.name,
+                        e.canonical_name,
+                        serde_json::to_string(&e.attributes)?,
+                    ])?;
+                    tx.execute("DELETE FROM entity_mentions WHERE entity_id = ?1", [e.id.to_string()])?;
+                }
+                let mut st = tx.prepare_cached(
+                    "INSERT INTO entity_mentions(entity_id, t0_num, t0_den, t0_secs, t1_num, t1_den, t1_secs, source_kind, source_id, confidence)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                )?;
+                for m in &mentions {
+                    st.execute(params![
+                        m.entity_id.to_string(),
+                        m.t0.num,
+                        m.t0.den,
+                        m.t0.as_secs_f64(),
+                        m.t1.num,
+                        m.t1.den,
+                        m.t1.as_secs_f64(),
+                        m.source_kind,
+                        m.source_id,
+                        m.confidence,
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn entities(&self, video: VideoId) -> Result<Vec<Entity>> {
+        self.with_conn(move |c| {
+            let mut st = c.prepare_cached(
+                "SELECT id, video_id, kind, name, canonical_name, attributes FROM entities WHERE video_id = ?1 ORDER BY canonical_name",
+            )?;
+            let rows = st
+                .query_map([video.to_string()], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, String>(5)?,
+                    ))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let mut out = Vec::with_capacity(rows.len());
+            for (id, vid, kind, name, canonical, attrs) in rows {
+                out.push(Entity {
+                    id: parse_id(id, "entity")?,
+                    video_id: parse_id(vid, "video")?,
+                    kind: match kind.as_str() {
+                        "person" => EntityKind::Person,
+                        "object" => EntityKind::Object,
+                        "text" => EntityKind::Text,
+                        "place" => EntityKind::Place,
+                        _ => EntityKind::Concept,
+                    },
+                    name,
+                    canonical_name: canonical,
+                    attributes: serde_json::from_str(&attrs).unwrap_or(serde_json::Value::Null),
+                });
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    async fn put_events(&self, events: &[vi_core::model::Event]) -> Result<()> {
+        let events = events.to_vec();
+        self.with_conn(move |c| {
+            let tx = c.unchecked_transaction()?;
+            {
+                let mut st = tx.prepare_cached(
+                    "INSERT INTO events(id, video_id, t0_num, t0_den, t0_secs, t1_num, t1_den, t1_secs, text, participants, provenance_id)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+                     ON CONFLICT(id) DO UPDATE SET text = excluded.text, participants = excluded.participants, provenance_id = excluded.provenance_id",
+                )?;
+                for e in &events {
+                    st.execute(params![
+                        e.id.to_string(),
+                        e.video_id.to_string(),
+                        e.t0.num,
+                        e.t0.den,
+                        e.t0.as_secs_f64(),
+                        e.t1.num,
+                        e.t1.den,
+                        e.t1.as_secs_f64(),
+                        e.text,
+                        serde_json::to_string(&e.participants.iter().map(|p| p.to_string()).collect::<Vec<_>>())?,
+                        e.provenance_id.to_string(),
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn events(&self, video: VideoId) -> Result<Vec<vi_core::model::Event>> {
+        self.with_conn(move |c| {
+            let mut st = c.prepare_cached(
+                "SELECT id, video_id, t0_num, t0_den, t1_num, t1_den, text, participants, provenance_id FROM events WHERE video_id = ?1 ORDER BY t0_secs",
+            )?;
+            let rows = st
+                .query_map([video.to_string()], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, i64>(3)?,
+                        r.get::<_, i64>(4)?,
+                        r.get::<_, i64>(5)?,
+                        r.get::<_, String>(6)?,
+                        r.get::<_, String>(7)?,
+                        r.get::<_, String>(8)?,
+                    ))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let mut out = Vec::with_capacity(rows.len());
+            for (id, vid, a, b, c2, d, text, parts, prov) in rows {
+                let participants: Vec<String> = serde_json::from_str(&parts).unwrap_or_default();
+                out.push(vi_core::model::Event {
+                    id: parse_id(id, "event")?,
+                    video_id: parse_id(vid, "video")?,
+                    t0: ts(a, b),
+                    t1: ts(c2, d),
+                    text,
+                    participants: participants.iter().filter_map(|p| EntityId::parse(p).ok()).collect(),
+                    provenance_id: parse_id(prov, "provenance")?,
+                });
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    async fn delete_extractions(&self, video: VideoId) -> Result<u64> {
+        self.with_conn(move |c| {
+            let vid = video.to_string();
+            let a = c.execute("DELETE FROM entities WHERE video_id = ?1", [&vid])?;
+            let b = c.execute("DELETE FROM events WHERE video_id = ?1", [&vid])?;
+            Ok((a + b) as u64)
+        })
+        .await
+    }
+
     async fn text_search(&self, q: &TextQuery) -> Result<Vec<Hit>> {
         let q = q.clone();
         self.with_conn(move |c| {

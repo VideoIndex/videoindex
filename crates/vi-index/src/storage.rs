@@ -205,6 +205,26 @@ pub trait Storage: Send + Sync {
     async fn put_embeddings(&self, e: &[Embedding]) -> Result<()>;
     /// Insert a provenance row.
     async fn put_provenance(&self, p: &Provenance) -> Result<ProvenanceId>;
+    /// Stored vectors for targets under one model, in the order given
+    /// (`None` where no embedding exists).
+    async fn get_embeddings(
+        &self,
+        model: &str,
+        targets: &[(TargetKind, String)],
+    ) -> Result<Vec<Option<Vec<f32>>>>;
+    /// Descriptions of a video's segments and frames, by time.
+    async fn descriptions(&self, video: VideoId) -> Result<Vec<Description>>;
+    /// Insert or replace entities with their mentions (mentions of the
+    /// given entities are replaced).
+    async fn put_entities(&self, entities: &[Entity], mentions: &[EntityMention]) -> Result<()>;
+    /// Entities of a video.
+    async fn entities(&self, video: VideoId) -> Result<Vec<Entity>>;
+    /// Insert or replace events.
+    async fn put_events(&self, events: &[vi_core::model::Event]) -> Result<()>;
+    /// Events of a video, by time.
+    async fn events(&self, video: VideoId) -> Result<Vec<vi_core::model::Event>>;
+    /// Remove a video's entities (and mentions) and events, before a re-run.
+    async fn delete_extractions(&self, video: VideoId) -> Result<u64>;
 
     // ---- search ----------------------------------------------------------
 

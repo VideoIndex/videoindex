@@ -107,7 +107,11 @@ impl Operator for TextEmbed {
     }
 
     fn inputs(&self) -> &[InputKind] {
-        &[ItemKind::TranscriptSpan, ItemKind::OcrSpan]
+        &[
+            ItemKind::TranscriptSpan,
+            ItemKind::OcrSpan,
+            ItemKind::Description,
+        ]
     }
 
     fn outputs(&self) -> &[OutputKind] {
@@ -115,7 +119,11 @@ impl Operator for TextEmbed {
     }
 
     fn optional_inputs(&self) -> &[InputKind] {
-        &[ItemKind::TranscriptSpan, ItemKind::OcrSpan]
+        &[
+            ItemKind::TranscriptSpan,
+            ItemKind::OcrSpan,
+            ItemKind::Description,
+        ]
     }
 
     fn required_roles(&self) -> &[&'static str] {
@@ -150,6 +158,12 @@ impl Operator for TextEmbed {
                 s.t0,
             ),
             Item::OcrSpan(s) => (TargetKind::OcrSpan, s.id.to_string(), s.text.clone(), s.t),
+            Item::Description(d) => (
+                TargetKind::Description,
+                d.id.to_string(),
+                d.text.clone(),
+                vi_core::Timestamp::ZERO,
+            ),
             Item::Media(_) => return Ok(OpOutput::default()),
             _ => return Err(ctx.err("expected a transcript or OCR span")),
         };
