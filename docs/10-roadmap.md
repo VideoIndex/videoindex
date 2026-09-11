@@ -25,7 +25,7 @@ Done when: `vi index` on a 1-hour MP4 produces an index directory with thumbnail
 
 Done when: the two playlists in `dataset/videolist.md` index to `coarse` unattended, and `vi search` answers transcript, OCR, and visual queries with correct timestamps on the 50-question dev set's retrieval subset.
 
-**Progress 2026-09-11:** `LocalFile` sidecar import (`.info.json`, `.srt`, `.vtt`), the content-addressed media cache move from `incoming/`, chapter import, the `subtitle_import` operator, directory expansion, and the `YtDlp` acquirer with playlist expansion are done. Remaining: `Http` and `ObjectStore` acquirers, VAD, ASR, ShotBoundary, ImageEmbed, OCR, Lance vectors, hybrid search with RRF and temporal fusion, budgets, `vi search`.
+**Progress 2026-09-11:** `LocalFile` sidecar import (`.info.json`, `.srt`, `.vtt`), the content-addressed media cache move from `incoming/`, chapter import, the `subtitle_import` operator, directory expansion, and the `YtDlp` acquirer with playlist expansion are done. `vi search` exists over the text index (BM25 per kind, RRF, chapter grouping, thumbnails). Remaining: `Http` and `ObjectStore` acquirers, VAD, ASR, ShotBoundary, ImageEmbed, OCR, Lance vectors and vector search in the fusion, budgets.
 
 ## M2. Fine index, agent, Python
 

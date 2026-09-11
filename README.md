@@ -32,6 +32,7 @@ vi init ./talks.vidx
 vi index ./talks.vidx talk.mp4 [more.mp4]  # subtitles/chapters from sidecars, 1 fps samples, pHash, thumbnails
 vi index ./talks.vidx /data/videoindex/videos/incoming/   # a directory: every video in it
 vi index ./talks.vidx "https://www.youtube.com/playlist?list=..."   # via yt-dlp, where YouTube is reachable
+vi search ./talks.vidx "hybrid retrieval"  # BM25 over captions/OCR/descriptions, grouped by chapter
 vi status ./talks.vidx                     # videos, states, sample counts, sizes, jobs
 ```
 

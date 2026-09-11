@@ -1,5 +1,5 @@
 //! The `vi` binary. See `docs/09-sdk-and-apis.md` for the command surface.
-//! M0 ships `init`, `probe`, `index`, `status`, `doctor`.
+//! M0 shipped `init`, `probe`, `index`, `status`, `doctor`; M1 adds `search`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
@@ -40,6 +40,8 @@ enum Command {
     Probe(cmd::probe::Args),
     /// Index one or more local video files into an index directory.
     Index(cmd::index::Args),
+    /// Full-text search over transcripts, on-screen text and descriptions.
+    Search(cmd::search::Args),
     /// Show videos, states, sample counts, sizes, and jobs of an index.
     Status(cmd::status::Args),
     /// Report machine facts: CPU, RAM, GPU, disks, toolchain, network paths.
@@ -114,6 +116,7 @@ fn run() -> Result<()> {
             Command::Init(a) => cmd::init::run(a, &config, &out).await,
             Command::Probe(a) => cmd::probe::run(a, &config, &out).await,
             Command::Index(a) => cmd::index::run(a, config, &out).await,
+            Command::Search(a) => cmd::search::run(a, &config, &out).await,
             Command::Status(a) => cmd::status::run(a, &config, &out).await,
             Command::Doctor(a) => cmd::doctor::run(a, &config, &out).await,
         }

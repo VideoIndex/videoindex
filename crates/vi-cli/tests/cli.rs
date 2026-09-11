@@ -83,6 +83,65 @@ fn init_index_status_roundtrip() {
 }
 
 #[test]
+fn search_over_sidecar_subtitles() {
+    let dir = tempfile::tempdir().unwrap();
+    let media_dir = dir.path().join("in");
+    std::fs::create_dir_all(&media_dir).unwrap();
+    let media = media_dir.join("talk.mp4");
+    std::fs::copy(fx::fixture_path(), &media).unwrap();
+    std::fs::write(
+        media_dir.join("talk.info.json"),
+        r#"{"title":"CLI talk","webpage_url":"https://example.org/talk","subtitles":{"en":[]}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        media_dir.join("talk.en.srt"),
+        "1\n00:00:30,000 --> 00:00:34,000\nthe quick brown fox mentions retrieval\n\n",
+    )
+    .unwrap();
+    let idx = dir.path().join("s.vidx");
+    let idx_s = idx.to_str().unwrap();
+    let (ok, _, err) = run(&[
+        "index",
+        idx_s,
+        media_dir.to_str().unwrap(),
+        "--policy",
+        "coarse_local",
+        "--fps",
+        "1",
+    ]);
+    assert!(ok, "{err}");
+
+    let (ok, out, err) = run(&["search", idx_s, "brown fox"]);
+    assert!(ok, "{err}");
+    assert!(out.contains("CLI talk"), "{out}");
+    assert!(out.contains("00:00:30.000"), "{out}");
+    assert!(out.contains("thumbnail blob:"), "{out}");
+
+    let (ok, out, _) = run(&[
+        "--json",
+        "search",
+        idx_s,
+        "retriev",
+        "--kind",
+        "transcript",
+        "-k",
+        "3",
+    ]);
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["hits"].as_array().unwrap().len(), 1);
+    assert_eq!(v["hits"][0]["evidence"][0]["kind"], "transcript");
+    assert_eq!(v["index_state"], "coarse");
+
+    let (ok, out, _) = run(&["search", idx_s, "nothing matches this"]);
+    assert!(ok);
+    assert!(out.contains("no results"));
+    let (ok, _, err) = run(&["search", idx_s, "x", "--kind", "bogus"]);
+    assert!(!ok && err.contains("unknown kind"));
+}
+
+#[test]
 fn probe_and_doctor() {
     let (ok, out, err) = run(&["--json", "probe", fx::fixture_path().to_str().unwrap()]);
     assert!(ok, "{err}");

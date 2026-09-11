@@ -18,6 +18,7 @@ vi-media = { workspace = true }
 vi-index = { workspace = true }
 vi-pipeline = { workspace = true }
 vi-perceive = { workspace = true }
+vi-query = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }

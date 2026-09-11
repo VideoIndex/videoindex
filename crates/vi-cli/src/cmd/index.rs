@@ -188,8 +188,14 @@ pub async fn run(args: Args, mut config: Config, out: &Output) -> Result<()> {
         use vi_index::Storage;
         idx.compact().await?;
     }
+    // Close the event bus so the printer drains and exits on its own.
     drop(sched);
-    printer.abort();
+    if tokio::time::timeout(std::time::Duration::from_secs(2), printer)
+        .await
+        .is_err()
+    {
+        tracing::debug!("progress printer did not drain in time");
+    }
 
     let elapsed = started.elapsed().as_secs_f64();
     out.emit(&reports, || {

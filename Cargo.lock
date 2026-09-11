@@ -1525,6 +1525,7 @@ dependencies = [
  "vi-media",
  "vi-perceive",
  "vi-pipeline",
+ "vi-query",
  "vi-testkit",
  "which",
 ]
@@ -1626,7 +1627,14 @@ dependencies = [
 name = "vi-query"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
  "vi-core",
+ "vi-index",
 ]
 
 [[package]]

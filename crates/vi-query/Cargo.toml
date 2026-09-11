@@ -1,6 +1,6 @@
 [package]
 name = "vi-query"
-description = "VideoIndex hybrid retrieval, temporal fusion, tool primitives"
+description = "VideoIndex retrieval: hybrid search, temporal fusion, tool primitives"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,15 @@ authors.workspace = true
 
 [dependencies]
 vi-core = { workspace = true }
+vi-index = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = { workspace = true }
+chrono = { workspace = true }
 
 [lints]
 workspace = true
