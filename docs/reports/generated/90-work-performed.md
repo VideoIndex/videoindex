@@ -1,13 +1,13 @@
 # Work performed
 
-This chapter is generated from the repository at build time (2026-09-12). The project has 64 commits between 2026-09-10 and 2026-09-12; the Rust workspace holds 31,968 lines of library and binary source plus 3,331 lines of tests, examples and Python, with 159 automated tests.
+This chapter is generated from the repository at build time (2026-09-12). The project has 68 commits between 2026-09-10 and 2026-09-12; the Rust workspace holds 31,968 lines of library and binary source plus 3,331 lines of tests, examples and Python, with 159 automated tests.
 
 ## Commits by type
 
 | Type | Commits | Meaning |
 |---|---|---|
-| `feat` | 25 | Features |
-| `docs` | 16 | Documentation |
+| `feat` | 26 | Features |
+| `docs` | 19 | Documentation |
 | `fix` | 11 | Fixes |
 | `other` | 4 |  |
 | `chore` | 4 | Chores |
@@ -108,3 +108,7 @@ Conventional-commit subjects, oldest first. Scopes name the crates a change touc
 - **docs** `results`: LVBench pilot over 17 videos: agent 68%, retrieval-only 50%, uniform-32 52% (`30d5328`)
 - **docs** `report`: team report covers M3/M4 progress, the eval harness and the results pages (`7b0d30e`)
 - **fix** `entities_events`: repair trailing commas in extraction JSON; record the dataset fine pass (5 h 8 min, $45.96) (`d06d052`)
+- **docs**: fine index vs coarse index on the dev set; reports regenerated with M3/M4 progress and LVBench pilot (`f2891ca`)
+- **docs** `roadmap`: fine pass measured (`a7ba8da`)
+- **feat** `eval`: fraction-based stratified sampling drawn from the whole benchmark, matrix runner (eval.run), sample-scoped acquisition, MINERVA config (`6e4888a`)
+- **docs** `results`: LVBench 25% sample, interim pass (140/387 questions): agent 65.0%, retrieval-only 52.1%, uniform-32 57.1% (`ece9e0d`)
