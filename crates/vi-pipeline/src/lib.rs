@@ -11,6 +11,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+pub mod callback;
 pub mod dag;
 pub mod operator;
 pub mod ops;
@@ -21,4 +22,4 @@ pub use operator::{
     Budget, CostEstimate, Emitter, FrameItem, InputSummary, Item, ItemKind, MediaItem, OpContext,
     OpInput, OpOutput, Operator, SpeechItem, StageFailures,
 };
-pub use scheduler::{JobOptions, JobReport, Scheduler};
+pub use scheduler::{JobOptions, JobReport, OperatorFactory, Scheduler};

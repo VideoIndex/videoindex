@@ -40,10 +40,12 @@ grid  = idx.view(video_id, t0=1830, t1=1860, fps=1).image   # PIL-compatible
 # extension points
 @vi.operator(id="my_captioner", version=1, inputs=["scene"], outputs=["description"])
 def my_captioner(ctx, scene):
-    ...
+    ...                                        # returns row dicts; the core stores them
+idx.register_operator(my_captioner)
+idx.add(url, policy={"coarse": [...], "fine": ["scenes", "my_captioner"]})   # inline policy
 
 class MyPolicy(vi.Policy):
-    def next_step(self, state): ...
+    def next_step(self, state): ...            # {"tool": name, "args": {...}} or None
 idx.ask("...", policy=MyPolicy())
 
 vi.prompts.override("vlm_describe", open("my_prompt.md").read())

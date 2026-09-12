@@ -1,4 +1,4 @@
-from typing import Any, AsyncIterator, Iterator, Optional, Sequence
+from typing import Any, AsyncIterator, Iterator, Mapping, Optional, Sequence, Union
 
 def version() -> str: ...
 def override_prompt(name: str, text: str) -> None: ...
@@ -45,7 +45,14 @@ class Index:
     def configure(self, config: Config) -> None: ...
     @property
     def path(self) -> str: ...
-    def add(self, source: str, policy: Optional[str] = None, force: bool = False) -> Job: ...
+    def add(
+        self,
+        source: str,
+        policy: Optional[Union[str, Mapping[str, Any]]] = None,
+        force: bool = False,
+    ) -> Job: ...
+    def register_operator(self, op: Any) -> None: ...
+    def operators(self) -> list[str]: ...
     def search(
         self,
         query: str,
@@ -60,7 +67,7 @@ class Index:
         budget: Optional[Budget] = None,
         videos: Optional[Sequence[str]] = None,
         session_id: Optional[str] = None,
-        policy: str = "agent",
+        policy: Optional[Union[str, Any]] = None,
     ) -> AskStream: ...
     def aask(
         self,
@@ -68,7 +75,7 @@ class Index:
         budget: Optional[Budget] = None,
         videos: Optional[Sequence[str]] = None,
         session_id: Optional[str] = None,
-        policy: str = "agent",
+        policy: Optional[Union[str, Any]] = None,
     ) -> AsyncIterator[dict[str, Any]]: ...
     def view(self, video_id: str, t0: float, t1: float, fps: float = 1.0, cols: int = 3) -> dict[str, Any]: ...
     def frame(self, video_id: str, t: float, max_dim: int = 640) -> Any: ...

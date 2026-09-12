@@ -18,6 +18,9 @@ use vi_core::config::Config as CoreConfig;
 use vi_core::{EventBus, VideoId};
 use vi_index::{EmbeddedIndex, Kind, Storage};
 use vi_pipeline::{JobOptions, Scheduler};
+
+mod callback;
+use callback::{PyOperatorSpec, PyPolicy};
 use vi_providers::ProviderRegistry;
 
 fn runtime() -> &'static tokio::runtime::Runtime {
@@ -93,6 +96,47 @@ fn flatten_timestamps(v: &mut serde_json::Value) {
         serde_json::Value::Array(a) => a.iter_mut().for_each(flatten_timestamps),
         _ => {}
     }
+}
+
+/// `policy=` for `add`: a policy name, or a dict defining one inline
+/// (`{"coarse": [...], "fine": [...], "sample_fps": 1.0, "name": "..."}`).
+fn parse_policy(
+    policy: Option<Bound<'_, PyAny>>,
+) -> PyResult<(Option<String>, Option<vi_core::config::IndexPolicy>)> {
+    let Some(p) = policy else {
+        return Ok((None, None));
+    };
+    if let Ok(name) = p.extract::<String>() {
+        return Ok((Some(name), None));
+    }
+    let d = p.cast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("policy must be a name or a dict with coarse/fine operator lists")
+    })?;
+    let mut v = callback::py_to_json(d.as_any())?;
+    let name = v
+        .as_object_mut()
+        .and_then(|m| m.remove("name"))
+        .and_then(|n| n.as_str().map(str::to_string))
+        .unwrap_or_else(|| "inline".to_string());
+    // Unset fields take the defaults of an empty policy: no operators
+    // rather than `lecture_default`'s full list.
+    let base = vi_core::config::IndexPolicy {
+        coarse: Vec::new(),
+        fine: Vec::new(),
+        ..vi_core::config::IndexPolicy::default()
+    };
+    let mut merged = serde_json::to_value(&base).map_err(err)?;
+    match (&mut merged, v) {
+        (serde_json::Value::Object(m), serde_json::Value::Object(given)) => {
+            for (k, x) in given {
+                m.insert(k, x);
+            }
+        }
+        _ => return Err(PyValueError::new_err("policy dict must be a mapping")),
+    }
+    let inline: vi_core::config::IndexPolicy = serde_json::from_value(merged)
+        .map_err(|e| PyValueError::new_err(format!("bad inline policy: {e}")))?;
+    Ok((Some(name), Some(inline)))
 }
 
 fn parse_videos(videos: Option<Vec<String>>) -> PyResult<Vec<VideoId>> {
@@ -383,6 +427,7 @@ struct Index {
     storage: Arc<EmbeddedIndex>,
     config: Mutex<Arc<CoreConfig>>,
     providers: Mutex<Arc<ProviderRegistry>>,
+    operators: Mutex<Vec<Arc<PyOperatorSpec>>>,
     path: String,
 }
 
@@ -405,6 +450,7 @@ impl Index {
             storage: Arc::new(storage),
             providers: Mutex::new(Self::make_providers(&config)),
             config: Mutex::new(config),
+            operators: Mutex::new(Vec::new()),
             path: path.to_string(),
         })
     }
@@ -423,22 +469,39 @@ impl Index {
             .unwrap_or_else(|p| p.into_inner().clone())
     }
 
+    fn operator_specs(&self) -> Vec<Arc<PyOperatorSpec>> {
+        self.operators
+            .lock()
+            .map(|o| o.clone())
+            .unwrap_or_else(|p| p.into_inner().clone())
+    }
+
     fn ask_stream(
         &self,
         question: String,
         budget: Option<&Budget>,
         videos: Option<Vec<String>>,
         session_id: Option<String>,
-        policy: &str,
+        policy: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<AskStream> {
         let videos = parse_videos(videos)?;
         let mut agent = Agent::new(self.storage.clone(), self.prov(), self.cfg());
         match policy {
-            "agent" => {}
-            "retrieval-only" | "retrieval_only" => {
-                agent = agent.with_policy(Arc::new(RetrievalOnlyPolicy { k: 8 }))
+            None => {}
+            Some(p) if p.is_instance_of::<pyo3::types::PyString>() => {
+                match p.extract::<String>()?.as_str() {
+                    "agent" => {}
+                    "retrieval-only" | "retrieval_only" => {
+                        agent = agent.with_policy(Arc::new(RetrievalOnlyPolicy { k: 8 }))
+                    }
+                    other => {
+                        return Err(PyValueError::new_err(format!(
+                            "unknown policy '{other}'; use 'agent', 'retrieval_only' or an object with next_step(state)"
+                        )))
+                    }
+                }
             }
-            other => return Err(PyValueError::new_err(format!("unknown policy '{other}'"))),
+            Some(p) => agent = agent.with_policy(Arc::new(PyPolicy::new(p)?)),
         }
         let req = AskRequest {
             question,
@@ -495,13 +558,19 @@ impl Index {
         &self,
         py: Python<'_>,
         source: &str,
-        policy: Option<String>,
+        policy: Option<Bound<'_, PyAny>>,
         force: bool,
     ) -> PyResult<Job> {
         let config = self.cfg();
         let events = EventBus::default();
         let rx = events.subscribe();
-        let sched = Scheduler::with_providers(self.storage.clone(), config, events, self.prov());
+        let mut sched =
+            Scheduler::with_providers(self.storage.clone(), config, events, self.prov());
+        for spec in self.operator_specs() {
+            let s = spec.clone();
+            sched.register_operator(spec.name(), Arc::new(move |_cfg| s.instantiate()));
+        }
+        let (policy, inline_policy) = parse_policy(policy)?;
         let cancel = CancellationToken::new();
         let report: Arc<Mutex<Option<PyResult<serde_json::Value>>>> = Arc::new(Mutex::new(None));
         let src = vi_media::Source::parse(source);
@@ -520,6 +589,7 @@ impl Index {
                                     JobOptions {
                                         policy: policy.clone(),
                                         force,
+                                        inline_policy: inline_policy.clone(),
                                         ..JobOptions::default()
                                     },
                                     cancel2.clone(),
@@ -549,6 +619,26 @@ impl Index {
             handle: Mutex::new(Some(handle)),
             cancel,
         })
+    }
+
+    /// Register a Python operator for this index's jobs. The object needs
+    /// `id`, `inputs`, `outputs` and `run(ctx, item)`; optional `version`,
+    /// `optional_inputs`, `params`, `finish(ctx)`. Policies then name it
+    /// like a built-in operator.
+    fn register_operator(&self, op: &Bound<'_, PyAny>) -> PyResult<()> {
+        let spec = PyOperatorSpec::from_object(op)?;
+        let mut ops = self.operators.lock().unwrap_or_else(|p| p.into_inner());
+        ops.retain(|o| o.name() != spec.name());
+        ops.push(spec);
+        Ok(())
+    }
+
+    /// Names of registered Python operators.
+    fn operators(&self) -> Vec<String> {
+        self.operator_specs()
+            .iter()
+            .map(|s| s.name().to_string())
+            .collect()
     }
 
     /// Hybrid search. Returns hit dicts.
@@ -592,14 +682,14 @@ impl Index {
     }
 
     /// Ask a question; iterate the returned stream for events.
-    #[pyo3(signature = (question, budget = None, videos = None, session_id = None, policy = "agent"))]
+    #[pyo3(signature = (question, budget = None, videos = None, session_id = None, policy = None))]
     fn ask(
         &self,
         question: &str,
         budget: Option<Budget>,
         videos: Option<Vec<String>>,
         session_id: Option<String>,
-        policy: &str,
+        policy: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<AskStream> {
         self.ask_stream(
             question.to_string(),
@@ -611,14 +701,14 @@ impl Index {
     }
 
     /// Ask a question; `async for ev in idx.aask(...)`.
-    #[pyo3(signature = (question, budget = None, videos = None, session_id = None, policy = "agent"))]
+    #[pyo3(signature = (question, budget = None, videos = None, session_id = None, policy = None))]
     fn aask(
         &self,
         question: &str,
         budget: Option<Budget>,
         videos: Option<Vec<String>>,
         session_id: Option<String>,
-        policy: &str,
+        policy: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<AskStream> {
         self.ask_stream(
             question.to_string(),

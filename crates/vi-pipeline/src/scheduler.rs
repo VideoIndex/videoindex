@@ -2,7 +2,7 @@
 //! policy, run operators as tokio tasks joined by bounded channels, checkpoint
 //! every stage, emit progress events.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -35,7 +35,15 @@ pub struct JobOptions {
     pub resume: bool,
     /// Ignore the operator output cache and re-run every stage.
     pub force: bool,
+    /// A policy supplied by the caller instead of one named in the config
+    /// (Python-defined policies). `policy` then only names it in reports.
+    pub inline_policy: Option<IndexPolicy>,
 }
+
+/// Builds an operator the config does not know about: the extension point
+/// for operators implemented in Python or JS, or registered by an embedding
+/// application. Called once per job.
+pub type OperatorFactory = Arc<dyn Fn(&Config) -> Box<dyn Operator> + Send + Sync>;
 
 /// Budget outcome for a job.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -80,6 +88,7 @@ pub struct Scheduler {
     config: Arc<Config>,
     events: EventBus,
     providers: Arc<ProviderRegistry>,
+    custom: HashMap<String, OperatorFactory>,
 }
 
 impl std::fmt::Debug for Scheduler {
@@ -112,7 +121,20 @@ impl Scheduler {
             config,
             events,
             providers,
+            custom: HashMap::new(),
         }
+    }
+
+    /// Register an operator built outside this crate under the name policies
+    /// use for it. A custom operator with a built-in operator's name replaces
+    /// the built-in one, which is how an experiment swaps one stage.
+    pub fn register_operator(&mut self, name: impl Into<String>, factory: OperatorFactory) {
+        self.custom.insert(name.into(), factory);
+    }
+
+    /// Names of registered custom operators.
+    pub fn custom_operators(&self) -> impl Iterator<Item = &str> {
+        self.custom.keys().map(String::as_str)
     }
 
     /// The provider registry.
@@ -127,13 +149,33 @@ impl Scheduler {
 
     /// Resolve the policy and build the operator DAG for it, without running.
     pub fn plan(&self, policy_name: Option<&str>) -> Result<(String, IndexPolicy, Dag)> {
-        let name = policy_name
-            .map(str::to_string)
-            .unwrap_or_else(|| self.config.resolve_default_policy());
-        let policy = self.config.policy(&name)?.clone();
+        self.plan_with(policy_name, None)
+    }
+
+    /// Like [`Self::plan`], with an inline policy taking precedence over the
+    /// config's named ones.
+    pub fn plan_with(
+        &self,
+        policy_name: Option<&str>,
+        inline: Option<&IndexPolicy>,
+    ) -> Result<(String, IndexPolicy, Dag)> {
+        let (name, policy) = match inline {
+            Some(p) => (policy_name.unwrap_or("inline").to_string(), p.clone()),
+            None => {
+                let name = policy_name
+                    .map(str::to_string)
+                    .unwrap_or_else(|| self.config.resolve_default_policy());
+                let policy = self.config.policy(&name)?.clone();
+                (name, policy)
+            }
+        };
         let mut operators = Vec::new();
         for op_name in policy.operators() {
-            match ops::build(op_name, &self.config) {
+            let built = match self.custom.get(op_name) {
+                Some(factory) => Some(factory(&self.config)),
+                None => ops::build(op_name, &self.config),
+            };
+            match built {
                 Some(op) => operators.push(op),
                 None if ops::PLANNED.contains(&op_name) => {
                     return Err(Error::Unsupported(format!(
@@ -266,7 +308,8 @@ impl Scheduler {
     ) -> Result<JobReport> {
         let started = Instant::now();
         let job_id = JobId::new();
-        let (policy_name, policy, dag) = self.plan(opts.policy.as_deref())?;
+        let (policy_name, policy, dag) =
+            self.plan_with(opts.policy.as_deref(), opts.inline_policy.as_ref())?;
 
         self.events.emit(Event::JobStarted {
             job: job_id,

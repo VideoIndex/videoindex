@@ -86,7 +86,7 @@ flowchart TB
 ```
 
 - **Native** implementations cover everything needed for the CLI and server to work alone.
-- **Callback** implementations let a Python or JS function stand in for a trait method. Good for prompts, policies, and light custom logic. The bridge marshals typed structs (serde on the Rust side, dataclasses / TypeScript interfaces on the other).
+- **Callback** implementations let a Python or JS function stand in for a trait method. Good for prompts, policies, and light custom logic. The bridge marshals typed structs (serde on the Rust side, dataclasses / TypeScript interfaces on the other). The language-neutral half lives in `vi_pipeline::callback`: items become JSON objects with a `kind` tag (pixels and audio samples are attached by the binding as native arrays), and rows come back as JSON (`CallbackRow`: transcript span, OCR span, shot, scene, chapter, description) that the core turns into stored rows with ids and provenance before emitting them downstream. `Scheduler::register_operator` adds the operator under a name policies can use, replacing a built-in one of the same name; `JobOptions::inline_policy` runs a policy the caller assembled at runtime. The Python binding's `PyOperator` and `PyPolicy` are thin: attribute reading, dict conversion, and the GIL-holding call on a blocking thread.
 - **Sidecar** implementations are how heavy Python models plug in without loading PyTorch into the VideoIndex process: run Qwen-VL under vLLM and point the OpenAI-compatible provider at it, or expose a custom operator as a tiny HTTP service. The hosted version uses only native and sidecar implementations.
 
 ## Security

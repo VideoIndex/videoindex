@@ -1279,10 +1279,20 @@ impl Storage for EmbeddedIndex {
                          JOIN frame_samples f ON f.id = s.frame_sample_id JOIN tracks tr ON tr.id = f.track_id JOIN videos v ON v.id = tr.video_id
                          WHERE ocr_fts MATCH ?{filter} ORDER BY score LIMIT ?"
                     ),
+                    // Descriptions target a segment (a time range) or a frame
+                    // sample (an instant); either way the hit needs a video and
+                    // a time, so both joins are outer and the row is kept when
+                    // one of them resolved.
                     Kind::Description => format!(
-                        "SELECT d.id, v.id AS video_id, seg.t0_num, seg.t0_den, seg.t1_num, seg.t1_den, d.text, bm25(descriptions_fts) AS score
+                        "SELECT d.id, v.id AS video_id,
+                                COALESCE(seg.t0_num, f.t_num) AS t0_num, COALESCE(seg.t0_den, f.t_den) AS t0_den,
+                                COALESCE(seg.t1_num, f.t_num) AS t1_num, COALESCE(seg.t1_den, f.t_den) AS t1_den,
+                                d.text, bm25(descriptions_fts) AS score
                          FROM descriptions_fts JOIN descriptions d ON d.rowid = descriptions_fts.rowid
-                         JOIN segments seg ON seg.id = d.target_id AND d.target_kind = 'segment' JOIN videos v ON v.id = seg.video_id
+                         LEFT JOIN segments seg ON seg.id = d.target_id AND d.target_kind = 'segment'
+                         LEFT JOIN frame_samples f ON f.id = d.target_id AND d.target_kind = 'frame'
+                         LEFT JOIN tracks tr ON tr.id = f.track_id
+                         JOIN videos v ON v.id = COALESCE(seg.video_id, tr.video_id)
                          WHERE descriptions_fts MATCH ?{filter} ORDER BY score LIMIT ?"
                     ),
                     Kind::Segment | Kind::Frame => continue,
