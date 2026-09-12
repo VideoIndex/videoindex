@@ -453,14 +453,31 @@ fn video_filter(videos: &[VideoId], column: &str) -> (String, Vec<String>) {
 pub fn fts_query(input: &str) -> String {
     let words: Vec<String> = input
         .split_whitespace()
-        .map(|w| w.replace('"', "\"\""))
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .replace('"', "\"\"")
+        })
         .filter(|w| !w.is_empty())
         .collect();
-    let n = words.len();
-    words
+    // Natural-language questions are mostly function words; matching all of
+    // them (FTS5's implicit AND) finds nothing, so terms are OR-ed and BM25
+    // ranks rows matching more of them higher. Stopwords are dropped unless
+    // the query is nothing but stopwords.
+    let content: Vec<&String> = words
+        .iter()
+        .filter(|w| !STOPWORDS.contains(&w.to_lowercase().as_str()))
+        .collect();
+    let terms: Vec<&String> = if content.is_empty() {
+        words.iter().collect()
+    } else {
+        content
+    };
+    let n = terms.len();
+    terms
         .iter()
         .enumerate()
         .map(|(i, w)| {
+            // The last term may still be typed: prefix-match it.
             if i + 1 == n {
                 format!("\"{w}\"*")
             } else {
@@ -468,8 +485,21 @@ pub fn fts_query(input: &str) -> String {
             }
         })
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" OR ")
 }
+
+/// English function words that carry no retrieval signal in a question.
+const STOPWORDS: &[&str] = &[
+    "a", "an", "the", "and", "or", "but", "of", "to", "in", "on", "at", "for", "with", "by",
+    "from", "as", "is", "are", "was", "were", "be", "been", "being", "it", "its", "this", "that",
+    "these", "those", "there", "here", "what", "which", "who", "whom", "whose", "when", "where",
+    "why", "how", "do", "does", "did", "done", "have", "has", "had", "having", "i", "you", "he",
+    "she", "we", "they", "me", "him", "her", "us", "them", "my", "your", "his", "our", "their",
+    "not", "no", "so", "if", "then", "than", "too", "very", "can", "could", "would", "should",
+    "will", "shall", "may", "might", "must", "about", "into", "over", "under", "up", "down", "out",
+    "off", "just", "also", "any", "some", "all", "each", "every", "such", "own", "same", "other",
+    "more", "most", "much", "many", "s", "t", "vs", "versus",
+];
 
 // ------------------------------------------------------------- storage ---
 
@@ -2198,8 +2228,18 @@ mod tests {
 
     #[test]
     fn fts_query_escaping() {
-        assert_eq!(fts_query("hybrid retrieval"), "\"hybrid\" \"retrieval\"*");
-        assert_eq!(fts_query("say \"hi\""), "\"say\" \"\"\"hi\"\"\"*");
+        assert_eq!(
+            fts_query("hybrid retrieval"),
+            "\"hybrid\" OR \"retrieval\"*"
+        );
+        assert_eq!(fts_query("say \"hi\""), "\"say\" OR \"hi\"*");
         assert_eq!(fts_query("   "), "");
+        assert_eq!(fts_query("strawberry"), "\"strawberry\"*");
+        // Stopwords go; a query of only stopwords keeps its words.
+        assert_eq!(
+            fts_query("how do the models count the Rs in strawberry?"),
+            "\"models\" OR \"count\" OR \"Rs\" OR \"strawberry\"*"
+        );
+        assert_eq!(fts_query("the and"), "\"the\" OR \"and\"*");
     }
 }

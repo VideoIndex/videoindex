@@ -36,12 +36,17 @@ def video_map(vi, config, index):
 
 
 def resolve_anchor_caption(vid, anchor):
+    """Time of the first cue whose text, joined with the next two cues,
+    contains the anchor. Captions break sentences across cues, so anchors
+    written from a digest often straddle a cue boundary."""
     path = find_srt(vid)
     if not path:
         return None
-    needle = anchor.lower()
-    for t, txt in parse_srt(path):
-        if needle in txt.lower():
+    needle = " ".join(anchor.lower().split())
+    cues = parse_srt(path)
+    for i, (t, _) in enumerate(cues):
+        window = " ".join(" ".join(txt.split()) for _, txt in cues[i:i + 3]).lower()
+        if needle in window:
             return (max(0.0, t - 5.0), t + 30.0)
     return None
 
