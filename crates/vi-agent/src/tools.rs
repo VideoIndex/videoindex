@@ -508,6 +508,7 @@ async fn tool_describe(ctx: &ToolContext, args: &Value) -> ToolResult {
             },
         ],
         tools: vec![],
+        tool_choice: Default::default(),
         max_tokens: 1200,
         temperature: 0.0,
         json_schema: None,

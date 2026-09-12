@@ -174,6 +174,9 @@ impl Gemini {
             body["tools"] = json!([{"functionDeclarations": req.tools.iter().map(|t| json!({
                 "name": t.name, "description": t.description, "parameters": strip_schema(&t.parameters)
             })).collect::<Vec<_>>()}]);
+            if req.tool_choice == crate::traits::ToolChoice::None {
+                body["toolConfig"] = json!({"functionCallingConfig": {"mode": "NONE"}});
+            }
         }
         Ok(body)
     }

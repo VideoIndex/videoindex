@@ -11,7 +11,7 @@ use vi_core::config::{roles, Config};
 use vi_core::{Result, VideoId};
 use vi_index::Storage;
 use vi_providers::{
-    ContentPart, GenerateEvent, GenerateRequest, Message, ProviderRegistry, Role, Vlm,
+    ContentPart, GenerateEvent, GenerateRequest, Message, ProviderRegistry, Role, ToolChoice, Vlm,
 };
 
 use crate::citations::{Piece, Scanner};
@@ -399,16 +399,27 @@ async fn run(
         // Generation turn: tools only when the LLM chooses and budget allows.
         let allow_tools = policy.is_none() && over.is_none() && tools_left > 0;
         let mut greq = GenerateRequest::new(messages.clone());
-        greq.tools = if allow_tools {
-            specs.clone()
-        } else {
-            Vec::new()
-        };
+        // Tools stay defined whenever the history holds tool calls (some APIs
+        // require that and a model shown call syntax with no tools tends to
+        // return nothing or to write pseudo calls); `tool_choice: None`
+        // forces a text answer.
+        let history_has_tools = !steps.is_empty();
+        if allow_tools {
+            greq.tools = specs.clone();
+        } else if history_has_tools {
+            greq.tools = specs.clone();
+            greq.tool_choice = ToolChoice::None;
+        }
         greq.max_tokens = 1500;
         if over.is_some() {
             greq.messages.push(Message::text(
                 Role::User,
                 "The budget for looking is exhausted. Answer now with what you have, and say what could not be checked.",
+            ));
+        } else if !allow_tools && history_has_tools {
+            greq.messages.push(Message::text(
+                Role::User,
+                "No further tool calls are available in this turn. Write the answer now from the observations above, citing the timestamps you used; do not write tool calls.",
             ));
         }
         let turn = generate_turn(

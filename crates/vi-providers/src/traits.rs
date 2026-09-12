@@ -348,6 +348,7 @@ impl GenerateRequest {
         Self {
             messages,
             tools: Vec::new(),
+            tool_choice: ToolChoice::Auto,
             max_tokens: 1024,
             temperature: 0.0,
             json_schema: None,
@@ -400,6 +401,18 @@ pub struct ToolSpec {
     pub parameters: serde_json::Value,
 }
 
+/// Whether the model may call tools in this turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolChoice {
+    /// The model decides (default).
+    #[default]
+    Auto,
+    /// Tools stay defined (some APIs require the definitions when the history
+    /// holds tool calls) but the model must answer in text.
+    None,
+}
+
 /// Text-only or multimodal generation request.
 #[derive(Debug, Clone)]
 pub struct GenerateRequest {
@@ -407,6 +420,8 @@ pub struct GenerateRequest {
     pub messages: Vec<Message>,
     /// Tools available.
     pub tools: Vec<ToolSpec>,
+    /// Whether tools may be called in this turn.
+    pub tool_choice: ToolChoice,
     /// Max output tokens.
     pub max_tokens: u32,
     /// Temperature.

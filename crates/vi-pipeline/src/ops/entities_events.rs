@@ -230,6 +230,7 @@ impl Operator for EntitiesEvents {
                     ),
                 ],
                 tools: vec![],
+                tool_choice: Default::default(),
                 max_tokens: 4000,
                 temperature: 0.0,
                 json_schema: None,

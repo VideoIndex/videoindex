@@ -127,7 +127,7 @@ def answer_one(root: Path, q: Question, path: Path, frames: int, model: str, use
         prompt = (
             f"These are {frames} frames sampled uniformly over the whole video, each labelled with its timestamp."
             + (f"\n\nTranscript (may be auto-generated):\n{tr}\n\n" if tr else "\n\n")
-            + q.prompt().replace("Use the tools to find the evidence in this video, reason briefly", "Reason briefly from the frames and transcript")
+            + q.prompt(tools=False)
         )
         text, usage = call_anthropic(model, imgs, prompt)
     except Exception as e:  # noqa: BLE001

@@ -196,6 +196,9 @@ impl OpenAiCompat {
                     .map(|t| json!({"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters}}))
                     .collect(),
             );
+            if req.tool_choice == crate::traits::ToolChoice::None {
+                body["tool_choice"] = json!("none");
+            }
         }
         if let Some(schema) = &req.json_schema {
             body["response_format"] = json!({"type": "json_schema", "json_schema": {"name": "output", "schema": schema, "strict": false}});

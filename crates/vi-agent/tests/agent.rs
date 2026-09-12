@@ -332,9 +332,11 @@ async fn plain_answer_server() -> std::net::SocketAddr {
                 }
             }
             let req = String::from_utf8_lossy(&buf[..n]).to_string();
-            // The policy's search result arrives as a user message, no tools offered.
+            // The policy's search result arrives as a user message; tools stay
+            // defined (the history holds a call) but the model must answer.
             assert!(req.contains("Result of search"), "{req}");
-            assert!(!req.contains("\"tools\""));
+            assert!(req.contains("\"tool_choice\":\"none\""), "{req}");
+            assert!(req.contains("No further tool calls are available"), "{req}");
             let body = "data: {\"choices\":[{\"delta\":{\"content\":\"Answer.\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
             let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
             let _ = sock.write_all(resp.as_bytes()).await;

@@ -23,12 +23,20 @@ class Question:
     def letters(self) -> list[str]:
         return [chr(ord("A") + i) for i in range(len(self.options))]
 
-    def prompt(self) -> str:
+    def prompt(self, tools: bool = True) -> str:
+        """The multiple-choice prompt. `tools=False` for configurations where
+        the model cannot call tools (retrieval-only, uniform baseline): telling
+        it to use tools makes it write pseudo tool calls instead of answering."""
         opts = "\n".join(f"({l}) {o}" for l, o in zip(self.letters, self.options))
+        how = (
+            "Use the tools to find the evidence in this video, reason briefly, then end"
+            if tools
+            else "Reason briefly from the evidence you have been given about this video (do not ask for more), then end"
+        )
         return (
             f"{self.question}\n\nOptions:\n{opts}\n\n"
-            "Use the tools to find the evidence in this video, reason briefly, then end with a line of the form "
-            f"'Answer: X' where X is one of {', '.join(self.letters)}."
+            f"{how} with a line of the form 'Answer: X' where X is one of {', '.join(self.letters)}. "
+            "If the evidence does not settle it, pick the most likely option; always give an answer line."
         )
 
 

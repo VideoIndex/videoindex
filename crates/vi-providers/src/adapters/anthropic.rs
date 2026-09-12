@@ -181,6 +181,9 @@ impl Anthropic {
                     .map(|t| json!({"name": t.name, "description": t.description, "input_schema": t.parameters}))
                     .collect(),
             );
+            if req.tool_choice == ToolChoice::None {
+                body["tool_choice"] = json!({"type": "none"});
+            }
         }
         Ok(body)
     }

@@ -67,7 +67,7 @@ def stratified_sample(qs: list[Question], n: int, seed: int) -> list[Question]:
 
 def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question, policy: str, budget_usd: float, max_tool_calls: int, budget_tokens: int) -> dict:
     cmd = [vi] + (["--config", config] if config else []) + [
-        "ask", index, q.prompt(), "--json", "--video", video_id, "--policy", policy,
+        "ask", index, q.prompt(tools=policy == "agent"), "--json", "--video", video_id, "--policy", policy,
         "--budget-usd", str(budget_usd), "--max-tool-calls", str(max_tool_calls), "--budget-tokens", str(budget_tokens),
     ]
     t = time.time()

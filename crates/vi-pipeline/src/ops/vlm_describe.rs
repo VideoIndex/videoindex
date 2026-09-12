@@ -269,6 +269,7 @@ impl Operator for VlmDescribe {
                     },
                 ],
                 tools: vec![],
+                tool_choice: Default::default(),
                 max_tokens: 1000,
                 temperature: 0.0,
                 json_schema: if caps.supports_json_schema {
