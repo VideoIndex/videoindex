@@ -59,5 +59,8 @@ class TwoSearches(vi.Policy):
 answer = idx.ask("...", policy=TwoSearches()).collect()
 ```
 
-Build locally with `maturin develop --release` inside a virtualenv (needs the ffmpeg
+Build locally with `maturin develop --release` inside a virtualenv. `maturin develop` copies the compiled
+`_core.abi3.so` into `python/videoindex/`; it is a build artefact (about 440 MB with the workspace's
+release debug info, far less when stripped) and is git-ignored, never committed. Distributable wheels
+come from `maturin build --release --strip` (what CI runs) (needs the ffmpeg
 development libraries, `pkg-config` and `clang`, like the Rust crates).
