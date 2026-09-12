@@ -11,7 +11,8 @@ seed = 1
 name = "agent"
 policy = "agent"
 max_tool_calls = 6
-budget_usd = 0.3
+budget_usd = 0.5
+budget_tokens = 120000
 
 [[runs]]
 name = "retrieval-only"

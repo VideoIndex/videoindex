@@ -106,8 +106,9 @@ def main():
     ap.add_argument("--config")
     ap.add_argument("--vi", default="target/release/vi")
     ap.add_argument("--policy", default="agent")
-    ap.add_argument("--budget-usd", type=float, default=0.3)
-    ap.add_argument("--budget-tokens", type=int, default=60000)
+    ap.add_argument("--budget-usd", type=float, default=0.5)
+    ap.add_argument("--budget-tokens", type=int, default=120000)
+    ap.add_argument("--retry-empty", type=int, default=1, help="re-ask when the answer text is empty (model ended a forced turn with no content)")
     ap.add_argument("--max-tool-calls", type=int, default=6)
     ap.add_argument("--sample", type=int)
     ap.add_argument("--seed", type=int, default=1)
@@ -145,7 +146,21 @@ def main():
 
     done = 0
     with ThreadPoolExecutor(max_workers=a.jobs) as ex:
-        futs = {ex.submit(ask_one, a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens): q for q in todo}
+        def ask_with_retry(q: Question) -> dict:
+            r = ask_one(a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens)
+            tries = 0
+            while r.get("status") == "ok" and not r.get("text") and tries < a.retry_empty:
+                tries += 1
+                again = ask_one(a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens)
+                # Keep the spend of both attempts honest.
+                if again.get("status") == "ok":
+                    again["usage"]["cost_usd"] = again["usage"].get("cost_usd", 0) + r["usage"].get("cost_usd", 0)
+                    again["usage"]["tokens_in"] = again["usage"].get("tokens_in", 0) + r["usage"].get("tokens_in", 0)
+                    again["retries"] = tries
+                r = again
+            return r
+
+        futs = {ex.submit(ask_with_retry, q): q for q in todo}
         for fut in as_completed(futs):
             r = fut.result()
             results[r["id"]] = r
