@@ -30,6 +30,7 @@ def main():
     ap.add_argument("--vi", default="target/eval/release/vi")
     ap.add_argument("--out")
     ap.add_argument("--title")
+    ap.add_argument("--run-reference", action="store_true", help="also execute runs marked reference = true (external systems such as Gemini; otherwise their cached run file is only reported)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     cfg = tomllib.loads(Path(a.config).read_text())
@@ -43,8 +44,18 @@ def main():
         if only and name not in only:
             continue
         out = Path(a.runs_dir) / f"{bench}-{tag}-s{a.seed}-{name}.json"
+        if run.get("reference") and not a.run_reference:
+            # External reference (e.g. Gemini agentic video): run once, keep the file, report it.
+            if out.is_file():
+                outs.append(str(out))
+            else:
+                print(f"(reference run {name} has no cached file at {out}; pass --run-reference to execute it)", file=sys.stderr)
+            continue
         outs.append(str(out))
-        if run.get("baseline") == "uniform":
+        if run.get("baseline") == "gemini":
+            cmd = [sys.executable, "-m", "eval.runners.gemini", bench, "--root", cfg["root"], "--model", run.get("model", "gemini-3.8-flash"),
+                   "--mode", run.get("mode", "agentic"), "--jobs", str(min(a.jobs, 2)), "--resume", "--out", str(out)] + sampling
+        elif run.get("baseline") == "uniform":
             cmd = [sys.executable, "-m", "eval.runners.baselines", bench, "--root", cfg["root"], "--frames", str(run.get("frames", 32)),
                    "--model", run.get("model", "claude-sonnet-5"), "--jobs", str(min(a.jobs, 3)), "--resume", "--out", str(out)] + sampling
         else:

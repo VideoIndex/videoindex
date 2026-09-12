@@ -23,3 +23,12 @@ name = "uniform-32"
 baseline = "uniform"
 frames = 32
 model = "claude-sonnet-5"
+
+# External reference, run once per sample (eval.run --run-reference) and cached;
+# every later report includes the cached file.
+[[runs]]
+name = "gemini-3.8-flash-agentic"
+baseline = "gemini"
+reference = true
+model = "gemini-3.8-flash"
+mode = "agentic"

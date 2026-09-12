@@ -30,8 +30,10 @@ def main():
         s = score(run)
         cfg = run["config"]
         label = cfg.get("policy", Path(path).stem)
-        if cfg.get("model"):
+        if cfg.get("model") and not label.startswith("gemini"):
             label += f" ({cfg['model']})"
+        elif label.startswith("gemini"):
+            label = f"{cfg.get('model', 'gemini')} {cfg.get('mode', '')} video".strip()
         rows.append((label, cfg, s, path))
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -58,6 +60,15 @@ def main():
     for label, cfg, s, _ in rows:
         cir = f"{100 * s['citation_in_range']:.0f}% (n={s['citation_in_range_n']})" if s["citation_in_range"] is not None else "—"
         md.append(f"| {label} | {s['n']} | **{100 * s['accuracy']:.1f}%** | {100 * s['ci'][0]:.1f}–{100 * s['ci'][1]:.1f} | {s['unparsed']} | ${s['cost_mean']:.3f} | {s['tokens_mean']:,.0f} | {s['tool_calls_mean']:.2f} | {s['latency_p50']:.1f} s | {s['latency_p95']:.1f} s | {100 * s['no_decode_fraction']:.0f}% | {cir} |")
+    if any(l.startswith("gemini") for l, _, _, _ in rows):
+        md += ["", "## Where this stands against Gemini agentic video", "",
+               "The `gemini-…` row is Google's Gemini 3.8 Flash with `processing: \"agentic\"` asked the same questions over the same "
+               "video files through the Interactions API (run once and cached; it is not re-run with every matrix). Google's own "
+               "announcement (\"Introducing agentic video in Gemini\", 2026-09-01) reports agentic mode against static whole-video processing on "
+               "LongVideoBench as up to 88% fewer tokens, up to 66% lower cost and up to 7% higher accuracy, without absolute scores; "
+               "the numbers here are absolute, on LVBench, and directly comparable across rows because every row answered the same "
+               "questions under the same scoring. VideoIndex's per-question cost excludes indexing (done once per video); Gemini's "
+               "per-question cost is the whole cost. Both systems are scored with the same letter parser.", ""]
     md += ["", "## Accuracy by task type", ""]
     types = sorted({t for _, _, s, _ in rows for t in s["per_type"]})
     md.append("| Task type | " + " | ".join(label for label, _, _, _ in rows) + " |")
