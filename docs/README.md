@@ -24,6 +24,7 @@ Read the documents in order the first time. After that, each stands alone.
 | — | [azuremc facts](MACHINE-azuremc.md) | The first host and what M0 measured on it |
 | — | [Machine recommendations](MACHINE-RECOMMENDATIONS.md) | Specs for the indexing/dev machine and the serving machine |
 | — | [Decisions](DECISIONS.md) | Dated choices made where the design was silent |
+| — | [Reports](reports/) | Generated PDFs: the benchmark report and the team catch-up report (`scripts/report/`) |
 
 ## Glossary
 
