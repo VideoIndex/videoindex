@@ -55,7 +55,7 @@ FILLED_IN_WHEN_THE_DATASET_RUN_COMPLETES
 
 ## Open items carried into M2/M4
 
-- Install a CUDA toolkit (cudart, cuBLAS, cuDNN 9) so ONNX Runtime can use the GPU for SigLIP and OCR; asked before installing.
-- Python-side operators and policies; wheels in CI; the zero-copy frame view.
+- ~~Install a CUDA toolkit~~ Done 2026-09-11 after asking: CUDA 13.1 + cuDNN 9, `vi` built with `--features cuda`. The models run 10 to 35× faster per call on the GPU; the coarse pass is then bound by CPU video decode (no NVDEC: no `libnvcuvid`, and the corpus is AV1/VP9). See `MACHINE.md`.
+- ~~Python-side operators and policies~~ Done 2026-09-12 (`@vi.operator`, `vi.Policy`, inline policies). Still open: wheels verified in CI; the zero-copy frame view (frames are copied into NumPy today).
 - `Diarize`, `listen`, `find_similar_frames`.
 - Format the local SSD if build times or temp files ever matter.
