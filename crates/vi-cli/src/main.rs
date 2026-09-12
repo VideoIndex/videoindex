@@ -53,6 +53,8 @@ enum Command {
     Status(cmd::status::Args),
     /// Report machine facts: CPU, RAM, GPU, disks, toolchain, network paths.
     Doctor(cmd::doctor::Args),
+    /// Serve the HTTP API, SSE streams and MCP over the indexes in a directory.
+    Serve(cmd::serve::Args),
 }
 
 fn main() {
@@ -130,6 +132,7 @@ fn run() -> Result<()> {
             Command::Timeline(a) => cmd::timeline::run(a, &config, &out).await,
             Command::Status(a) => cmd::status::run(a, &config, &out).await,
             Command::Doctor(a) => cmd::doctor::run(a, &config, &out).await,
+            Command::Serve(a) => cmd::serve::run(a, &config, &out).await,
         }
     })
 }

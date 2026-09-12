@@ -6,6 +6,7 @@ pub mod index;
 pub mod init;
 pub mod probe;
 pub mod search;
+pub mod serve;
 pub mod status;
 pub mod timeline;
 pub mod view;

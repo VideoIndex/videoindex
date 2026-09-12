@@ -228,6 +228,32 @@ impl fmt::Display for TimeRange {
     }
 }
 
+/// Turn every `{"num": .., "den": ..}` object in a JSON value into float
+/// seconds, recursively. The SDK surfaces (Python, HTTP, MCP) present
+/// seconds; the rationals stay internal.
+pub fn flatten_timestamps_json(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::Object(m) => {
+            if m.len() == 2 {
+                if let (Some(num), Some(den)) = (
+                    m.get("num").and_then(serde_json::Value::as_i64),
+                    m.get("den").and_then(serde_json::Value::as_u64),
+                ) {
+                    if den > 0 {
+                        *v = serde_json::json!(num as f64 / den as f64);
+                        return;
+                    }
+                }
+            }
+            for x in m.values_mut() {
+                flatten_timestamps_json(x);
+            }
+        }
+        serde_json::Value::Array(a) => a.iter_mut().for_each(flatten_timestamps_json),
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -43,6 +43,8 @@ Done when: `idx.ask` from Python answers the 50-question dev set at or above 80%
 
 ## M3. Node, server, MCP, chat app
 
+**Progress 2026-09-12:** `vi-server` (HTTP API, SSE for jobs and answers, blobs, bearer keys with a daily spend cap, MCP, `/metrics`, `/v1/openapi.json`) and `vi serve` are done with end-to-end tests over a real socket. The chat app, site and SDK docs live in the separate `videoindex_app` repository.
+
 - Node binding with prebuilt binaries.
 - `vi-server`: HTTP API, SSE, blobs, API keys, MCP.
 - `apps/chat`: demo QnA app over the dataset videos with a player that seeks to citations, deployed at videoindex.app.

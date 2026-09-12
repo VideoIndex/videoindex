@@ -111,7 +111,9 @@ Base path `/v1`. JSON in, JSON or SSE out. OpenAPI document served at `/v1/opena
 | GET | `/mcp` | MCP endpoint (streamable HTTP) |
 | GET | `/healthz`, `/metrics` | health, Prometheus |
 
-Auth: bearer API keys. Hosted mode adds tenants, quotas per key, and usage records. Self-hosted mode can run with auth disabled on localhost.
+Auth: bearer API keys (`Authorization: Bearer <key>` or `X-API-Key`). Hosted mode adds tenants, quotas per key, and usage records. Self-hosted mode can run with auth disabled on localhost.
+
+Status (2026-09-12): implemented in `vi-server` and started with `vi serve`. Indexes live under `server.index_root` as `<id>.vidx` and open lazily; `POST /v1/indexes` creates one. Blobs are addressed per index (`/v1/indexes/{id}/blobs/{key}`), MCP per index (`/v1/indexes/{id}/mcp`) or over `server.default_index` (`/v1/mcp`). `ask` and job progress stream as SSE when the request carries `Accept: text/event-stream` and return JSON otherwise. `server.api_keys` turns authentication on; `server.daily_cost_cap_usd` caps each key's provider spend per UTC day (429 past the cap), which is how the public demo key is bounded. `/metrics` is Prometheus text produced without a metrics crate. The MCP endpoint is the stateless streamable-HTTP profile: JSON-RPC 2.0 over POST, notifications answered with 202, no server-initiated stream (GET returns 405); tools are the agent's tools plus `index_state` and `ask`.
 
 ## Configuration file
 

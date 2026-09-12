@@ -537,18 +537,37 @@ pub mod roles {
 pub struct ServerConfig {
     /// Bind address.
     pub bind: String,
-    /// Directory holding indexes.
+    /// Directory holding indexes (`<index_root>/<id>.vidx`).
     pub index_root: PathBuf,
     /// Serve MCP too.
     pub mcp: bool,
+    /// Bearer API keys. Empty means authentication is off (self-hosted on
+    /// localhost); the server logs a warning at startup in that case.
+    pub api_keys: Vec<String>,
+    /// Per-key spend allowed per UTC day across `ask` and indexing jobs;
+    /// 0 means unlimited. Public demo keys get a cap so a burst of visitors
+    /// cannot run up provider bills.
+    pub daily_cost_cap_usd: f64,
+    /// Index used by `/v1/mcp` and by requests that name none; defaults to
+    /// the only index when there is exactly one.
+    pub default_index: Option<String>,
+    /// Allowed CORS origins; `*` allows any. Empty disables CORS headers.
+    pub cors_origins: Vec<String>,
+    /// Largest request body in bytes.
+    pub max_body_bytes: usize,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            bind: "127.0.0.1:8090".to_string(),
+            bind: "127.0.0.1:8080".to_string(),
             index_root: PathBuf::from("/data/videoindex/indexes"),
             mcp: true,
+            api_keys: Vec::new(),
+            daily_cost_cap_usd: 0.0,
+            default_index: None,
+            cors_origins: Vec::new(),
+            max_body_bytes: 4 * 1024 * 1024,
         }
     }
 }

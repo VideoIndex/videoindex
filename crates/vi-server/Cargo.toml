@@ -1,6 +1,6 @@
 [package]
 name = "vi-server"
-description = "VideoIndex HTTP, SSE, WebSocket and MCP server"
+description = "VideoIndex HTTP, SSE and MCP server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,32 @@ authors.workspace = true
 
 [dependencies]
 vi-core = { workspace = true }
+vi-index = { workspace = true }
+vi-media = { workspace = true }
+vi-perceive = { workspace = true }
+vi-pipeline = { workspace = true }
+vi-providers = { workspace = true }
+vi-query = { workspace = true }
+vi-agent = { workspace = true }
+async-stream = "0.3"
+axum = { version = "0.8", features = ["json", "macros", "tokio", "http1", "query"] }
+tokio-stream = "0.1"
+tower-http = { version = "0.7", features = ["cors", "trace", "limit"] }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+bytes = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+vi-testkit = { workspace = true }
+tempfile = { workspace = true }
+reqwest = { workspace = true }
 
 [lints]
 workspace = true

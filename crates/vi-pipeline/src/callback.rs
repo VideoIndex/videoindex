@@ -76,26 +76,7 @@ pub fn item_to_json(item: &Item) -> Value {
 
 /// `{"num": .., "den": ..}` objects become float seconds, recursively.
 pub fn flatten_timestamps(v: &mut Value) {
-    match v {
-        Value::Object(m) => {
-            if m.len() == 2 {
-                if let (Some(num), Some(den)) = (
-                    m.get("num").and_then(Value::as_i64),
-                    m.get("den").and_then(Value::as_u64),
-                ) {
-                    if den > 0 {
-                        *v = json!(num as f64 / den as f64);
-                        return;
-                    }
-                }
-            }
-            for x in m.values_mut() {
-                flatten_timestamps(x);
-            }
-        }
-        Value::Array(a) => a.iter_mut().for_each(flatten_timestamps),
-        _ => {}
-    }
+    vi_core::time::flatten_timestamps_json(v)
 }
 
 /// A row a callback operator may produce. Ids and provenance are filled in
