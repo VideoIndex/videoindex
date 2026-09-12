@@ -160,6 +160,11 @@ def main():
     a = ap.parse_args()
     root = Path(a.root)
     files = {p.stem: p for p in (root / "videos").glob("*.mp4")}
+    # Same question pool as the index-based runners: videos that are indexed.
+    vmap_path = root / "video_map.json"
+    if vmap_path.is_file():
+        mapped = set(json.loads(vmap_path.read_text()))
+        files = {k: v for k, v in files.items() if k in mapped}
     qs = [q for q in load(a.benchmark, root) if q.video_key in files]
     if a.sample:
         qs = stratified_sample(qs, a.sample, a.seed)
