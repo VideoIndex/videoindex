@@ -1,0 +1,85 @@
+/* Technical report stylesheet for WeasyPrint. Inter for text, JetBrains Mono for code. */
+@page {
+  size: A4;
+  margin: 22mm 18mm 20mm 18mm;
+  @top-left { content: string(doc-title); font: 8pt "Inter"; color: #898781; }
+  @top-right { content: string(chapter); font: 8pt "Inter"; color: #898781; }
+  @bottom-right { content: counter(page) " / " counter(pages); font: 8pt "Inter"; color: #898781; }
+}
+@page cover { margin: 0; @top-left { content: none } @top-right { content: none } @bottom-right { content: none } }
+@page toc { @top-right { content: "Contents" } }
+
+html { font-family: "Inter", "DejaVu Sans", sans-serif; font-size: 9.6pt; line-height: 1.45; color: #0b0b0b; }
+body { string-set: doc-title attr(data-title); }
+h1.chapter-title { string-set: chapter attr(data-chapter); }
+
+/* Cover */
+section.cover { page: cover; height: 297mm; padding: 28mm 24mm; box-sizing: border-box; background: #0d366b; color: #fff; display: flex; flex-direction: column; }
+.cover-org { font-size: 10pt; letter-spacing: 0.12em; text-transform: uppercase; color: #9ec5f4; }
+.cover-title { font-size: 30pt; font-weight: 700; line-height: 1.15; margin: 40mm 0 6mm 0; }
+.cover-subtitle { font-size: 13pt; color: #cde2fb; margin-bottom: 14mm; }
+.cover-abstract { font-size: 10pt; color: #e6eef9; max-width: 140mm; line-height: 1.5; }
+.cover-abstract p { margin: 0 0 6pt 0; }
+.cover-meta { margin-top: auto; font-size: 10pt; color: #cde2fb; line-height: 1.6; }
+
+/* Contents */
+nav.toc { page: toc; page-break-after: always; }
+nav.toc h1 { font-size: 18pt; margin: 0 0 10pt 0; }
+.toc-l1, .toc-l2 { list-style: none; padding: 0; margin: 0; }
+.toc-l1 > li { margin: 6pt 0 2pt 0; font-weight: 600; }
+.toc-l2 > li { margin: 1.5pt 0 1.5pt 12pt; font-weight: 400; font-size: 9pt; }
+nav.toc a { text-decoration: none; color: #0b0b0b; display: block; }
+nav.toc a::after { content: leader(" . ") target-counter(attr(href), page); color: #898781; font-weight: 400; }
+
+/* Chapters */
+section.chapter { page-break-before: always; }
+h1.chapter-title { font-size: 20pt; font-weight: 700; margin: 0 0 10pt 0; padding-bottom: 6pt; border-bottom: 1.5pt solid #0d366b; color: #0d366b; }
+h2 { font-size: 13.5pt; font-weight: 650; margin: 16pt 0 6pt 0; color: #0b0b0b; page-break-after: avoid; }
+h3 { font-size: 11pt; font-weight: 600; margin: 12pt 0 4pt 0; color: #0b0b0b; page-break-after: avoid; }
+h4 { font-size: 10pt; font-weight: 600; margin: 10pt 0 3pt 0; color: #52514e; }
+p { margin: 0 0 6pt 0; orphans: 3; widows: 3; }
+a { color: #1c5cab; text-decoration: none; }
+ul, ol { margin: 0 0 6pt 0; padding-left: 16pt; }
+li { margin: 1.5pt 0; }
+li > ul, li > ol { margin: 2pt 0; }
+blockquote { margin: 6pt 0; padding: 4pt 10pt; border-left: 2pt solid #86b6ef; color: #52514e; background: #f7f9fc; }
+hr { border: 0; border-top: 1px solid #e1e0d9; margin: 10pt 0; }
+strong { font-weight: 650; }
+
+/* Tables */
+table { border-collapse: collapse; width: 100%; margin: 6pt 0 10pt 0; font-size: 8.4pt; line-height: 1.3; page-break-inside: auto; }
+thead { display: table-header-group; }
+tr { page-break-inside: avoid; }
+th { text-align: left; font-weight: 600; background: #eef3fa; border-bottom: 1pt solid #c3c2b7; padding: 3.5pt 5pt; vertical-align: bottom; }
+td { border-bottom: 0.5pt solid #e1e0d9; padding: 3pt 5pt; vertical-align: top; overflow-wrap: anywhere; }
+tbody tr:nth-child(even) td { background: #fafaf8; }
+td code, th code { font-size: 7.8pt; }
+
+/* Code */
+code, pre { font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace; }
+code { font-size: 8.2pt; background: #f3f2ee; padding: 0 2.5pt; border-radius: 2pt; }
+pre { font-size: 6.9pt; line-height: 1.35; background: #f6f6f3; border: 0.5pt solid #e1e0d9; border-radius: 3pt; padding: 6pt 8pt; margin: 6pt 0 8pt 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+pre code { background: none; padding: 0; font-size: inherit; }
+.highlight { background: transparent; }
+.highlight pre { background: #f6f6f3; }
+
+/* Diagrams and figures */
+figure.diagram { margin: 8pt auto 10pt auto; text-align: center; page-break-inside: avoid; }
+figure.diagram svg { max-width: 100%; height: auto; max-height: 200mm; }
+figure.chart { margin: 8pt 0 12pt 0; page-break-inside: avoid; }
+figure.chart img, p > img { max-width: 100%; }
+figcaption, .caption { font-size: 8pt; color: #52514e; margin-top: 3pt; }
+.diagram-fallback pre { font-size: 7pt; }
+img { max-width: 100%; }
+
+/* Details blocks (rendered open) */
+details { margin: 6pt 0; }
+details > summary { font-weight: 600; font-size: 9pt; color: #52514e; margin-bottom: 4pt; }
+
+/* Callouts */
+.note { border-left: 2pt solid #eda100; background: #fffaf0; padding: 4pt 8pt; margin: 6pt 0; }
+.kpi-row { display: flex; gap: 8pt; margin: 8pt 0 10pt 0; }
+.kpi { flex: 1; border: 0.5pt solid #e1e0d9; border-radius: 3pt; padding: 6pt 8pt; background: #fcfcfb; }
+.kpi .label { font-size: 8pt; color: #52514e; }
+.kpi .value { font-size: 17pt; font-weight: 650; color: #0b0b0b; margin: 1pt 0; }
+.kpi .sub { font-size: 7.5pt; color: #898781; }
