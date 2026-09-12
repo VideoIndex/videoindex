@@ -220,7 +220,10 @@ impl RapidOcr {
                 .iter()
                 .map(|i| ((ratio(&boxes[*i]) * h as f64).ceil() as usize).clamp(16, 1600))
                 .collect();
-            let w = *widths.iter().max().unwrap_or(&16);
+            // Round the padded width up to a multiple of 32 so batches fall
+            // into a few dozen shapes instead of one per call; ONNX Runtime
+            // caches kernels and (on CUDA) cuDNN algorithm choices per shape.
+            let w = widths.iter().max().unwrap_or(&16).div_ceil(32) * 32;
             let mut flat = vec![0f32; chunk.len() * 3 * h * w];
             for (k, i) in chunk.iter().enumerate() {
                 let b = &boxes[*i];

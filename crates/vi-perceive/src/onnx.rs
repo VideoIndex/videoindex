@@ -129,8 +129,16 @@ impl OnnxSession {
             .map_err(|e| PerceiveError::Onnx(e.to_string()))?;
         #[cfg(feature = "cuda")]
         if device == Device::Cuda {
+            // cuDNN's default exhaustive algorithm search re-benchmarks every
+            // convolution for each new input shape. OCR crops and text
+            // batches change shape on every call, and the search cost
+            // (hundreds of milliseconds each) made the GPU slower than the
+            // CPU. The heuristic picks a near-optimal algorithm without
+            // benchmarking.
+            let cuda = ort::ep::CUDA::default()
+                .with_conv_algorithm_search(ort::ep::cuda::ConvAlgorithmSearch::Heuristic);
             builder = builder
-                .with_execution_providers([ort::ep::CUDA::default().build().error_on_failure()])
+                .with_execution_providers([cuda.build().error_on_failure()])
                 .map_err(|e| PerceiveError::Onnx(e.to_string()))?;
         }
         #[cfg(not(feature = "cuda"))]

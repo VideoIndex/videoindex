@@ -350,6 +350,7 @@ async fn run(
     let mut scanner = Scanner::default();
     let mut answer = String::new();
     let mut partial = false;
+    let mut retried_empty = false;
     let mut reason: Option<String> = None;
     let mut steps: Vec<(ToolCall, String)> = Vec::new();
     let mut evidence: Vec<(VideoId, f64, f64, String)> = Vec::new();
@@ -426,6 +427,23 @@ async fn run(
             if turn.finish == "length" {
                 partial = true;
                 reason.get_or_insert_with(|| "answer hit the output token limit".into());
+            } else if turn.text.trim().is_empty() && answer.trim().is_empty() {
+                // Seen after several tool turns with tools withheld: the
+                // model ends its turn with no content. Ask once more,
+                // explicitly, before giving up.
+                if !retried_empty {
+                    retried_empty = true;
+                    tracing::debug!(finish = %turn.finish, "empty answer turn; asking again");
+                    messages.push(Message::text(
+                        Role::User,
+                        "Write the answer now from the observations above, citing the timestamps you used. If they do not settle the question, say what is known and what is not.",
+                    ));
+                    continue;
+                }
+                partial = true;
+                reason.get_or_insert_with(|| {
+                    format!("model returned an empty answer (finish: {})", turn.finish)
+                });
             }
             break;
         }

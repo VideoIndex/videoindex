@@ -58,8 +58,17 @@ The design docs assume an 8-core server; this machine has 12 vCPUs, so timings h
   | RapidOCR detect + recognise (4 lines) | 262 ms | 26 ms | 10× |
   | Model load (each) | 0.07 to 0.47 s | 0.10 to 0.52 s | |
 
-  So the GPU makes the perception operators nearly free, and the coarse pass is bound by video decode: the `sample` stage took the full 220 s. Every other stage runs in its shadow (`vi index` prints them all with the same elapsed time). The visual pass therefore gains from the GPU only when the decode is faster than the CPU models were, which is the case for videos with many distinct frames (OCR on every slide change) and for `vi search` queries (SigLIP text tower 7 ms instead of 83 ms).
-- **Hardware decode is not available here.** ffmpeg 8 has the `cuda` hwaccel and the `*_cuvid` decoders compiled in, but the GCP driver install ships no `libnvcuvid.so`, so `-hwaccel cuda` fails at setup (`Failed setup for format cuda`) and `vp9_cuvid` exits immediately. It would not help much anyway: the 30 dataset videos are 22 AV1 and 8 VP9 streams at 720p, and the A100's NVDEC (GA100) decodes H.264, HEVC and VP9 but not AV1. Software decode of the 720p VP9 lecture runs at 31× real time in plain ffmpeg (9.5 s for 5 minutes, 2.7 cores); `vi-media`'s worker with 1 fps sampling, 640 px scaling and shared-memory delivery reached about 18× on an idle machine (160 s for 47 minutes). Closing that gap is a `vi-media` optimisation, not a GPU question.
+  That made the models look free and the pass decode-bound, which the idle-machine measurements below contradicted: decode alone (`m0`: sample, pHash, thumbnails) takes 39.5 s for this 47-minute video (71× real time), yet the `visual` pass took 112 s on the CPU build and 177 s on the first CUDA build. OCR alone was 96 s (CPU) against 176 s (CUDA); image embedding alone 53 s against 38 s. The CUDA OCR loss was cuDNN's default *exhaustive* convolution-algorithm search, which re-benchmarks every convolution for each new input shape, and the recogniser's batch tensor had a new width on almost every call. With the heuristic search (`cudnn_conv_algo_search`) and recogniser widths rounded up to multiples of 32, the same video runs:
+
+  | Policy (idle machine, this 47-min 720p VP9 lecture) | CPU build | CUDA build (first) | CUDA build (fixed) |
+  |---|---|---|---|
+  | `m0`: decode + pHash + thumbnails | 39.7 s | 39.5 s | |
+  | image embedding only (sample, phash, image_embed) | 52.9 s | 38.4 s | |
+  | OCR only (sample, phash, ocr) | 95.9 s | 175.9 s | 48.2 s |
+  | `visual` (all of the above + shots + text_embed) | 112.3 s | 177.4 s | **50.2 s** |
+
+  So with the GPU the visual pass runs at 56× real time and sits about 10 s above the decode floor; on the CPU it is OCR-bound at 25×. The 30-video dataset run (`coarse_only`, CPU build, loaded machine) averaged 7× real time with OCR-heavy slide decks at 5×; the same run with the fixed CUDA build should be bounded by decode plus ASR.
+- **Hardware decode is not available here.** ffmpeg 8 has the `cuda` hwaccel and the `*_cuvid` decoders compiled in, but the GCP driver install ships no `libnvcuvid.so`, so `-hwaccel cuda` fails at setup (`Failed setup for format cuda`) and `vp9_cuvid` exits immediately. It would not help much anyway: the 30 dataset videos are 22 AV1 and 8 VP9 streams at 720p, and the A100's NVDEC (GA100) decodes H.264, HEVC and VP9 but not AV1. Software decode of the 720p VP9 lecture runs at 31× real time in plain ffmpeg (9.5 s for 5 minutes, 2.7 cores); `vi-media`'s worker with 1 fps sampling, 640 px scaling and shared-memory delivery reached about 18× on an idle machine (160 s for 47 minutes). The decode itself is not the coarse pass's bottleneck (see the table above); OCR was.
 - vLLM for the open-VLM A/B runs (M2/M4) is not installed. With 80 GB, a 32B VLM in fp16 fits on the single GPU, so no tensor parallelism or 4-bit quantisation is needed.
 
 ## Model files
