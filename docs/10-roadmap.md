@@ -43,7 +43,7 @@ Done when: `idx.ask` from Python answers the 50-question dev set at or above 80%
 
 ## M3. Node, server, MCP, chat app
 
-**Progress 2026-09-12:** `vi-server` (HTTP API, SSE for jobs and answers, blobs, bearer keys with a daily spend cap, MCP, `/metrics`, `/v1/openapi.json`) and `vi serve` are done with end-to-end tests over a real socket. The chat app, site and SDK docs live in the separate `videoindex_app` repository.
+**Progress 2026-09-12:** `vi-server` (HTTP API, SSE for jobs and answers, blobs, bearer keys with a daily spend cap, MCP, `/metrics`, `/v1/openapi.json`) and `vi serve` are done with end-to-end tests over a real socket. The chat app (streaming answers, YouTube player seeking to citations, API proxy holding the key), the site and the MkDocs SDK docs live in the separate `videoindex_app` repository with Caddy and systemd templates; verified end to end on the machine over the dataset index (public DNS and ports are the operator's step). The Node binding (`bindings/node`, napi-rs: `Index.open/create/videos/status/timeline/search/add`, `ask` as an `AsyncIterable`) builds and passes its test; prebuilt binaries are produced by the CI matrix. Remaining for M3: pointing videoindex.app at the host.
 
 - Node binding with prebuilt binaries.
 - `vi-server`: HTTP API, SSE, blobs, API keys, MCP.

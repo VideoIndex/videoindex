@@ -25,6 +25,8 @@ cargo build --release -p vi-cli --features cuda
 cargo test
 ```
 
+Bindings: `bindings/python` (PyO3, `maturin develop`) and `bindings/node` (napi-rs, `npm run build`). The HTTP/SSE/MCP server is `vi serve`; the demo app and SDK docs live in the `videoindex_app` repository.
+
 ## Use
 
 ```sh

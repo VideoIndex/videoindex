@@ -113,3 +113,37 @@ jobs:
         with:
           command: check
           arguments: --all-features
+
+  node:
+    name: node binding (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev pkg-config clang
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the decode worker used by the tests
+        run: cargo build -p vi-media --bin vi-media-worker
+      - name: Build and test the binding
+        working-directory: bindings/node
+        run: |
+          npm ci
+          npm run build
+          npm test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-${{ matrix.os }}
+          path: bindings/node/*.node

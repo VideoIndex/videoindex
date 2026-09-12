@@ -1,0 +1,22 @@
+{
+  "name": "@videoindex/core",
+  "version": "0.1.0",
+  "description": "Node.js binding for VideoIndex: index long videos and query them",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "Apache-2.0",
+  "files": ["index.js", "index.d.ts", "native.js", "*.node"],
+  "napi": {
+    "binaryName": "videoindex",
+    "targets": ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "aarch64-apple-darwin", "x86_64-pc-windows-msvc"]
+  },
+  "engines": { "node": ">= 20" },
+  "scripts": {
+    "build": "napi build --platform --release --js native.js --dts native.d.ts",
+    "build:debug": "napi build --platform --js native.js --dts native.d.ts",
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.0"
+  }
+}
