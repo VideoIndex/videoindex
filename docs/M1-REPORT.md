@@ -28,7 +28,8 @@ Written 2026-09-11 at the end of M1 (with the start of M2 folded in). The machin
 | Silero VAD, 34-minute track | 14 s including the audio decode, batched 32 parts in lockstep |
 | Coarse pass without ASR (`visual`), 47-minute slide lecture, idle machine | CPU build 112 s; CUDA build **50 s** after the cuDNN fix (177 s before it); decode alone 39.5 s. 247 frames read by OCR (824 to 843 lines), 168 SigLIP embeddings. Details in `MACHINE.md`. |
 | Full dataset (36.6 h, 30 videos, `coarse_only`), one process, CPU ONNX build, builds and tests competing for the CPU | 17,856 s = 4 h 58 min, 7× real time overall (5× on OCR-heavy slide decks, 23× on camera-heavy talks); 0 failures; index 1.06 GiB (187 MiB SQLite, 567 MiB thumbnails in 130,907 blobs). Per-video table below. |
-| Fine pass (`full`) on the 34-minute talk with Claude Sonnet 5 | see below |
+| Fine pass (`full`) on the 34-minute talk with Claude Sonnet 5 | 17 scenes, 12 descriptions, 74 entities / 82 events, $0.63 |
+| Fine pass over the whole dataset (36.6 h, 30 videos), CUDA build, machine shared with other jobs | 18,491 s = 5 h 8 min; **$45.96** ($24.02 VLM descriptions of 1,014 scenes, $21.94 entity/event extraction over 460 five-minute windows, 9 windows returned non-JSON and were skipped); 236 chapters, 5,074 entities with 9,116 mentions, 4,934 events; index 1.06 → 1.98 GiB. $1.26 per hour of video. |
 | Hybrid `vi search`, one-shot CLI | 1.5 to 2.4 s, of which about 1.3 s loads bge and the SigLIP text tower; the search itself under 30 ms |
 | `vi ask` on the 34-minute talk | 3 tool calls, correct timestamps, $0.065, 14.6 s |
 

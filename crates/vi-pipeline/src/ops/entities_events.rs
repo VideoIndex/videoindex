@@ -54,9 +54,52 @@ pub fn extract_json(text: &str) -> Option<serde_json::Value> {
     if end <= start {
         return None;
     }
-    serde_json::from_str(&t[start..=end])
+    let slice = &t[start..=end];
+    if let Some(v) = serde_json::from_str::<serde_json::Value>(slice)
+        .ok()
+        .filter(|v| v.is_object())
+    {
+        return Some(v);
+    }
+    // Models occasionally leave a trailing comma before a closing bracket
+    // or brace; strip those (outside strings) and try once more.
+    let repaired = strip_trailing_commas(slice);
+    serde_json::from_str(&repaired)
         .ok()
         .filter(|v: &serde_json::Value| v.is_object())
+}
+
+fn strip_trailing_commas(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_str = false;
+    let mut escaped = false;
+    let chars: Vec<char> = s.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        if in_str {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        if c == '"' {
+            in_str = true;
+            out.push(c);
+        } else if c == ',' {
+            // Drop the comma when the next non-space char closes a container.
+            let next = chars[i + 1..].iter().find(|x| !x.is_whitespace());
+            if !matches!(next, Some('}') | Some(']')) {
+                out.push(c);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn canonical(name: &str) -> String {
@@ -350,6 +393,16 @@ impl Operator for EntitiesEvents {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_json_repairs_trailing_commas() {
+        let text = "```json\n{\"entities\": [{\"name\": \"a\", \"kind\": \"person\",}, ], \"events\": [],}\n```";
+        let v = extract_json(text).expect("repaired");
+        assert_eq!(v["entities"][0]["name"], "a");
+        assert!(extract_json("no json here").is_none());
+        let ok = extract_json("prefix {\"a\": \"x, }\"} suffix").unwrap();
+        assert_eq!(ok["a"], "x, }");
+    }
 
     #[test]
     fn json_is_found_inside_prose_and_fences() {
