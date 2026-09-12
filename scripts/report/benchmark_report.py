@@ -63,6 +63,14 @@ def gemini_cost(raw: dict) -> float:
     return tin / 1e6 * GEMINI_PRICE_IN + tc / 1e6 * GEMINI_PRICE_CACHED + tout / 1e6 * GEMINI_PRICE_OUT
 
 
+def model_label(model: str | None) -> str:
+    """`gemini-3.8-flash` -> `Gemini 3.8 Flash`."""
+    if not model:
+        return "Gemini"
+    parts = model.replace("gemini-", "").split("-")
+    return "Gemini " + " ".join(p.capitalize() if p.isalpha() else p for p in parts)
+
+
 def gemini_summary(run: dict | None) -> dict | None:
     """Re-derive the Gemini summary from raw usage so the cost model is the one
     documented here, whatever the harness assumed when it ran."""
@@ -103,6 +111,31 @@ def vi_qa_summary(run: dict | None) -> dict | None:
         "tokens_in_mean": sum(r["usage"].get("tokens_in", 0) for r in res) / n,
         "tokens_out_mean": sum(r["usage"].get("tokens_out", 0) for r in res) / n,
         "p90_s": sorted(r["ms"] for r in res)[int(0.9 * (len(res) - 1))] / 1000 if res else None,
+        "misses": [r for r in res if not r["correct"]],
+    }
+
+
+def subset(summary: dict | None, run: dict | None, ids: set) -> dict | None:
+    """Recompute a VideoIndex QA summary over a subset of question ids so a
+    partial comparison run is scored against the same questions."""
+    if not summary or not run:
+        return None
+    res = [r for r in run["results"] if r["status"] == "ok" and r["id"] in ids]
+    if not res:
+        return None
+    n = len(res)
+    return {
+        **summary, "n": n,
+        "accuracy": sum(r["correct"] for r in res) / n,
+        "cited": sum(r["cited"] for r in res) / n,
+        "cite_video_ok": sum(r["cite_video_ok"] for r in res) / n,
+        "cite_time_ok": sum(r["cite_time_ok"] for r in res) / n,
+        "cost_usd_mean": sum(r["usage"].get("cost_usd", 0) for r in res) / n,
+        "cost_usd_total": sum(r["usage"].get("cost_usd", 0) for r in res),
+        "tokens_mean": sum(r["usage"].get("tokens_in", 0) + r["usage"].get("tokens_out", 0) for r in res) / n,
+        "tool_calls_mean": sum(r["usage"].get("tool_calls", 0) for r in res) / n,
+        "p50_s": statistics.median(r["ms"] for r in res) / 1000,
+        "p90_s": sorted(r["ms"] for r in res)[int(0.9 * (n - 1))] / 1000,
         "misses": [r for r in res if not r["correct"]],
     }
 
@@ -150,8 +183,12 @@ def main():
 
     r1, r2 = load(ev / "retrieval.json"), load(ev / "retrieval2.json")
     qa1, qa2, qro = vi_qa_summary(load(ev / "qa-agent.json")), vi_qa_summary(load(ev / "qa-agent2.json")), vi_qa_summary(load(ev / "qa-retrieval-only.json"))
-    gem = gemini_summary(load(ev / "qa-gemini-agentic.json"))
+    gem_run = load(ev / "qa-gemini-agentic.json")
+    gem = gemini_summary(gem_run)
     gem_static = gemini_summary(load(ev / "qa-gemini-static.json"))
+    gem_ids = {r["id"] for r in (gem_run or {}).get("results", []) if r.get("status") == "ok"}
+    qa2_sub = subset(qa2, load(ev / "qa-agent2.json"), gem_ids) if gem else None
+    qro_sub = subset(qro, load(ev / "qa-retrieval-only.json"), gem_ids) if gem else None
     status = None
     try:
         vi = ROOT / "target" / "release" / "vi"
@@ -225,16 +262,17 @@ def main():
 
     # Gemini comparison charts (separate)
     if gem:
-        sys_labels = ["VideoIndex agent", "VideoIndex retrieval-only", f"Gemini {gem['model']} agentic video"]
-        accs = [100 * qa2["accuracy"], 100 * qro["accuracy"], 100 * gem["accuracy"]]
-        costs = [qa2["cost_usd_mean"], qro["cost_usd_mean"], gem["cost_mean"]]
-        toks = [qa2["tokens_mean"], qro["tokens_mean"], gem["tokens_mean"]]
-        lats = [qa2["p50_s"], qro["p50_s"], gem["p50_s"]]
-        cite_t = [100 * qa2["cite_time_ok"], 100 * qro["cite_time_ok"], 100 * gem["cite_time_ok"]]
+        q2, qr = qa2_sub or qa2, qro_sub or qro
+        sys_labels = ["VideoIndex agent", "VideoIndex retrieval-only", f"{model_label(gem['model'])} agentic video"]
+        accs = [100 * q2["accuracy"], 100 * qr["accuracy"], 100 * gem["accuracy"]]
+        costs = [q2["cost_usd_mean"], qr["cost_usd_mean"], gem["cost_mean"]]
+        toks = [q2["tokens_mean"], qr["tokens_mean"], gem["tokens_mean"]]
+        lats = [q2["p50_s"], qr["p50_s"], gem["p50_s"]]
+        cite_t = [100 * q2["cite_time_ok"], 100 * qr["cite_time_ok"], 100 * gem["cite_time_ok"]]
         if gem_static:
-            sys_labels.append(f"Gemini {gem_static['model']} static (whole video)")
+            sys_labels.append(f"{model_label(gem_static['model'])} static (whole video)")
             accs.append(100 * gem_static["accuracy"]); costs.append(gem_static["cost_mean"]); toks.append(gem_static["tokens_mean"]); lats.append(gem_static["p50_s"]); cite_t.append(100 * gem_static["cite_time_ok"])
-        charts.hbars(ASSETS / "gemini-accuracy.svg", sys_labels, accs, title="Same 52 questions, same video files: accuracy", xlabel="accuracy (%)",
+        charts.hbars(ASSETS / "gemini-accuracy.svg", sys_labels, accs, title=f"Same {gem['n']} questions, same video files: accuracy", xlabel="accuracy (%)",
                      fmt="{:.1f}%", xlim=(0, 108), figsize=(7.2, 2.6), colors=[charts.SERIES[0], charts.SERIES[0], charts.SERIES[1]] + ([charts.SERIES[1]] if gem_static else []))
         charts.hbars(ASSETS / "gemini-cost.svg", sys_labels, costs, title="Cost per question (list prices, USD)", xlabel="USD",
                      fmt="${:.3f}", figsize=(7.2, 2.6), colors=[charts.SERIES[0], charts.SERIES[0], charts.SERIES[1]] + ([charts.SERIES[1]] if gem_static else []),
@@ -253,7 +291,7 @@ def main():
 
     # -------------------------------------------------------------- markdown
     md = GEN / "benchmark.md"
-    md.write_text(render_markdown(R1, R2, r2, qa1, qa2, qro, gem, gem_static, ds_table, ds_rows, tv, names, status))
+    md.write_text(render_markdown(R1, R2, r2, qa1, qa2, qro, gem, gem_static, ds_table, ds_rows, tv, names, status, qa2_sub, qro_sub))
     spec = {
         "title": "VideoIndex benchmark report",
         "subtitle": "Retrieval and question answering over 36.6 hours of lectures and workshops, indexing throughput, and a comparison with Gemini agentic video",
@@ -308,7 +346,7 @@ def _miss_table(misses, id_key="id"):
     return "\n".join(lines)
 
 
-def render_markdown(R1, R2, r2, qa1, qa2, qro, gem, gem_static, ds_table, ds_rows, tv, names, status) -> str:
+def render_markdown(R1, R2, r2, qa1, qa2, qro, gem, gem_static, ds_table, ds_rows, tv, names, status, qa2_sub=None, qro_sub=None) -> str:
     tot_dur = sum(r[2] for r in ds_rows) if ds_rows else 0
     n_videos = len(ds_rows)
     wall = sum(v["elapsed"] for v in tv)
@@ -317,7 +355,7 @@ def render_markdown(R1, R2, r2, qa1, qa2, qro, gem, gem_static, ds_table, ds_row
     unres = [r for r in r2["results"] if r["status"] != "ok"]
     idx_bytes = status["dir_bytes"] / 2**30 if status else 0
 
-    gem_section = _gemini_section(qa2, qro, gem, gem_static)
+    gem_section = _gemini_section(qa2, qro, gem, gem_static, qa2_sub, qro_sub)
 
     return f"""# VideoIndex benchmark report
 
@@ -417,9 +455,10 @@ Two agent configurations and one baseline were run:
 
 ### Known limitations of the scoring
 
-- Substring matching on accepted strings is generous for very short strings and strict for paraphrases; two of the agent's misses
-  are strict-accept cases where the answer is arguably right ("meeting notes" vs the product name the speaker used). Both
-  systems compared below are scored identically, so the comparison is fair even where the absolute number is debatable.
+- Substring matching on accepted strings is generous for very short strings (a one-word accept can match inside a longer,
+  wrong answer) and strict for paraphrases (a correct answer phrased differently is a miss). Every system compared below is
+  scored identically, so the comparison is fair even where an individual verdict is debatable; the miss tables show the
+  answers so a reader can judge.
 - Anchors mark one moment that answers the question; a speaker who restates the point later produces a "right video, wrong
   minute" miss in retrieval and a citation-in-time miss in QA.
 - The dev sets were written by the developers of the system while it was being built. They are a regression gate and a smoke
@@ -581,7 +620,7 @@ def index_log_timings_table(tv, names) -> str:
     return "\n".join(lines)
 
 
-def _gemini_section(qa2, qro, gem, gem_static) -> dict:
+def _gemini_section(qa2, qro, gem, gem_static, qa2_sub=None, qro_sub=None) -> dict:
     rel = (f"Our own agent-versus-baseline deltas are +{100 * (qa2['accuracy'] / qro['accuracy'] - 1):.0f}% accuracy, "
            f"+{100 * (qa2['cost_usd_mean'] / qro['cost_usd_mean'] - 1):.0f}% cost and +{100 * (qa2['tokens_mean'] / qro['tokens_mean'] - 1):.0f}% tokens.")
     claims = """### What Google published
@@ -619,28 +658,33 @@ generated. Re-run `scripts/report/benchmark_report.py` once `/data/videoindex/ev
 
     g = gem
     n = g["n"]
+    q2, qr = qa2_sub or qa2, qro_sub or qro
+    partial = ("" if n >= 52 else
+               f" The run was stopped after {n} questions by decision: this is a development set, and the extensive comparison is "
+               f"planned on LVBench and the other public benchmarks in M4. The VideoIndex rows in this section are recomputed over the "
+               f"same {n} questions so the comparison is like for like; the full-set VideoIndex numbers are in the previous section.")
     lines = f"""## Comparison with Gemini agentic video
 
 {claims}
 ### Like-for-like run: same questions, same files
 
-`scripts/gemini_video_eval.py` asked Gemini **{g['model']}** with `processing: "agentic"` the same 52 questions over the same
+`scripts/gemini_video_eval.py` asked **{model_label(g['model'])}** (`{g['model']}`) with `processing: "agentic"` the QA dev set's questions over the same
 video files (each file uploaded once through the Files API; one `interactions.create` call per question; the prompt asks for a
 one- or two-sentence answer with `[HH:MM:SS]` citations). Answers were scored with the QA rules above: substring match against
 the accepted strings, and a citation counts as in time when a timestamp in the answer lies within 90 s of the anchor. Gemini
 cost is computed from the returned usage object at list price: prompt text and the media the agent loaded
 (`total_tool_use_tokens`) at $0.75 per million, cached tokens at $0.075 per million, output and thinking tokens at $3.75 per
-million. {n} of 52 questions were scored{('; not scored: ' + ', '.join(f'{i} ({s})' for i, s in g['not_scored'])) if g['not_scored'] else ''}.
+million.{partial}{('; not scored: ' + ', '.join(f'{i} ({s_})' for i, s_ in g['not_scored'])) if g['not_scored'] else ''}
 
-| System | accuracy | cited | citation within 90 s | cost / question | tokens / question | median latency | p90 latency |
+| System ({n} questions) | accuracy | cited | citation within 90 s | cost / question | tokens / question | median latency | p90 latency |
 |---|---|---|---|---|---|---|---|
-| VideoIndex agent (Claude Sonnet 5 over the index) | {pct(qa2['accuracy'])} | {pct(qa2['cited'])} | {pct(qa2['cite_time_ok'])} | ${qa2['cost_usd_mean']:.3f} | {qa2['tokens_mean']:,.0f} | {qa2['p50_s']:.1f} s | {qa2['p90_s']:.1f} s |
-| VideoIndex retrieval-only | {pct(qro['accuracy'])} | {pct(qro['cited'])} | {pct(qro['cite_time_ok'])} | ${qro['cost_usd_mean']:.3f} | {qro['tokens_mean']:,.0f} | {qro['p50_s']:.1f} s | {qro['p90_s']:.1f} s |
-| Gemini {g['model']} agentic video | {pct(g['accuracy'])} | {pct(g['cited'])} | {pct(g['cite_time_ok'])} | ${g['cost_mean']:.3f} | {g['tokens_mean']:,.0f} | {g['p50_s']:.1f} s | {g['p90_s']:.1f} s |
+| VideoIndex agent (Claude Sonnet 5 over the index) | {pct(q2['accuracy'])} | {pct(q2['cited'])} | {pct(q2['cite_time_ok'])} | ${q2['cost_usd_mean']:.3f} | {q2['tokens_mean']:,.0f} | {q2['p50_s']:.1f} s | {q2['p90_s']:.1f} s |
+| VideoIndex retrieval-only | {pct(qr['accuracy'])} | {pct(qr['cited'])} | {pct(qr['cite_time_ok'])} | ${qr['cost_usd_mean']:.3f} | {qr['tokens_mean']:,.0f} | {qr['p50_s']:.1f} s | {qr['p90_s']:.1f} s |
+| {model_label(g['model'])} agentic video | {pct(g['accuracy'])} | {pct(g['cited'])} | {pct(g['cite_time_ok'])} | ${g['cost_mean']:.3f} | {g['tokens_mean']:,.0f} | {g['p50_s']:.1f} s | {g['p90_s']:.1f} s |
 """
     if gem_static:
         s = gem_static
-        lines += f"| Gemini {s['model']} static (whole video) | {pct(s['accuracy'])} | {pct(s['cited'])} | {pct(s['cite_time_ok'])} | ${s['cost_mean']:.3f} | {s['tokens_mean']:,.0f} | {s['p50_s']:.1f} s | {s['p90_s']:.1f} s |\n"
+        lines += f"| {model_label(s['model'])} static (whole video) | {pct(s['accuracy'])} | {pct(s['cited'])} | {pct(s['cite_time_ok'])} | ${s['cost_mean']:.3f} | {s['tokens_mean']:,.0f} | {s['p50_s']:.1f} s | {s['p90_s']:.1f} s |\n"
     lines += f"""
 Gemini's agent made {g['processing_calls_mean']:.1f} `processing_call` steps per question on average, loading {g['tool_tokens_mean']:,.0f} tokens of
 frames and transcript, and spent {g['thought_tokens_mean']:,.0f} thinking tokens per question; thinking is the largest cost component at
@@ -672,9 +716,10 @@ called).
 
 {_miss_table(g['misses'])}
 """
-    summary = (f"4. **Gemini {g['model']} agentic video, asked the same 52 questions over the same files, scored {pct(g['accuracy'])} "
-               f"at ${g['cost_mean']:.3f} and {g['p50_s']:.1f} s median per question** (VideoIndex agent: {pct(qa2['accuracy'])}, "
-               f"${qa2['cost_usd_mean']:.3f}, {qa2['p50_s']:.1f} s).")
+    summary = (f"4. **{model_label(g['model'])} agentic video, asked {n} of the same questions over the same files, scored {pct(g['accuracy'])} "
+               f"at ${g['cost_mean']:.3f} and {g['p50_s']:.1f} s median per question** (VideoIndex agent on those {n}: {pct(q2['accuracy'])}, "
+               f"${q2['cost_usd_mean']:.3f}, {q2['p50_s']:.1f} s). Both systems answer these developer-written questions well; the "
+               f"discriminating comparison waits for the public long-video benchmarks.")
     return {"summary_line": summary, "body": lines}
 
 
