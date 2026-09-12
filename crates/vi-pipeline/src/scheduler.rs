@@ -184,9 +184,11 @@ impl Scheduler {
                     )))
                 }
                 None => {
+                    let mut available: Vec<&str> = ops::AVAILABLE.to_vec();
+                    available.extend(self.custom_operators());
                     return Err(Error::invalid(format!(
                         "unknown operator '{op_name}' in policy '{name}'; available: {}",
-                        ops::AVAILABLE.join(", ")
+                        available.join(", ")
                     )))
                 }
             }
