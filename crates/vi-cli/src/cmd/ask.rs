@@ -55,7 +55,7 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
     ));
     vi_perceive::OnnxLocal::register(&providers);
     let mut agent = Agent::new(idx.clone(), providers, config);
-    if args.policy == "retrieval-only" {
+    if matches!(args.policy.as_str(), "retrieval-only" | "retrieval_only") {
         agent = agent.with_policy(Arc::new(RetrievalOnlyPolicy { k: 8 }));
     } else if args.policy != "agent" {
         anyhow::bail!(

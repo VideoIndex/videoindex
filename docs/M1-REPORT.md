@@ -98,10 +98,10 @@ The first run's failure mode was structural, not a ranking problem: the FTS5 que
 | Run | accuracy | cited | citation video correct | citation within the anchor | cost / question | tool calls / question | median latency |
 |---|---|---|---|---|---|---|---|
 | Agent, first retrieval (AND-ed FTS) | 45/52 = **0.865** | 0.942 | 0.942 | 0.712 | $0.060 ($3.10 total) | 2.46 | 7.1 s |
-| Agent, OR-ed FTS + empty-answer retry | QA2_ACCURACY | QA2_CITED | QA2_CITE_VIDEO | QA2_CITE_TIME | QA2_COST | QA2_TOOLS | QA2_P50 |
-| Retrieval-only baseline (one search, then answer) | RO_ACCURACY | RO_CITED | RO_CITE_VIDEO | RO_CITE_TIME | RO_COST | RO_TOOLS | RO_P50 |
+| Agent, OR-ed FTS + empty-answer retry | 50/52 = **0.962** | 1.000 | 1.000 | 0.808 | $0.052 ($2.71 total) | 2.04 | 6.6 s |
+| Retrieval-only baseline (one search, then answer) | 38/52 = **0.731** | 0.750 | 0.750 | 0.635 | $0.017 ($0.90 total) | 1.00 | 4.6 s |
 
-The M2 target ("`idx.ask` answers the dev set at or above 80% with citations, retrieval-only baseline reported next to it") is met on the first run. Three of the seven first-run misses were empty answers: the agent spent its six tool calls searching (the AND-ed FTS starved it of candidates), and the final no-tools turn came back with no text. The loop now asks once more, explicitly, before returning a partial answer. The other four misses are genuine: an answer that names the wrong product, one that stops short of the number asked for, and two where the accepted strings are stricter than the (arguably correct) paraphrase the model gave.
+The M2 target ("`idx.ask` answers the dev set at or above 80% with citations, retrieval-only baseline reported next to it") is met: 96.2% with the fixed retrieval against a 73.1% retrieval-only baseline (one search, then answer, no agent loop), at a third of the cost per question. The two remaining agent misses are the strict-accept cases below; the baseline's 14 misses are mostly questions whose answer sits in a span the first search does not surface, which is what the agent's extra 1.04 tool calls per question buy. Three of the seven first-run misses were empty answers: the agent spent its six tool calls searching (the AND-ed FTS starved it of candidates), and the final no-tools turn came back with no text. The loop now asks once more, explicitly, before returning a partial answer. The other four misses are genuine: an answer that names the wrong product, one that stops short of the number asked for, and two where the accepted strings are stricter than the (arguably correct) paraphrase the model gave.
 
 ## What the design got wrong or left unclear
 
