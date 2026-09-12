@@ -104,6 +104,17 @@ The first run's failure mode was structural, not a ranking problem: the FTS5 que
 
 The M2 target ("`idx.ask` answers the dev set at or above 80% with citations, retrieval-only baseline reported next to it") is met: 96.2% with the fixed retrieval against a 73.1% retrieval-only baseline (one search, then answer, no agent loop), at a third of the cost per question. The two remaining agent misses are real: it names Notion's "AI Writer" where the speaker's answer is meeting notes, and "covariance" where the lecture's metric is the collision rate (the same speech-to-text paraphrase gap that costs retrieval question q32). The baseline's 14 misses are mostly questions whose answer sits in a span the first search does not surface, which is what the agent's extra 1.04 tool calls per question buy. Three of the seven first-run misses were empty answers: the agent spent its six tool calls searching (the AND-ed FTS starved it of candidates), and the final no-tools turn came back with no text. The loop now asks once more, explicitly, before returning a partial answer. The other four misses are genuine: an answer that names the wrong product, one that stops short of the number asked for, and two where the accepted strings are stricter than the (arguably correct) paraphrase the model gave.
 
+### Fine index against coarse index (2026-09-12)
+
+After the fine pass (scene descriptions, chapters, entities and events over all 30 videos) the same two dev sets were re-run on the same index:
+
+| | Retrieval hit@5 | Retrieval MRR | video@1 | QA accuracy | citation within anchor | cost / question | tool calls / question |
+|---|---|---|---|---|---|---|---|
+| Coarse index | 0.944 | 0.724 | 0.819 | 96.2% | 80.8% | $0.052 | 2.04 |
+| Fine index | 0.889 | 0.661 | 0.708 | 92.3% | 82.7% | $0.057 | 2.10 |
+
+The fine pass made retrieval on this dev set slightly *worse*: 16 questions ranked lower and 10 higher, and two QA questions flipped to wrong. The cause is structural, not a bug: the hybrid fusion adds a BM25 list over descriptions and description rows to the text-vector list with the same weight as transcript evidence, and on a transcript-anchored dev set (65 of 72 questions ask about something said) the description hits are plausible-but-wrong neighbours that dilute the transcript hits in reciprocal-rank fusion. The descriptions do help the questions they were built for (visual and summarising ones move up), and citation-in-anchor improved. The right fix is per-kind list weights tuned on a set that mixes question types, which is exactly the M4 sweep; until then `coarse_only` remains the default policy for lecture content, and `vi search --kinds` restricts the lists when the question type is known.
+
 ## What the design got wrong or left unclear
 
 1. **Slide changes are not shots.** The design lists `ShotBoundary` as the visual unit and `Ocr` as running "on distinct frames whose text-likelihood heuristic fires". On slide lectures a title change moves as many pixels as a sponsor-logo swap; no histogram or edge threshold separates them, and pHash of a white slide ignores its text. OCR now runs on a pixel-change gate and collapses repeated lines; slide changes surface as OCR spans, and chapters use OCR title changes. Shots stay true camera cuts.

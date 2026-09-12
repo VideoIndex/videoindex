@@ -182,6 +182,8 @@ def main():
     GEN.mkdir(parents=True, exist_ok=True)
 
     r1, r2 = load(ev / "retrieval.json"), load(ev / "retrieval2.json")
+    r_fine = load(ev / "retrieval-fine.json")
+    qa_fine = vi_qa_summary(load(ev / "qa-agent-fine.json"))
     qa1, qa2, qro = vi_qa_summary(load(ev / "qa-agent.json")), vi_qa_summary(load(ev / "qa-agent2.json")), vi_qa_summary(load(ev / "qa-retrieval-only.json"))
     gem_run = load(ev / "qa-gemini-agentic.json")
     gem = gemini_summary(gem_run)
@@ -291,7 +293,7 @@ def main():
 
     # -------------------------------------------------------------- markdown
     md = GEN / "benchmark.md"
-    md.write_text(render_markdown(R1, R2, r2, qa1, qa2, qro, gem, gem_static, ds_table, ds_rows, tv, names, status, qa2_sub, qro_sub))
+    md.write_text(render_markdown(R1, R2, r2, qa1, qa2, qro, gem, gem_static, ds_table, ds_rows, tv, names, status, qa2_sub, qro_sub, r_fine, qa_fine))
     spec = {
         "title": "VideoIndex benchmark report",
         "subtitle": "Retrieval and question answering over 36.6 hours of lectures and workshops, indexing throughput, and a comparison with Gemini agentic video",
@@ -346,7 +348,7 @@ def _miss_table(misses, id_key="id"):
     return "\n".join(lines)
 
 
-def render_markdown(R1, R2, r2, qa1, qa2, qro, gem, gem_static, ds_table, ds_rows, tv, names, status, qa2_sub=None, qro_sub=None) -> str:
+def render_markdown(R1, R2, r2, qa1, qa2, qro, gem, gem_static, ds_table, ds_rows, tv, names, status, qa2_sub=None, qro_sub=None, r_fine=None, qa_fine=None) -> str:
     tot_dur = sum(r[2] for r in ds_rows) if ds_rows else 0
     n_videos = len(ds_rows)
     wall = sum(v["elapsed"] for v in tv)
@@ -540,6 +542,8 @@ explicitly, before returning a partial answer; with the retrieval fix the agent 
 
 {_miss_table(qro['misses'])}
 
+{_fine_section(R2, qa2, r_fine, qa_fine)}
+
 {gem_section['body']}
 
 ## Results: indexing throughput
@@ -618,6 +622,24 @@ def index_log_timings_table(tv, names) -> str:
                 cells.append("cached" if st in v["cached"] else "")
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
+
+
+def _fine_section(R2, qa2, r_fine, qa_fine) -> str:
+    if not r_fine or not qa_fine:
+        return ""
+    F = r_fine["report"]["overall"]
+    R2 = R2["overall"] if "overall" in R2 else R2
+    return f"""## Results: fine index against coarse index
+
+The fine pass (VLM scene descriptions, chapters, entities and events; 5 h 8 min and $45.96 over the 30 videos with Claude Sonnet 5) was run on the same index and both dev sets re-evaluated.
+
+| | Retrieval hit@5 | Retrieval MRR | video@1 | QA accuracy | citation within anchor | cost / question | tool calls / question |
+|---|---|---|---|---|---|---|---|
+| Coarse index | {R2['hit@5']:.3f} | {R2['mrr']:.3f} | {R2['video@1']:.3f} | {pct(qa2['accuracy'])} | {pct(qa2['cite_time_ok'])} | ${qa2['cost_usd_mean']:.3f} | {qa2['tool_calls_mean']:.2f} |
+| Fine index | {F['hit@5']:.3f} | {F['mrr']:.3f} | {F['video@1']:.3f} | {pct(qa_fine['accuracy'])} | {pct(qa_fine['cite_time_ok'])} | ${qa_fine['cost_usd_mean']:.3f} | {qa_fine['tool_calls_mean']:.2f} |
+
+On this transcript-anchored dev set the fine index scores lower: description rows join the fusion as an equal-weight BM25 list and as text vectors, and their plausible neighbours outrank transcript hits under reciprocal-rank fusion (16 retrieval questions moved down, 10 up; two QA questions flipped). Citation-in-anchor improved, so the rows are useful but over-weighted for this question mix. Per-kind list weights are the first tuning target of the M4 sweep; `coarse_only` stays the default for lecture content.
+"""
 
 
 def _gemini_section(qa2, qro, gem, gem_static, qa2_sub=None, qro_sub=None) -> dict:
