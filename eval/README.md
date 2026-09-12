@@ -34,6 +34,20 @@ Every run file records the question set, the exact configuration (policy, budget
 ids, prompt hashes when the CLI reports them), per-question answers, parsed choices,
 usage and timing, so runs are comparable and re-scorable.
 
+## Sampled runs (while iterating on the core)
+
+```bash
+# 25% of the benchmark, stratified by task type, same questions for every configuration; one command runs the matrix and the report
+python3 -m eval.run eval/configs/lvbench-first.toml --fraction 0.25 --seed 1 --jobs 4
+# acquire only the videos that sample needs
+python3 -m eval.datasets.acquire minerva --root /data/videoindex/eval/minerva --fraction 0.25 --seed 1 --download
+```
+
+The sample is drawn from the whole benchmark before filtering by what is indexed, so `(seed, fraction)`
+names a fixed question set: runs made while videos are still arriving answer a subset of it and record
+how many were skipped, and a later run with `--resume` fills them in. Run files are named
+`<benchmark>-f0.25-s1-<run>.json`.
+
 ## Multiple-choice protocol
 
 The question and its lettered options go to `vi ask` restricted to the question's video

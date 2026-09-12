@@ -24,7 +24,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from ..datasets import Question, load
+from ..datasets import Question, load, sample_size, stratified_sample
 
 ANSWER_RE = re.compile(r"answer\s*[:\-]?\s*\(?\s*([A-H])\s*\)?\s*\.?\s*$", re.I | re.M)
 LONE_RE = re.compile(r"(?:^|\s)\(?([A-H])\)?\s*\.?\s*$")
@@ -45,24 +45,6 @@ def parse_letter(text: str, letters: list[str]) -> str | None:
             if re.search(rf"\(({l})\)", last):
                 return l
     return None
-
-
-def stratified_sample(qs: list[Question], n: int, seed: int) -> list[Question]:
-    if n >= len(qs):
-        return qs
-    rng = random.Random(seed)
-    by_type: dict[str, list[Question]] = defaultdict(list)
-    for q in qs:
-        by_type[q.task_types[0] if q.task_types else "unknown"].append(q)
-    out: list[Question] = []
-    # Proportional allocation with at least one per type.
-    total = len(qs)
-    for t, group in sorted(by_type.items()):
-        k = max(1, round(n * len(group) / total))
-        rng.shuffle(group)
-        out.extend(group[:k])
-    rng.shuffle(out)
-    return out[:n]
 
 
 def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question, policy: str, budget_usd: float, max_tool_calls: int, budget_tokens: int) -> dict:
@@ -110,7 +92,8 @@ def main():
     ap.add_argument("--budget-tokens", type=int, default=120000)
     ap.add_argument("--retry-empty", type=int, default=1, help="re-ask when the answer text is empty (model ended a forced turn with no content)")
     ap.add_argument("--max-tool-calls", type=int, default=6)
-    ap.add_argument("--sample", type=int)
+    ap.add_argument("--sample", type=int, help="number of questions (stratified by task type)")
+    ap.add_argument("--fraction", type=float, help="fraction of the benchmark, e.g. 0.25 (stratified by task type)")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--limit", type=int)
@@ -119,11 +102,17 @@ def main():
     a = ap.parse_args()
 
     root = Path(a.root)
-    qs = load(a.benchmark, root)
+    pool = load(a.benchmark, root)
     vmap = json.loads((root / "video_map.json").read_text()) if (root / "video_map.json").is_file() else {}
+    # Sample from the whole benchmark first, so the same (seed, size) names the
+    # same questions for every configuration and every acquisition state; then
+    # keep the ones whose video is indexed and report how many are missing.
+    n = sample_size(len(pool), a.sample, a.fraction)
+    qs = stratified_sample(pool, n, a.seed) if n else pool
+    missing = [q for q in qs if q.video_key not in vmap]
     qs = [q for q in qs if q.video_key in vmap]
-    if a.sample:
-        qs = stratified_sample(qs, a.sample, a.seed)
+    if missing:
+        print(f"{len(missing)} sampled questions skipped: their videos are not indexed", file=sys.stderr)
     if a.limit:
         qs = qs[: a.limit]
     out_path = Path(a.out)
@@ -135,7 +124,8 @@ def main():
     todo = [q for q in qs if q.id not in results]
     config_record = {
         "benchmark": a.benchmark, "policy": a.policy, "budget_usd": a.budget_usd, "budget_tokens": a.budget_tokens,
-        "max_tool_calls": a.max_tool_calls, "sample": a.sample, "seed": a.seed, "config": a.config, "index": a.index,
+        "max_tool_calls": a.max_tool_calls, "sample": n, "fraction": a.fraction, "seed": a.seed, "config": a.config, "index": a.index,
+        "skipped_not_indexed": len(missing),
         "vi_version": subprocess.run([a.vi, "--version"], capture_output=True, text=True).stdout.strip(),
         "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }

@@ -7,7 +7,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from eval.datasets.lvbench import split_question  # noqa: E402
 from eval.metrics import parse_ref, score, wilson  # noqa: E402
-from eval.runners.answer import parse_letter, stratified_sample  # noqa: E402
+from eval.runners.answer import parse_letter  # noqa: E402
+from eval.datasets import stratified_sample, sample_size  # noqa: E402
 from eval.datasets import Question  # noqa: E402
 
 
@@ -48,3 +49,14 @@ def test_metrics():
     assert s["n"] == 2 and s["accuracy"] == 0.5 and s["failed"] == 1 and s["unparsed"] == 1
     assert s["citation_in_range"] == 1.0 and s["no_decode_fraction"] == 0.5
     assert abs(s["cost_mean"] - 0.2) < 1e-9
+
+
+def test_sample_size_and_determinism():
+    assert sample_size(1549, None, 0.25) == 387
+    assert sample_size(100, 30, 0.25) == 30
+    assert sample_size(100, None, None) is None
+    qs = [Question(id=str(i), benchmark="b", video_key="v", question="q", options=["a", "b"], answer="A", task_types=[t])
+          for i, t in enumerate(["x"] * 50 + ["y"] * 10)]
+    a = [q.id for q in stratified_sample(qs, 12, 1)]
+    b = [q.id for q in stratified_sample(list(reversed(qs)), 12, 1)]
+    assert a == b, "the sample depends on the seed, not on the pool order"

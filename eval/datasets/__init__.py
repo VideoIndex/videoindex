@@ -50,3 +50,37 @@ def load(benchmark: str, root: str):
     else:
         raise SystemExit(f"unknown benchmark {benchmark}")
     return f(root)
+
+
+def stratified_sample(qs: list, n: int, seed: int) -> list:
+    """`n` questions with the same task-type mix as the pool (at least one per
+    type), in a shuffled order that depends only on `seed`, so every
+    configuration answers the same questions."""
+    import random  # noqa: PLC0415
+    from collections import defaultdict  # noqa: PLC0415
+
+    if n >= len(qs):
+        return list(qs)
+    rng = random.Random(seed)
+    by_type: dict[str, list] = defaultdict(list)
+    for q in sorted(qs, key=lambda q: q.id):
+        by_type[q.task_types[0] if q.task_types else "unknown"].append(q)
+    out: list = []
+    total = len(qs)
+    for _, group in sorted(by_type.items()):
+        k = max(1, round(n * len(group) / total))
+        rng.shuffle(group)
+        out.extend(group[:k])
+    rng.shuffle(out)
+    return out[:n]
+
+
+def sample_size(total: int, sample: int | None, fraction: float | None) -> int | None:
+    """Resolve `--sample N` / `--fraction F` to a count (None = everything)."""
+    if sample:
+        return sample
+    if fraction:
+        if not 0 < fraction <= 1:
+            raise SystemExit("--fraction must be in (0, 1]")
+        return max(1, round(total * fraction))
+    return None

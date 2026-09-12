@@ -1,0 +1,22 @@
+# MINERVA: agent, retrieval-only and uniform-sampling baseline.
+benchmark = "minerva"
+root = "/data/videoindex/eval/minerva"
+index = "/data/videoindex/indexes/eval-minerva.vidx"
+config = "config/gcp-a100.toml"
+
+[[runs]]
+name = "agent"
+policy = "agent"
+max_tool_calls = 6
+budget_usd = 0.5
+budget_tokens = 120000
+
+[[runs]]
+name = "retrieval-only"
+policy = "retrieval-only"
+
+[[runs]]
+name = "uniform-32"
+baseline = "uniform"
+frames = 32
+model = "claude-sonnet-5"

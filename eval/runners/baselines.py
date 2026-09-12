@@ -28,7 +28,8 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from ..datasets import Question, load
-from .answer import parse_letter, stratified_sample
+from ..datasets import sample_size, stratified_sample
+from .answer import parse_letter
 
 PRICES = {  # USD per million tokens, list price
     "claude-sonnet-5": (3.0, 15.0),
@@ -152,6 +153,7 @@ def main():
     ap.add_argument("--model", default="claude-sonnet-5")
     ap.add_argument("--no-transcript", action="store_true")
     ap.add_argument("--sample", type=int)
+    ap.add_argument("--fraction", type=float)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--jobs", type=int, default=3)
     ap.add_argument("--limit", type=int)
@@ -165,9 +167,10 @@ def main():
     if vmap_path.is_file():
         mapped = set(json.loads(vmap_path.read_text()))
         files = {k: v for k, v in files.items() if k in mapped}
-    qs = [q for q in load(a.benchmark, root) if q.video_key in files]
-    if a.sample:
-        qs = stratified_sample(qs, a.sample, a.seed)
+    pool = load(a.benchmark, root)
+    n = sample_size(len(pool), a.sample, a.fraction)
+    qs = stratified_sample(pool, n, a.seed) if n else pool
+    qs = [q for q in qs if q.video_key in files]
     if a.limit:
         qs = qs[: a.limit]
     out_path = Path(a.out)
@@ -178,7 +181,7 @@ def main():
             results[r["id"]] = r
     todo = [q for q in qs if q.id not in results]
     config_record = {"benchmark": a.benchmark, "policy": f"uniform-{a.frames}" + ("" if not a.no_transcript else "-notranscript"),
-                     "model": a.model, "frames": a.frames, "transcript": not a.no_transcript, "sample": a.sample, "seed": a.seed,
+                     "model": a.model, "frames": a.frames, "transcript": not a.no_transcript, "sample": n, "fraction": a.fraction, "seed": a.seed,
                      "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 
     def flush():

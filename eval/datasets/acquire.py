@@ -19,7 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import load
+from . import load, sample_size, stratified_sample
 
 YTDLP = [
     "yt-dlp", "-f", "bv*[height<=720]+ba/b[height<=720]", "--merge-output-format", "mp4",
@@ -89,9 +89,15 @@ def main():
     ap.add_argument("--config")
     ap.add_argument("--policy", default="coarse_only")
     ap.add_argument("--vi", default="target/release/vi")
+    ap.add_argument("--sample", type=int, help="only the videos a stratified sample of N questions needs")
+    ap.add_argument("--fraction", type=float, help="only the videos a stratified sample of this fraction needs")
+    ap.add_argument("--seed", type=int, default=1)
     a = ap.parse_args()
     root = Path(a.root)
     qs = load(a.benchmark, root)
+    n = sample_size(len(qs), a.sample, a.fraction)
+    if n:
+        qs = stratified_sample(qs, n, a.seed)
     keys = sorted({q.video_key for q in qs})
     have = present(root)
     print(f"{a.benchmark}: {len(qs)} questions over {len(keys)} videos; {sum(k in have for k in keys)} present", file=sys.stderr)
