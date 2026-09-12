@@ -19,6 +19,7 @@ Read the documents in order the first time. After that, each stands alone.
 | 11 | [Deployment](11-deployment.md) | videoindex.app on the azuremc machine |
 | — | [Kickoff prompt](KICKOFF.md) | The prompt that started development on azuremc (M0) |
 | — | [GCP kickoff prompt](KICKOFF-GCP.md) | The prompt to continue development on the GCP A100 machine (M1 onward) |
+| — | [M1 report](M1-REPORT.md) | What M1 (and the M2 work so far) measured on the GCP machine: timings, dev set results, design findings |
 | — | [Machine facts](MACHINE.md) | The current host (GCP A100 80 GB): hardware, toolchain, GPU stack, model files, M0 re-timing |
 | — | [azuremc facts](MACHINE-azuremc.md) | The first host and what M0 measured on it |
 | — | [Machine recommendations](MACHINE-RECOMMENDATIONS.md) | Specs for the indexing/dev machine and the serving machine |
