@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Per-video timing table from a `vi index` log.
 
-    python3 scripts/index_log_timings.py /data/videoindex/logs/dataset-index2.log [index.vidx]
+    python3 scripts/index_log_timings.py <log>[,<log>...] [index.vidx]
 
 Reads the `indexing <uri>`, `acquired and probed ... video=<id> duration=<hms>`,
 `<stage> done: <n> items in <s>s` and `finished: ...` lines and prints a
@@ -85,7 +85,19 @@ def hms(secs):
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
-    videos = parse(sys.argv[1])
+    videos = []
+    for log in sys.argv[1].split(","):
+        videos.extend(parse(log))
+    # The same video may appear in several logs (a resumed run replays it
+    # from the cache in seconds); keep the run that did the work.
+    by_id = {}
+    for v in videos:
+        if "elapsed" not in v:
+            continue
+        key = v.get("video_id", v["uri"])
+        if key not in by_id or v["elapsed"] > by_id[key]["elapsed"]:
+            by_id[key] = v
+    videos = list(by_id.values())
     names = titles(sys.argv[2] if len(sys.argv) > 2 else None)
     cols = ["Video", "Duration", "Wall", "× real time"] + STAGES
     print("| " + " | ".join(cols) + " |")
