@@ -466,7 +466,13 @@ impl Scheduler {
                 plan[i] = Plan::Run;
                 continue;
             }
-            let consumer_needs_items = consumers[i].iter().any(|c| plan[*c] != Plan::Skip);
+            // Only a consumer that *runs* needs this stage's items: a
+            // replaying consumer re-emits its own stored rows and reads
+            // nothing but the media item. Counting replays here made a
+            // fine pass re-decode and re-OCR every video, because `scenes`
+            // needed shots, shots replayed, and the replay was taken as a
+            // need for frames from `sample`, which cannot replay.
+            let consumer_needs_items = consumers[i].iter().any(|c| plan[*c] == Plan::Run);
             plan[i] = if !consumer_needs_items {
                 Plan::Skip
             } else if operators[i].replay_supported() {

@@ -391,6 +391,62 @@ async fn cached_stages_are_skipped_or_replayed_and_new_ones_run() {
     assert!(forced.stages.values().all(|s| !s.cached));
 }
 
+/// A fine pass over a coarse-indexed video must not re-decode it: `scenes`
+/// needs shots, `shot_boundary` replays them from storage, and a replaying
+/// consumer is not a reason for `sample` (which cannot replay) to run.
+#[tokio::test]
+async fn a_fine_stage_over_a_cached_coarse_pass_replays_instead_of_redecoding() {
+    let dir = tempfile::tempdir().unwrap();
+    let idx = Arc::new(EmbeddedIndex::create(&dir.path().join("t.vidx")).unwrap());
+    let mut c = Config::default();
+    c.media.worker.path = Some(fx::worker_path());
+    c.media.sample_max_dim = 320;
+    c.policy.insert(
+        "coarse".into(),
+        policy(&["sample", "phash", "thumbnail", "shot_boundary"]),
+    );
+    let mut fine = policy(&["sample", "phash", "thumbnail", "shot_boundary"]);
+    fine.fine = vec!["scenes".into()];
+    c.policy.insert("fine".into(), fine);
+    let sched = Scheduler::new(idx.clone(), Arc::new(c), EventBus::default());
+    let run = |p: &str| {
+        let sched = sched.clone();
+        let p = p.to_string();
+        async move {
+            sched
+                .run(
+                    Source::Path(fx::fixture_path()),
+                    JobOptions {
+                        policy: Some(p),
+                        ..JobOptions::default()
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap()
+        }
+    };
+    let first = run("coarse").await;
+    assert!(first.ok, "{first:?}");
+    let second = run("fine").await;
+    assert!(second.ok && !second.skipped, "{second:?}");
+    assert_eq!(second.stages["scenes"].status, StageStatus::Complete);
+    assert!(second.stages["scenes"].items_done > 0);
+    assert!(
+        second.stages["shot_boundary"].replayed,
+        "{:?}",
+        second.stages["shot_boundary"]
+    );
+    for st in ["sample", "phash", "thumbnail"] {
+        assert_eq!(
+            second.stages[st].status,
+            StageStatus::Skipped,
+            "{st} should be skipped: {:?}",
+            second.stages[st]
+        );
+    }
+}
+
 #[tokio::test]
 async fn budget_exhaustion_skips_provider_calls_and_failures_are_reported() {
     let dir = tempfile::tempdir().unwrap();
