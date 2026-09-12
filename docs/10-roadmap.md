@@ -54,6 +54,8 @@ Done when: a question typed in the browser at videoindex.app streams an answer w
 
 ## M4. Evaluation
 
+**Progress 2026-09-12:** `eval/` exists (loaders for LVBench, MINERVA and 1H-VideoQA, yt-dlp acquisition, `vi index` runner with the YouTube-key to video-id map, `vi ask` answer runner with stratified sampling and letter parsing, a uniform-sampling baseline through the Anthropic API, metrics with Wilson intervals, a report with a pareto plot). YouTube is reachable from the GCP host with yt-dlp + deno, so acquisition runs here; LVBench (103 videos) and MINERVA annotations (1,291 questions, 188 videos) are downloaded, LVBench videos are being fetched and indexed. First results go to `docs/results/`.
+
 - `eval/` harness, loaders for LVBench and Minerva, 1H-VideoQA if obtainable, baselines, reports.
 - Provider and policy sweeps on azuremc; pareto plots.
 - Tune sampling, grids, prompts, and policy from results; port winning policies to Rust.

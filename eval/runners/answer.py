@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""Answer a benchmark's questions with `vi ask` under one configuration.
+
+    python3 -m eval.runners.answer lvbench --root /data/videoindex/eval/lvbench \
+        --index /data/videoindex/indexes/eval-lvbench.vidx --config config/gcp-a100.toml \
+        --policy agent --max-tool-calls 6 --budget-usd 0.3 --sample 300 --seed 1 --jobs 4 \
+        --out /data/videoindex/eval/runs/lvbench-agent.json
+
+Each question goes to `vi ask --json --video <id>` with the multiple-choice
+prompt; the run file keeps the events, usage, parsed letter and correctness.
+`--sample N` takes a stratified sample (by task type, then video) so a subset
+run is representative; `--resume` skips questions already in `--out`.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import random
+import re
+import subprocess
+import sys
+import time
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+from ..datasets import Question, load
+
+ANSWER_RE = re.compile(r"answer\s*[:\-]?\s*\(?\s*([A-H])\s*\)?\s*\.?\s*$", re.I | re.M)
+LONE_RE = re.compile(r"(?:^|\s)\(?([A-H])\)?\s*\.?\s*$")
+
+
+def parse_letter(text: str, letters: list[str]) -> str | None:
+    text = text.strip().replace("**", "")
+    m = ANSWER_RE.findall(text)
+    if m and m[-1].upper() in letters:
+        return m[-1].upper()
+    lines = [l for l in text.splitlines() if l.strip()]
+    if lines:
+        last = lines[-1]
+        m2 = LONE_RE.search(last)
+        if m2 and m2.group(1).upper() in letters:
+            return m2.group(1).upper()
+        for l in letters:
+            if re.search(rf"\(({l})\)", last):
+                return l
+    return None
+
+
+def stratified_sample(qs: list[Question], n: int, seed: int) -> list[Question]:
+    if n >= len(qs):
+        return qs
+    rng = random.Random(seed)
+    by_type: dict[str, list[Question]] = defaultdict(list)
+    for q in qs:
+        by_type[q.task_types[0] if q.task_types else "unknown"].append(q)
+    out: list[Question] = []
+    # Proportional allocation with at least one per type.
+    total = len(qs)
+    for t, group in sorted(by_type.items()):
+        k = max(1, round(n * len(group) / total))
+        rng.shuffle(group)
+        out.extend(group[:k])
+    rng.shuffle(out)
+    return out[:n]
+
+
+def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question, policy: str, budget_usd: float, max_tool_calls: int, budget_tokens: int) -> dict:
+    cmd = [vi] + (["--config", config] if config else []) + [
+        "ask", index, q.prompt(), "--json", "--video", video_id, "--policy", policy,
+        "--budget-usd", str(budget_usd), "--max-tool-calls", str(max_tool_calls), "--budget-tokens", str(budget_tokens),
+    ]
+    t = time.time()
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    ms = int((time.time() - t) * 1000)
+    if proc.returncode != 0:
+        return {"id": q.id, "status": "ask-failed", "error": proc.stderr[-400:], "ms": ms}
+    text, cites, tools, usage, partial = "", [], [], {}, False
+    for line in proc.stdout.splitlines():
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if ev["type"] == "token":
+            text += ev["text"]
+        elif ev["type"] == "citation":
+            cites.append({"t0": ev["t0"], "t1": ev["t1"], "kind": ev.get("kind")})
+        elif ev["type"] == "tool_call":
+            tools.append(ev["tool"])
+        elif ev["type"] == "done":
+            usage, partial = ev["usage"], ev["partial"]
+    letter = parse_letter(text, q.letters)
+    return {
+        "id": q.id, "status": "ok", "video_key": q.video_key, "task_types": q.task_types, "video_type": q.video_type,
+        "answer": q.answer, "predicted": letter, "correct": letter == q.answer, "parsed": letter is not None,
+        "text": text.strip()[-600:], "citations": cites, "tools": tools, "usage": usage, "partial": partial, "ms": ms,
+        "time_reference": q.time_reference,
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("benchmark")
+    ap.add_argument("--root", required=True)
+    ap.add_argument("--index", required=True)
+    ap.add_argument("--config")
+    ap.add_argument("--vi", default="target/release/vi")
+    ap.add_argument("--policy", default="agent")
+    ap.add_argument("--budget-usd", type=float, default=0.3)
+    ap.add_argument("--budget-tokens", type=int, default=60000)
+    ap.add_argument("--max-tool-calls", type=int, default=6)
+    ap.add_argument("--sample", type=int)
+    ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--limit", type=int)
+    ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--out", required=True)
+    a = ap.parse_args()
+
+    root = Path(a.root)
+    qs = load(a.benchmark, root)
+    vmap = json.loads((root / "video_map.json").read_text()) if (root / "video_map.json").is_file() else {}
+    qs = [q for q in qs if q.video_key in vmap]
+    if a.sample:
+        qs = stratified_sample(qs, a.sample, a.seed)
+    if a.limit:
+        qs = qs[: a.limit]
+    out_path = Path(a.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    results: dict[str, dict] = {}
+    if a.resume and out_path.is_file():
+        for r in json.loads(out_path.read_text()).get("results", []):
+            results[r["id"]] = r
+    todo = [q for q in qs if q.id not in results]
+    config_record = {
+        "benchmark": a.benchmark, "policy": a.policy, "budget_usd": a.budget_usd, "budget_tokens": a.budget_tokens,
+        "max_tool_calls": a.max_tool_calls, "sample": a.sample, "seed": a.seed, "config": a.config, "index": a.index,
+        "vi_version": subprocess.run([a.vi, "--version"], capture_output=True, text=True).stdout.strip(),
+        "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    print(f"{len(qs)} questions ({len(todo)} to run) with policy={a.policy} jobs={a.jobs}", file=sys.stderr)
+
+    def flush():
+        out_path.write_text(json.dumps({"config": config_record, "n_questions": len(qs), "results": list(results.values())}, indent=1))
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=a.jobs) as ex:
+        futs = {ex.submit(ask_one, a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens): q for q in todo}
+        for fut in as_completed(futs):
+            r = fut.result()
+            results[r["id"]] = r
+            done += 1
+            ok = r.get("correct")
+            print(f"[{done}/{len(todo)}] {r['id']} {'OK ' if ok else ('MISS' if r.get('status') == 'ok' else 'ERR ')} pred={r.get('predicted')} gt={r.get('answer')} ${r.get('usage', {}).get('cost_usd', 0):.3f} {r.get('ms', 0)/1000:.1f}s", flush=True)
+            if done % 5 == 0:
+                flush()
+    flush()
+    scored = [r for r in results.values() if r.get("status") == "ok"]
+    acc = sum(r["correct"] for r in scored) / max(1, len(scored))
+    print(json.dumps({"n": len(scored), "accuracy": round(acc, 3), "unparsed": sum(not r["parsed"] for r in scored),
+                      "cost_usd_total": round(sum(r["usage"].get("cost_usd", 0) for r in scored), 3)}, indent=1))
+
+
+if __name__ == "__main__":
+    main()

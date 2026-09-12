@@ -1,0 +1,24 @@
+# First LVBench comparison: the agent, the retrieval-only baseline and the
+# uniform-sampling baseline on a 300-question stratified sample.
+benchmark = "lvbench"
+root = "/data/videoindex/eval/lvbench"
+index = "/data/videoindex/indexes/eval-lvbench.vidx"
+config = "config/gcp-a100.toml"
+sample = 300
+seed = 1
+
+[[runs]]
+name = "agent"
+policy = "agent"
+max_tool_calls = 6
+budget_usd = 0.3
+
+[[runs]]
+name = "retrieval-only"
+policy = "retrieval-only"
+
+[[runs]]
+name = "uniform-32"
+baseline = "uniform"
+frames = 32
+model = "claude-sonnet-5"
