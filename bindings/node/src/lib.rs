@@ -201,8 +201,11 @@ impl Index {
         );
         let src = vi_media::Source::parse(&source);
         let mut reports = Vec::new();
+        // Like `vi index`: one failing file does not abort the rest; it is
+        // reported as `{ok: false, error}` in its slot.
         for s in sched.expand(&src).await.map_err(err)? {
-            let r = sched
+            let uri = s.uri();
+            match sched
                 .run(
                     s,
                     vi_pipeline::JobOptions {
@@ -213,8 +216,11 @@ impl Index {
                     CancellationToken::new(),
                 )
                 .await
-                .map_err(err)?;
-            reports.push(json(&r)?);
+            {
+                Ok(r) => reports.push(json(&r)?),
+                Err(e) => reports
+                    .push(serde_json::json!({"ok": false, "source": uri, "error": e.to_string()})),
+            }
         }
         Ok(Value::Array(reports))
     }

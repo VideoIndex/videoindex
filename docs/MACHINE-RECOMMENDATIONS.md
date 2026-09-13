@@ -49,7 +49,7 @@ Runs nginx, `vi serve` (HTTP, SSE, MCP), the Node chat app, and on-demand decode
 | RAM | 32 GB | 16 GB |
 | OS disk | 64 GB | 64 GB |
 | Data disk at `/data` | 512 GB Premium SSD | 256 GB |
-| Network | public IP, ports 80/443 only; `vi serve` on 127.0.0.1:8090 and the chat app on 127.0.0.1:3000 | same |
+| Network | public IP, ports 80/443 only; `vi serve` on 127.0.0.1:8080 (8090 on a host where 8080 is taken) and the chat app on 127.0.0.1:3000 | same |
 | OS and stack | Ubuntu 24.04, Docker, nginx or Caddy, Node 20+ | same |
 
 Rationale:

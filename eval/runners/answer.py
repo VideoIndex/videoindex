@@ -144,11 +144,15 @@ def main():
             while r.get("status") == "ok" and not r.get("text") and tries < a.retry_empty:
                 tries += 1
                 again = ask_one(a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens)
-                # Keep the spend of both attempts honest.
-                if again.get("status") == "ok":
-                    again["usage"]["cost_usd"] = again["usage"].get("cost_usd", 0) + r["usage"].get("cost_usd", 0)
-                    again["usage"]["tokens_in"] = again["usage"].get("tokens_in", 0) + r["usage"].get("tokens_in", 0)
-                    again["retries"] = tries
+                if again.get("status") != "ok":
+                    # Keep the first (scored, empty) attempt rather than losing its spend.
+                    r["retry_failed"] = again.get("error", again.get("status"))
+                    break
+                # The question is charged for both attempts, on every measure.
+                for k in ("cost_usd", "tokens_in", "tokens_out", "tool_calls", "provider_calls", "wallclock_ms"):
+                    again["usage"][k] = again["usage"].get(k, 0) + r["usage"].get(k, 0)
+                again["ms"] = again.get("ms", 0) + r.get("ms", 0)
+                again["retries"] = tries
                 r = again
             return r
 

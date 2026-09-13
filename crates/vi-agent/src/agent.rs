@@ -434,6 +434,29 @@ async fn run(
         )
         .await?;
         usage.provider_calls += 1;
+        if !allow_tools && !turn.calls.is_empty() {
+            // Tools were withheld (`tool_choice: none`) but the model called
+            // one anyway: some OpenAI-compatible servers ignore the flag.
+            // Never execute past the budget; ask once for a text answer,
+            // then stop with what there is.
+            if !retried_empty {
+                retried_empty = true;
+                tracing::debug!(
+                    calls = turn.calls.len(),
+                    "tool calls after the budget; asking for text"
+                );
+                messages.push(Message::text(
+                    Role::User,
+                    "Do not call tools. Write the final answer now as text from the observations above.",
+                ));
+                continue;
+            }
+            partial = true;
+            reason.get_or_insert_with(|| {
+                "model kept calling tools after the budget was exhausted".into()
+            });
+            break;
+        }
         if turn.calls.is_empty() {
             if turn.finish == "length" {
                 partial = true;

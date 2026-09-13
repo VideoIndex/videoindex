@@ -89,9 +89,11 @@ impl AppState {
                 rd.filter_map(|e| e.ok())
                     .filter(|e| e.path().is_dir() && e.path().join("manifest.json").is_file())
                     .filter_map(|e| {
+                        // Only `<id>.vidx` directories are addressable (index_path appends the suffix).
                         e.file_name()
                             .to_str()
-                            .map(|s| s.strip_suffix(".vidx").unwrap_or(s).to_string())
+                            .and_then(|s| s.strip_suffix(".vidx"))
+                            .map(str::to_string)
                     })
                     .collect()
             })
@@ -111,15 +113,23 @@ impl AppState {
         if !path.join("manifest.json").is_file() {
             return Err(ApiError::not_found(format!("no index '{key}'")));
         }
+        // Open under the write lock so two first requests cannot each open
+        // their own EmbeddedIndex (the vector store caches row counts per
+        // instance; two instances appending would collide).
+        let mut m = self
+            .indexes
+            .write()
+            .map_err(|_| ApiError::internal("index registry lock"))?;
+        if let Some(ix) = m.get(&key) {
+            return Ok(ix.clone());
+        }
         let storage = Arc::new(EmbeddedIndex::open(&path)?);
         let ix = Arc::new(OpenIndex {
             id: key.clone(),
             path,
             storage,
         });
-        if let Ok(mut m) = self.indexes.write() {
-            m.entry(key).or_insert_with(|| ix.clone());
-        }
+        m.insert(key, ix.clone());
         Ok(ix)
     }
 
@@ -186,6 +196,20 @@ impl AppState {
                 "this key has spent ${:.2} today; the daily cap is ${cap:.2}",
                 entry.1
             )));
+        }
+        Ok(())
+    }
+
+    /// Refuse new provider spend once a key is over its daily cap.
+    pub fn check_cap(&self, bucket: &str) -> ApiResult<()> {
+        let cap = self.config.server.daily_cost_cap_usd;
+        if cap > 0.0 {
+            let spent = self.spent_today(bucket);
+            if spent >= cap {
+                return Err(ApiError::quota(format!(
+                    "this key has spent ${spent:.2} today; the daily cap is ${cap:.2}"
+                )));
+            }
         }
         Ok(())
     }

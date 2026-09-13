@@ -69,15 +69,15 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--jobs", type=int, default=2)
     ap.add_argument("--limit", type=int)
-    ap.add_argument("--only-indexed", action="store_true", default=True,
-                    help="restrict to videos in video_map.json so the question set matches the index-based runs (default)")
+    ap.add_argument("--all-videos", action="store_true",
+                    help="use every downloaded video; by default only videos in video_map.json, so the question set matches the index-based runs")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--file-cache", default="/data/videoindex/eval/gemini-files.json")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     root = Path(a.root)
     files = {p.stem: p for p in (root / "videos").glob("*.mp4")}
-    if a.only_indexed and (root / "video_map.json").is_file():
+    if not a.all_videos and (root / "video_map.json").is_file():
         mapped = set(json.loads((root / "video_map.json").read_text()))
         files = {k: v for k, v in files.items() if k in mapped}
     pool = load(a.benchmark, root)

@@ -206,6 +206,10 @@ pub async fn transcript(
     )
     .await?;
     let content: Value = serde_json::from_str(&out.content).unwrap_or(Value::String(out.content));
+    // The tool layer reports argument and lookup errors inside its content.
+    if let Some(msg) = content.get("error").and_then(Value::as_str) {
+        return Err(ApiError::bad_request(msg.to_string()));
+    }
     Ok(Json(content))
 }
 
@@ -257,7 +261,8 @@ pub async fn view(
         ..vi_agent::ViewRequest::default()
     };
     if let Some(d) = body.max_dim {
-        req.max_dim = d;
+        // Bounded: each decoded frame slot is max_dim² × 3 bytes of shared memory.
+        req.max_dim = d.clamp(64, 1920);
     }
     let out = vi_agent::render_view(&state.config.media.worker, &v, req).await?;
     Ok((
@@ -279,8 +284,13 @@ pub async fn blob(
     Path((index, key)): Path<(String, String)>,
 ) -> ApiResult<Response> {
     let ix = state.index(&index)?;
-    let key = BlobKey::parse(key.trim_start_matches('/'))
-        .map_err(|e| ApiError::bad_request(format!("bad blob key: {e}")))?;
+    // Accept the bare 64-hex key, the `ab/cd/<hex>` path form and the
+    // `blob:ab/cd/<hex>` URI that search hits carry: the key is the last segment.
+    let raw = key.trim_start_matches('/');
+    let raw = raw.strip_prefix("blob:").unwrap_or(raw);
+    let last = raw.rsplit('/').next().unwrap_or(raw);
+    let key =
+        BlobKey::parse(last).map_err(|e| ApiError::bad_request(format!("bad blob key: {e}")))?;
     let bytes: Bytes = ix
         .storage
         .get_blob(&key)

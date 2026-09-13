@@ -38,7 +38,14 @@ pub fn default_pricing(model: &str) -> Pricing {
     if m.contains("gemini-2.5-flash-lite") {
         return per_mtok(0.10, 0.40);
     }
-    if m.contains("gemini-2.5-flash") || m.contains("gemini-3-flash") {
+    // Gemini 3.x Flash-Lite ($0.30 / $2.50) and Flash ($0.75 / $3.75 through 2026-12-31).
+    if m.contains("gemini-3") && m.contains("flash-lite") {
+        return per_mtok(0.30, 2.50);
+    }
+    if m.contains("gemini-3") && m.contains("flash") {
+        return per_mtok(0.75, 3.75);
+    }
+    if m.contains("gemini-2.5-flash") {
         return per_mtok(0.30, 2.50);
     }
     // OpenAI
@@ -74,6 +81,8 @@ mod tests {
     fn known_and_unknown_models() {
         assert!(default_pricing("claude-sonnet-5").input_per_mtok > 0.0);
         assert!(default_pricing("gemini-2.5-flash").output_per_mtok > 0.0);
+        assert!((default_pricing("gemini-3.8-flash").input_per_mtok - 0.75).abs() < 1e-9);
+        assert!((default_pricing("gemini-3.5-flash-lite").input_per_mtok - 0.30).abs() < 1e-9);
         assert_eq!(
             default_pricing("Qwen/Qwen2.5-VL-32B-Instruct"),
             Pricing::default()

@@ -183,7 +183,9 @@ pub async fn collect(
                 tools.push(to_json(&ev).unwrap_or(Value::Null));
             }
             AskEvent::Done { usage, .. } => {
-                let _ = state.charge(key, usage.cost_usd);
+                if let Err(e) = state.charge(key, usage.cost_usd) {
+                    tracing::warn!(key, "{}", e.message);
+                }
                 done = to_json(&ev).unwrap_or(Value::Null);
             }
             _ => {}
@@ -209,13 +211,7 @@ pub async fn ask(
     Json(body): Json<AskBody>,
 ) -> ApiResult<Response> {
     let ix = state.index(&index)?;
-    let spent = state.spent_today(&key.bucket());
-    let cap = state.config.server.daily_cost_cap_usd;
-    if cap > 0.0 && spent >= cap {
-        return Err(ApiError::quota(format!(
-            "this key has spent ${spent:.2} today; the daily cap is ${cap:.2}"
-        )));
-    }
+    state.check_cap(&key.bucket())?;
     let wants_sse = headers
         .get(header::ACCEPT)
         .and_then(|v| v.to_str().ok())

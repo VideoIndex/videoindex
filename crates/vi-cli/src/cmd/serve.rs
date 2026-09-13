@@ -18,6 +18,9 @@ pub struct Args {
     /// Bearer API key; repeatable. None means open access on the bind address.
     #[arg(long = "api-key")]
     pub api_keys: Vec<String>,
+    /// Serve MCP (the default; kept so documented invocations work).
+    #[arg(long, conflicts_with = "no_mcp")]
+    pub mcp: bool,
     /// Do not serve MCP.
     #[arg(long)]
     pub no_mcp: bool,
@@ -39,6 +42,9 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
     }
     if !args.api_keys.is_empty() {
         config.server.api_keys = args.api_keys;
+    }
+    if args.mcp {
+        config.server.mcp = true;
     }
     if args.no_mcp {
         config.server.mcp = false;

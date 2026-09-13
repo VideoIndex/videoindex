@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
-use vi_agent::{Agent, AskEvent, AskRequest, RetrievalOnlyPolicy};
+use vi_agent::{Agent, AskBudget, AskEvent, AskRequest, RetrievalOnlyPolicy};
 use vi_core::config::{Config, IndexPolicy, ProviderConfig, RoleBinding};
 use vi_core::EventBus;
 use vi_index::EmbeddedIndex;
@@ -344,4 +344,90 @@ async fn plain_answer_server() -> std::net::SocketAddr {
         }
     });
     addr
+}
+async fn always_tool_call_server() -> std::net::SocketAddr {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
+            let mut buf = vec![0u8; 1 << 20];
+            let mut n = 0;
+            loop {
+                let r = sock.read(&mut buf[n..]).await.unwrap_or(0);
+                if r == 0 {
+                    break;
+                }
+                n += r;
+                let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                if let Some(pos) = head.find("\r\n\r\n") {
+                    let len: usize = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length: "))
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(0);
+                    if n >= pos + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            let _ = req; // every turn, whatever it asks, gets a tool call back
+            let body = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"search\",\"arguments\":\"{\\\"query\\\":\\\"kw7\\\",\\\"k\\\":3}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":9}}\n\ndata: [DONE]\n\n";
+            let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let _ = sock.write_all(resp.as_bytes()).await;
+            let _ = sock.shutdown().await;
+        }
+    });
+    addr
+}
+
+/// A server that ignores `tool_choice: none` and keeps calling tools: the
+/// tool-call budget must still be a hard stop and the loop must end.
+#[tokio::test]
+async fn tool_calls_after_the_budget_are_not_executed_and_the_loop_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let (idx, config) = build_index(dir.path()).await;
+    let addr = always_tool_call_server().await;
+    let mut c = (*config).clone();
+    c.providers.insert(
+        "fake".into(),
+        ProviderConfig {
+            adapter: "openai_compat".into(),
+            base_url: Some(format!("http://{addr}/v1")),
+            model: Some("fake".into()),
+            ..Default::default()
+        },
+    );
+    c.roles.insert(
+        "agent_llm".into(),
+        RoleBinding {
+            provider: "fake".into(),
+            ..Default::default()
+        },
+    );
+    let config = Arc::new(c);
+    let providers = Arc::new(ProviderRegistry::new(
+        config.clone(),
+        CancellationToken::new(),
+    ));
+    let agent = Agent::new(idx, providers, config);
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        agent.ask_collect(AskRequest {
+            budget: AskBudget {
+                max_tool_calls: 1,
+                ..AskBudget::default()
+            },
+            ..AskRequest::new("kw3")
+        }),
+    )
+    .await
+    .expect("the loop must terminate");
+    assert_eq!(out.usage.tool_calls, 1, "{out:?}");
+    assert!(out.partial);
+    assert!(out.usage.provider_calls <= 3, "{out:?}");
 }

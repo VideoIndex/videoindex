@@ -193,6 +193,44 @@ async fn index_job_search_timeline_blobs_and_mcp() {
     assert_eq!(r.status(), 200);
     assert_eq!(r.headers()["content-type"], "image/webp");
     assert!(r.bytes().await.unwrap().len() > 100);
+    // The URI form search hits carry, and the path form, both resolve.
+    let r = client
+        .get(format!(
+            "{base}/v1/indexes/t/blobs/blob:{}/{}/{key}",
+            &key[..2],
+            &key[2..4]
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let r = client
+        .get(format!(
+            "{base}/v1/indexes/t/blobs/{}/{}/{key}",
+            &key[..2],
+            &key[2..4]
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    // Tool-level errors surface as 400, not as a 200 with an error body.
+    let r = client
+        .get(format!(
+            "{base}/v1/indexes/t/videos/{vid}/transcript?t0=50&t1=10"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400, "{}", r.text().await.unwrap());
+    // A view with an absurd max_dim is clamped rather than allocating gigabytes.
+    let r = client
+        .post(format!("{base}/v1/indexes/t/view"))
+        .json(&json!({"video_id": vid, "t0": 0, "t1": 2, "max_dim": 65535}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "{}", r.text().await.unwrap());
     let missing = "a".repeat(64);
     let r = client
         .get(format!("{base}/v1/indexes/t/blobs/{missing}"))
@@ -323,6 +361,39 @@ async fn index_job_search_timeline_blobs_and_mcp() {
         .await
         .unwrap();
     assert!(o["paths"]["/v1/indexes/{index}/ask"].is_object());
+}
+
+#[tokio::test]
+async fn a_failing_source_does_not_abort_the_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let (addr, _) = start(base_config(dir.path())).await;
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+    client
+        .post(format!("{base}/v1/indexes"))
+        .json(&json!({"id": "t"}))
+        .send()
+        .await
+        .unwrap();
+    let job = client
+        .post(format!("{base}/v1/indexes/t/videos"))
+        .json(&json!({"sources": ["/nonexistent/video.mp4", fx::fixture_path()], "policy": "m0"}))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap()["job_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let done = wait_job(&client, &base, &job).await;
+    assert_eq!(done["status"], "finished", "{done}");
+    assert_eq!(done["ok"], 1, "the good source was indexed: {done}");
+    assert!(
+        done["error"].as_str().unwrap_or("").contains("nonexistent"),
+        "{done}"
+    );
 }
 
 #[tokio::test]

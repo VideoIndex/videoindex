@@ -167,6 +167,7 @@ pub async fn add_videos(
         return Err(ApiError::bad_request("sources must not be empty"));
     }
     let ix = state.index(&index)?;
+    state.check_cap(&key.bucket())?;
     if let Some(p) = &body.policy {
         state.config.policy(p)?;
     }
@@ -197,21 +198,24 @@ pub async fn add_videos(
     let e2 = entry.clone();
     let key_label = key.bucket();
     tokio::spawn(async move {
-        let mut failed = false;
+        // Like `vi index`: a failing source is recorded and the job goes on
+        // with the next one; the job is Failed only when nothing succeeded.
+        let mut errors: Vec<String> = Vec::new();
+        let mut succeeded = 0usize;
         'outer: for src in &e2.sources {
             let source = Source::parse(src);
             let expanded = match sched.expand(&source).await {
                 Ok(v) => v,
                 Err(e) => {
-                    set(&e2.error, Some(format!("{src}: {e}")));
-                    failed = true;
-                    break;
+                    errors.push(format!("{src}: {e}"));
+                    continue;
                 }
             };
             for s in expanded {
                 if e2.cancel.is_cancelled() {
                     break 'outer;
                 }
+                let uri = s.uri();
                 match sched
                     .run(
                         s,
@@ -225,7 +229,14 @@ pub async fn add_videos(
                     .await
                 {
                     Ok(r) => {
-                        let _ = st.charge(&key_label, r.budget.cost_usd);
+                        if let Err(e) = st.charge(&key_label, r.budget.cost_usd) {
+                            tracing::warn!(job = %e2.id, "{}", e.message);
+                        }
+                        if r.ok {
+                            succeeded += 1;
+                        } else {
+                            errors.push(format!("{uri}: one or more stages failed"));
+                        }
                         let mut v = serde_json::to_value(&r).unwrap_or(Value::Null);
                         flatten_timestamps_json(&mut v);
                         if let Ok(mut reps) = e2.reports.write() {
@@ -233,17 +244,16 @@ pub async fn add_videos(
                         }
                     }
                     Err(vi_core::Error::Cancelled) => break 'outer,
-                    Err(e) => {
-                        set(&e2.error, Some(e.to_string()));
-                        failed = true;
-                        break 'outer;
-                    }
+                    Err(e) => errors.push(format!("{uri}: {e}")),
                 }
             }
         }
+        if !errors.is_empty() {
+            set(&e2.error, Some(errors.join("; ")));
+        }
         let final_status = if e2.cancel.is_cancelled() {
             JobStatus::Cancelled
-        } else if failed {
+        } else if succeeded == 0 && !errors.is_empty() {
             JobStatus::Failed
         } else {
             JobStatus::Finished

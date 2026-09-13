@@ -274,7 +274,9 @@ async fn call_tool(
             )
             .await?;
             if out.cost_usd > 0.0 {
-                let _ = state.charge(&key.bucket(), out.cost_usd);
+                if let Err(e) = state.charge(&key.bucket(), out.cost_usd) {
+                    tracing::warn!(key = %key.label(), "{}", e.message);
+                }
             }
             let mut content = vec![json!({"type": "text", "text": out.content})];
             if let Some(img) = out.image {
