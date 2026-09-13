@@ -1,7 +1,7 @@
 //! Sidecar files next to a downloaded video: yt-dlp's `<stem>.info.json`
 //! and subtitle files (`<stem>.<lang>.srt`, `<stem>.<lang>.vtt`, `<stem>.srt`).
 //! Transfers from a machine that can reach YouTube keep title, chapters and
-//! captions this way (`docs/11-deployment.md`).
+//! captions this way (deployment notes in `vi_internal`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

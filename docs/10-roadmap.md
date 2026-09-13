@@ -13,7 +13,7 @@ Milestones are ordered so that something queryable exists early and every later 
 
 Done when: `vi index` on a 1-hour MP4 produces an index directory with thumbnails and pHashes in under 5 minutes on 8 cores, and `vi status` reports it.
 
-**Status: done 2026-09-11.** Measured 2 min 48 s for a 1-hour 720p file on azuremc's 4 vCPUs (see `MACHINE-azuremc.md`). The vector store is a stub and sandboxing is rlimits only; both are M1 work.
+**Status: done 2026-09-11.** Measured 2 min 48 s for a 1-hour 720p file on azuremc's 4 vCPUs (machine notes in `vi_internal`). The vector store is a stub and sandboxing is rlimits only; both are M1 work.
 
 ## M1. Coarse index and search
 
@@ -31,7 +31,7 @@ Done when: the two playlists in `dataset/videolist.md` index to `coarse` unatten
 
 ## M2. Fine index, agent, Python
 
-**Progress 2026-09-11 (GCP machine):** `vi-providers` adapters for `openai_compat` chat and embeddings, `anthropic` and `gemini` (streaming, tools, images, native video for Gemini, cost accounting, price tables, prompt registry) and `vi-agent` (tool-using loop, budgets, citations, sessions, `RetrievalOnlyPolicy`, `vi ask`, `vi view`, `vi timeline`) are done. The fine-pass operators `scenes`, `chapters`, `vlm_describe` and `entities_events` exist and `lecture_default` plans end to end when the roles are bound. The Python binding exists (`bindings/python`: `Index.create/open/add/search/ask/aask/view/frame/timeline/status`, `Budget`, `Config`, prompt overrides; smoke-tested with pytest). Python-side operators (`@vi.operator`, `vi.Operator`, `Index.register_operator`, inline policies) and agent policies (`vi.Policy` passed to `ask`) landed on 2026-09-12 with pytest coverage. The QA dev set (52 questions, `dataset/devset_qa.jsonl`) scored 96.2% with citations on 2026-09-12 (`docs/M1-REPORT.md`; 86.5% before the full-text query fix), above the 80% target; the retrieval-only baseline is 73.1%. The fine pass over the dataset was measured on 2026-09-12 (5 h 8 min, $45.96; see `M1-REPORT.md`, which also compares the fine index against the coarse one on the dev set). Remaining: wheels verified in CI.
+**Progress 2026-09-11 (GCP machine):** `vi-providers` adapters for `openai_compat` chat and embeddings, `anthropic` and `gemini` (streaming, tools, images, native video for Gemini, cost accounting, price tables, prompt registry) and `vi-agent` (tool-using loop, budgets, citations, sessions, `RetrievalOnlyPolicy`, `vi ask`, `vi view`, `vi timeline`) are done. The fine-pass operators `scenes`, `chapters`, `vlm_describe` and `entities_events` exist and `lecture_default` plans end to end when the roles are bound. The Python binding exists (`bindings/python`: `Index.create/open/add/search/ask/aask/view/frame/timeline/status`, `Budget`, `Config`, prompt overrides; smoke-tested with pytest). Python-side operators (`@vi.operator`, `vi.Operator`, `Index.register_operator`, inline policies) and agent policies (`vi.Policy` passed to `ask`) landed on 2026-09-12 with pytest coverage. The QA dev set (52 questions, `dataset/devset_qa.jsonl`) scored 96.2% with citations on 2026-09-12 (the M1 report (`vi_internal/docs/reports/M1-REPORT.md`); 86.5% before the full-text query fix), above the 80% target; the retrieval-only baseline is 73.1%. The fine pass over the dataset was measured on 2026-09-12 (5 h 8 min, $45.96; see the M1 report in `vi_internal`, which also compares the fine index against the coarse one on the dev set). Remaining: wheels verified in CI.
 
 - Scenes and chapters; VLM describe with frame grids and native video; entities and events; text embeddings.
 - `vi-providers`: gemini, anthropic, openai_compat adapters with capabilities, rate limits, cost accounting, prompt registry.
@@ -48,7 +48,7 @@ Done when: `idx.ask` from Python answers the 50-question dev set at or above 80%
 - Node binding with prebuilt binaries.
 - `vi-server`: HTTP API, SSE, blobs, API keys, MCP.
 - `apps/chat`: demo QnA app over the dataset videos with a player that seeks to citations, deployed at videoindex.app.
-- Deployment per [11-deployment](11-deployment.md).
+- Deployment per the deployment notes in the internal `vi_internal` repository.
 
 Done when: a question typed in the browser at videoindex.app streams an answer with clickable timestamps over the AI Engineer and Berkeley playlists.
 

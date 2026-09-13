@@ -13,7 +13,7 @@
 //! Rows are never rewritten; deletes flip the alive flag and `compact`
 //! rewrites the files without dead rows. Lance or usearch can replace this
 //! behind the same [`crate::Storage`] trait when approximate search is
-//! needed (see `docs/DECISIONS.md`).
+//! needed (see the decisions log in `vi_internal`).
 
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};

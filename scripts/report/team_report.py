@@ -2,7 +2,7 @@
 """Build the team catch-up report: architecture, milestones and the work
 performed so far, as one PDF.
 
-    python3 scripts/report/team_report.py [--out docs/reports/videoindex-team-report-YYYY-MM-DD.pdf]
+    python3 scripts/report/team_report.py [--out PDF]   (default: ../vi_internal/reports/videoindex-team-report-<date>.pdf)
 
 The design documents are included as chapters; a "Work performed" chapter is
 generated from the git history and the source tree at build time.
@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import subprocess
 import sys
@@ -22,7 +23,10 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 from report.mdreport import build_pdf  # noqa: E402
 
-GEN = ROOT / "docs" / "reports" / "generated"
+# Internal material (deployment, machines, decisions, M1 report) and the
+# generated reports live in the vi_internal repository next to this one.
+INTERNAL = Path(os.environ.get("VI_INTERNAL", ROOT.parent / "vi_internal"))
+GEN = INTERNAL / "reports" / "generated"
 
 TYPES = {"feat": "Features", "fix": "Fixes", "perf": "Performance", "docs": "Documentation",
          "ci": "CI", "chore": "Chores", "test": "Tests", "refactor": "Refactors"}
@@ -165,7 +169,7 @@ decisions made where the design was silent, and the facts about the development 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=f"docs/reports/videoindex-team-report-{dt.date.today().isoformat()}.pdf")
+    ap.add_argument("--out", default=str(INTERNAL / "reports" / f"videoindex-team-report-{dt.date.today().isoformat()}.pdf"))
     ap.add_argument("--html")
     a = ap.parse_args()
     GEN.mkdir(parents=True, exist_ok=True)
@@ -183,14 +187,14 @@ def main():
         {"file": str(docs / "07-model-providers.md")},
         {"file": str(docs / "08-evaluation.md")},
         {"file": str(docs / "09-sdk-and-apis.md")},
-        {"file": str(docs / "11-deployment.md")},
+        {"file": str(INTERNAL / "docs" / "deployment" / "11-deployment.md")},
         {"file": str(docs / "10-roadmap.md"), "title": "Milestones and roadmap"},
-        {"file": str(docs / "M1-REPORT.md"), "title": "M1 report: what was built and measured"},
+        {"file": str(INTERNAL / "docs" / "reports" / "M1-REPORT.md"), "title": "M1 report: what was built and measured"},
         {"file": str(ROOT / "eval" / "README.md"), "title": "Evaluation harness"},
         *[{"file": str(p), "title": p.stem.replace("-", " ")} for p in sorted((docs / "results").glob("*.md"))],
         {"file": str(GEN / "90-work-performed.md")},
-        {"file": str(docs / "DECISIONS.md"), "title": "Decisions"},
-        {"file": str(docs / "MACHINE.md"), "title": "Development machine"},
+        {"file": str(INTERNAL / "docs" / "DECISIONS.md"), "title": "Decisions"},
+        {"file": str(INTERNAL / "docs" / "machines" / "MACHINE.md"), "title": "Development machine"},
     ]
     spec = {
         "title": "VideoIndex: architecture, milestones and work performed",

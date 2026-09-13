@@ -2,7 +2,7 @@
 //!
 //! M0 applies rlimits (address space, open files, no core dumps) and, on
 //! Linux, `PR_SET_NO_NEW_PRIVS`. seccomp filtering and `sandbox-exec` on
-//! macOS are still to do; see `docs/DECISIONS.md`. The process boundary
+//! macOS are still to do; see the decisions log (`vi_internal/docs/DECISIONS.md`). The process boundary
 //! itself already means a libav crash cannot corrupt the parent.
 
 use std::process::Command;

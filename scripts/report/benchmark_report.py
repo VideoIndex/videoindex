@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import statistics
 import subprocess
 import sys
@@ -28,7 +29,9 @@ from report import charts  # noqa: E402
 from report.mdreport import build_pdf  # noqa: E402
 import index_log_timings  # noqa: E402
 
-OUT_DIR = ROOT / "docs" / "reports"
+# Generated reports live in the internal repository next to this one.
+INTERNAL = Path(os.environ.get("VI_INTERNAL", ROOT.parent / "vi_internal"))
+OUT_DIR = INTERNAL / "reports"
 ASSETS = OUT_DIR / "assets"
 GEN = OUT_DIR / "generated"
 
@@ -174,7 +177,7 @@ def main():
     ap.add_argument("--logs", default="/data/videoindex/logs/dataset-index.log,/data/videoindex/logs/dataset-index2.log")
     ap.add_argument("--index", default="/data/videoindex/indexes/dataset.vidx")
     ap.add_argument("--config", default="config/gcp-a100.toml")
-    ap.add_argument("--out", default=f"docs/reports/videoindex-benchmark-{dt.date.today().isoformat()}.pdf")
+    ap.add_argument("--out", default=str(OUT_DIR / f"videoindex-benchmark-{dt.date.today().isoformat()}.pdf"))
     ap.add_argument("--html")
     a = ap.parse_args()
     ev = Path(a.eval_dir)

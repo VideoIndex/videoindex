@@ -7,7 +7,7 @@
 The spec is JSON:
 
     {"title": "...", "subtitle": "...", "org": "...", "authors": ["..."],
-     "date": "2026-09-12", "version": "...", "out": "docs/reports/x.pdf",
+     "date": "2026-09-12", "version": "...", "out": "reports/x.pdf",
      "abstract": "one paragraph shown on the cover",
      "chapters": [{"file": "docs/01-overview.md", "title": "Overview"}, ...],
      "html_out": "optional path to also write the HTML"}

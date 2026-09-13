@@ -1,3 +1,122 @@
+● Both requests are done.
+  
+  Gemini 3.8 Flash agentic video on the same LVBench sample (run once, cached, now a permanent reference row in the results and never re-run by the matrix):
+  
+  ┌─────────────────────────────────────┬─────┬──────────┬─────────────────┬────────────────┐
+  │            Configuration            │  n  │ accuracy │ cost / question │ median latency │
+  ├─────────────────────────────────────┼─────┼──────────┼─────────────────┼────────────────┤
+  │ Gemini 3.8 Flash agentic video      │ 182 │ 79.7%    │ $0.064          │ 14.9 s         │
+  ├─────────────────────────────────────┼─────┼──────────┼─────────────────┼────────────────┤
+  │ VideoIndex agent                    │ 195 │ 64.1%    │ $0.103          │ 14.8 s         │
+  ├─────────────────────────────────────┼─────┼──────────┼─────────────────┼────────────────┤
+  │ uniform 32 frames (Claude Sonnet 5) │ 195 │ 54.9%    │ $0.036          │ 12.0 s         │
+  ├─────────────────────────────────────┼─────┼──────────┼─────────────────┼────────────────┤
+  │ retrieval-only                      │ 195 │ 50.8%    │ $0.025          │ 8.7 s          │
+  └─────────────────────────────────────┴─────┴──────────┴─────────────────┴────────────────┘
+  
+  Where we stand: Gemini leads on every task type, and the gap is largest on the visual ones (entity recognition 75% vs 61%, event understanding 80% vs 65%, summarization 100% vs 29% on 7 questions) and smallest on the transcript- and OCR-anchored ones the index serves well (temporal grounding 95% vs 80%,
+  key information retrieval 86% vs 73%). The reading in docs/results/lvbench-f0.25-2026-09-12.md names the three levers for the visual side: a stronger frame model in the coarse pass, a coarse whole-video view step for summary and event questions, and denser views. The page also states the cost caveat in
+  both directions (ours excludes indexing; theirs excludes nothing). Google's blog numbers are quoted for context; they are relative deltas on LongVideoBench, so the like-for-like comparison here is the measured one.
+  
+  SDK docs published: the MkDocs site (quickstart, HTTP API and MCP, Python, all design docs, the M1 report, decisions, and both LVBench results pages) is built from the app repo and pushed to VideoIndex/videoindex.github.io (root of main, with .nojekyll). If Pages isn't already enabled on that repo, enable
+  it for the main branch root and it will serve at https://videoindex.github.io/.
+  
+  Still running: YouTube unblocked around 19:28 UTC and the detached acquirer resumed, which is why the VideoIndex rows already cover 195 of the 387 sampled questions. When it finishes LVBench it moves on to the MINERVA sample. To complete both sampled matrices afterwards:
+  
+  python3 -m eval.run eval/configs/lvbench-first.toml --fraction 0.25 --seed 1
+  python3 -m eval.run eval/configs/minerva-first.toml --fraction 0.25 --seed 1 --run-reference   # includes the one-off Gemini row
+  
+  The core repo has 23 unpushed commits; the app and Pages repos are pushed.
+------------------------------------------------------------------------------------------------------------------------
+● The file yt-dlp wants is a Netscape-format cookies.txt exported from a browser where you are signed in to YouTube. Steps, plus the caveats yt-dlp itself documents:
+
+  1. Use a throwaway or secondary Google account. YouTube has been known to flag accounts whose cookies are used for bulk downloads. Do not export your main account.
+
+  2. Export in a private window so the cookies stay valid. yt-dlp's wiki recommends this sequence, because YouTube rotates cookies on every normal page load and an export from a live session goes stale quickly:
+  - Open a new private/incognito window and sign in to YouTube there.
+  - In the same window, open a new tab and go to https://www.youtube.com/robots.txt (a page that does not rotate cookies). 
+  - Export the cookies for youtube.com from that tab with an extension:
+    - Firefox: "cookies.txt" by Lennon Hill.
+    - Chrome/Edge: "Get cookies.txt LOCALLY" (the "LOCALLY" one; the older "Get cookies.txt" extension was pulled from the store for shipping malware).
+  - Close the private window without visiting any other YouTube page.
+    
+  The extension saves youtube.com_cookies.txt (or similar) in Netscape format.
+    
+  3. Copy it to the machine and lock it down, since it grants access to that account:
+  
+  scp youtube.com_cookies.txt nash@<instance>:/data/videoindex/eval/lvbench/cookies.txt
+  chmod 600 /data/videoindex/eval/lvbench/cookies.txt
+  
+  Then tell me it is there. I'll add --cookies /data/videoindex/eval/lvbench/cookies.txt to download.sh and restart the loop; the file stays outside the repo and never appears in logs.
+  
+  Alternative, no browser export: yt-dlp can read a browser profile directly with --cookies-from-browser firefox (or chrome), but that only works where the browser runs, so on this headless VM the exported file is the practical route.
+  
+  One expectation to set: cookies clear the "sign in to confirm you're not a bot" check, but the HTTP 429 we are seeing right now is an IP-level rate limit that cookies do not bypass. Keeping the loop at its current slow pace (one request every 3 seconds, 45 minutes between rounds) is what lets that
+  lift; the cookies stop it from tripping the bot check again once it does.
+
+------------------------------------------------------------------------------------------------------------------------
+● The story on the 440 MB file: it is not a real artifact of the project, it is a side effect of maturin develop, which copies the compiled _core.abi3.so into the package directory so the editable install works. It landed in git through a git add -A in two commits (the binding commit and the
+  Python-operators commit). It should never be tracked, in LFS or otherwise: wheels are produced by CI and, once stripped of debug info, are a fraction of that size (the 440 MB comes from the workspace's release profile keeping debug info).
+
+  What I've done, committed as 01cad57:
+
+  - Untracked the .so and a stray .pyc, and git-ignored bindings/python/python/videoindex/*.so.
+  - CI now builds the wheel with --strip.
+  - The binding README explains the artefact.
+
+  What still blocks the push: the two older unpushed commits (f501296, 68d4e01) still contain the blobs, and GitHub scans all history in the push. Removing them requires rewriting the 36 unpushed commits, which my sandbox flagged as a destructive git action and refused. The remote has none of these
+  commits, so the rewrite is safe. Run this from the repo root:
+
+  git stash push -q -- docs/vibe_summaries/summaries.md   # your uncommitted edit
+  FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --index-filter \
+    'git rm -q --cached --ignore-unmatch bindings/python/python/videoindex/_core.abi3.so bindings/python/python/videoindex/__pycache__/__init__.cpython-312.pyc' \
+    origin/main..HEAD
+  git for-each-ref --format='%(refname)' refs/original | xargs -r -n1 git update-ref -d
+  git reflog expire --expire=now --all && git gc -q --prune=now
+  git stash pop -q
+  git log --oneline origin/main..HEAD -- bindings/python/python/videoindex/_core.abi3.so   # must print nothing
+  git push
+
+  If you'd rather I run it, allow the git history rewrite and I will. Either way git lfs is not needed for this repo.
+
+
+  Separately, the GPU re-index is still running in the background (the fine pass is queued behind it as described earlier).
+------------------------------------------------------------------------------------------------------------------------
+● All work is committed and the tree is clean. Recap of this session's outcomes:
+  
+  Dataset indexed. All 30 videos (36.6 h) are coarse-indexed in /data/videoindex/indexes/dataset.vidx with zero failures. The run took just under 5 hours on the CPU ONNX build while builds competed for the machine.
+  
+  Dev set results (in docs/M1-REPORT.md):
+  
+  ┌───────────────────────────────────────┬────────────────────────────────────────────────┐
+  │                Metric                 │                     Result                     │
+  ├───────────────────────────────────────┼────────────────────────────────────────────────┤
+  │ Retrieval hit@5 / MRR (72 questions)  │ 0.944 / 0.724                                  │
+  ├───────────────────────────────────────┼────────────────────────────────────────────────┤
+  │ QA accuracy with agent (52 questions) │ 96.2%, every answer cited, $0.052 per question │
+  ├───────────────────────────────────────┼────────────────────────────────────────────────┤
+  │ QA retrieval-only baseline            │ 73.1%, $0.017 per question                     │
+  └───────────────────────────────────────┴────────────────────────────────────────────────┘
+  
+  The M2 target of 80% QA accuracy with citations is met, with the baseline reported beside it.
+  
+  Three defects found and fixed along the way:
+  - The full-text query required every word of a question, so BM25 contributed nothing to natural-language queries. Terms are now OR-ed with stopwords removed. Retrieval hit@5 went from 0.77 to 0.94, and QA from 86.5% to 96.2%.
+  - The first CUDA build was slower than the CPU build. Two causes: every OCR and embedding call reloaded its model, and cuDNN's exhaustive per-shape algorithm search re-ran on almost every OCR batch. With shared models, heuristic search and bucketed OCR widths, the visual pass on the 47-minute test
+    lecture dropped from 177 s to 50 s. The CPU build takes 112 s and decode alone 39.5 s. My earlier "decode-bound" conclusion in the docs was wrong and is corrected.
+  - The agent could return an empty answer after exhausting its tool budget. It now asks once more before returning a partial answer.
+  
+  Python extension points landed: @vi.operator, vi.Operator, Index.register_operator, inline policies via add(policy={...}), and vi.Policy for ask. Seven binding tests pass alongside the Rust suite, clippy, fmt and deny.
+  
+  Not done, and worth doing next: re-index the dataset with the CUDA build to measure the GPU end to end (expected around 2 hours), a measured fine-pass run over the dataset (roughly $60 at the observed $1.60 per hour of video, so worth confirming before starting), and the CI wheel job has not yet run
+  on GitHub.
+
+✻ Brewed for 6m 1s · done 2:45 AM
+
+● 2 background shell command tasks didn't finish before the previous session ended. Task ids: bismgl50o, bvjof9128.
+
+● Those two task IDs were the earlier dataset-run monitors that timed out and were replaced by later ones. The run itself finished and was fully processed, so nothing is outstanding from them. The session's work remains complete and committed as recapped above.
+------------------------------------------------------------------------------------------------------------------------
  The download completed properly. All 30 videos are present and intact.
 
   Counts match the playlists. The AI Engineer playlist ("Full Workshops: AI Engineer World's Fair 2025") lists 19 entries and 19 MP4s were downloaded. The Berkeley playlist ("Agentic AI MOOC Fall 2025") lists 11 and 11 were downloaded. The download

@@ -168,4 +168,4 @@ Decoding of untrusted media always runs in a child process (`vi-media` worker) w
 
 - **Local**: `pip install videoindex` or `npm install @videoindex/core`, index lives in a directory.
 - **Self-hosted**: `vi serve` behind a reverse proxy, indexes on local disk or object storage.
-- **Hosted (videoindex.app)**: `vi-server` with the pluggable storage backends, multi-tenant, quotas, keys. See [11-deployment](11-deployment.md).
+- **Hosted (videoindex.app)**: `vi-server` with the pluggable storage backends, multi-tenant, quotas, keys. See the deployment notes in the internal `vi_internal` repository.

@@ -20,7 +20,7 @@
 //! packets, scalers, resamplers) so this crate holds almost no `unsafe`, and
 //! because its build script detects any libav from 3.0 to 9.0 through
 //! pkg-config, which covers the distro ffmpeg 6.1 on azuremc and Homebrew's
-//! current ffmpeg on macOS CI without pinning. See `docs/DECISIONS.md`.
+//! current ffmpeg on macOS CI without pinning. See the decisions log (`vi_internal/docs/DECISIONS.md`).
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
