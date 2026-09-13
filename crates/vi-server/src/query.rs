@@ -209,7 +209,7 @@ pub async fn ask(
     Json(body): Json<AskBody>,
 ) -> ApiResult<Response> {
     let ix = state.index(&index)?;
-    let spent = state.spent_today(&key.label());
+    let spent = state.spent_today(&key.bucket());
     let cap = state.config.server.daily_cost_cap_usd;
     if cap > 0.0 && spent >= cap {
         return Err(ApiError::quota(format!(
@@ -223,9 +223,9 @@ pub async fn ask(
         .unwrap_or(false);
     let stream = ask_stream(&state, &ix, body)?;
     if !wants_sse {
-        return Ok(Json(collect(&state, &key.label(), stream).await).into_response());
+        return Ok(Json(collect(&state, &key.bucket(), stream).await).into_response());
     }
-    let label = key.label();
+    let label = key.bucket();
     let sse: std::pin::Pin<Box<dyn Stream<Item = Result<SseEvent, Infallible>> + Send>> =
         Box::pin(stream.map(move |ev| {
             if let AskEvent::ToolCall { .. } = &ev {

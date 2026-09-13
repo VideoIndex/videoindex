@@ -17,7 +17,17 @@ use crate::state::AppState;
 pub struct ApiKey(pub String);
 
 impl ApiKey {
-    /// A short, non-secret label for logs and quota buckets.
+    /// Stable, non-secret bucket id for quotas: a truncated hash of the key,
+    /// so distinct keys never share a bucket (labels can collide).
+    pub fn bucket(&self) -> String {
+        if self.0 == "anonymous" {
+            return self.0.clone();
+        }
+        let h = blake3::hash(self.0.as_bytes()).to_hex();
+        format!("k{}", &h[..16])
+    }
+
+    /// A short, non-secret label for logs.
     pub fn label(&self) -> String {
         if self.0 == "anonymous" {
             return self.0.clone();

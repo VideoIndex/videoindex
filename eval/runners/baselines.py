@@ -177,8 +177,10 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
     results: dict[str, dict] = {}
     if a.resume and out_path.is_file():
+        # Keep scored answers; failed or errored questions are asked again.
         for r in json.loads(out_path.read_text()).get("results", []):
-            results[r["id"]] = r
+            if r.get("status") == "ok":
+                results[r["id"]] = r
     todo = [q for q in qs if q.id not in results]
     config_record = {"benchmark": a.benchmark, "policy": f"uniform-{a.frames}" + ("" if not a.no_transcript else "-notranscript"),
                      "model": a.model, "frames": a.frames, "transcript": not a.no_transcript, "sample": n, "fraction": a.fraction, "seed": a.seed,

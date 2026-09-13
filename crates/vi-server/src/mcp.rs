@@ -218,7 +218,7 @@ async fn call_tool(
                 policy: "agent".into(),
             };
             let stream = ask_stream(state, ix, body)?;
-            let v = collect(state, &key.label(), stream).await;
+            let v = collect(state, &key.bucket(), stream).await;
             let text = v
                 .get("answer")
                 .and_then(Value::as_str)
@@ -274,7 +274,7 @@ async fn call_tool(
             )
             .await?;
             if out.cost_usd > 0.0 {
-                let _ = state.charge(&key.label(), out.cost_usd);
+                let _ = state.charge(&key.bucket(), out.cost_usd);
             }
             let mut content = vec![json!({"type": "text", "text": out.content})];
             if let Some(img) = out.image {

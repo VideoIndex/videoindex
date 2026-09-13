@@ -123,9 +123,23 @@ impl JobRegistry {
         v
     }
 
+    /// Finished jobs kept for `GET /v1/jobs` before the oldest are dropped.
+    const KEEP_FINISHED: usize = 500;
+
     fn insert(&self, e: Arc<JobEntry>) {
         if let Ok(mut m) = self.inner.write() {
             m.insert(e.id.to_string(), e);
+            let mut finished: Vec<(chrono::DateTime<chrono::Utc>, String)> = m
+                .values()
+                .filter(|j| j.status() != JobStatus::Running)
+                .map(|j| (j.started_at, j.id.to_string()))
+                .collect();
+            if finished.len() > Self::KEEP_FINISHED {
+                finished.sort();
+                for (_, id) in finished.iter().take(finished.len() - Self::KEEP_FINISHED) {
+                    m.remove(id);
+                }
+            }
         }
     }
 }
@@ -181,7 +195,7 @@ pub async fn add_videos(
     );
     let st = state.clone();
     let e2 = entry.clone();
-    let key_label = key.label();
+    let key_label = key.bucket();
     tokio::spawn(async move {
         let mut failed = false;
         'outer: for src in &e2.sources {
