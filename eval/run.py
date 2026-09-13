@@ -41,17 +41,17 @@ def main():
     outs = []
     for run in cfg["runs"]:
         name = run["name"]
+        out = Path(a.runs_dir) / f"{bench}-{tag}-s{a.seed}-{name}.json"
+        # The report covers every run of the matrix whose file exists, whether or
+        # not this invocation executed it (`--only`, cached references).
+        if out.is_file() or not (only and name not in only) and not (run.get("reference") and not a.run_reference):
+            outs.append(str(out))
         if only and name not in only:
             continue
-        out = Path(a.runs_dir) / f"{bench}-{tag}-s{a.seed}-{name}.json"
         if run.get("reference") and not a.run_reference:
-            # External reference (e.g. Gemini agentic video): run once, keep the file, report it.
-            if out.is_file():
-                outs.append(str(out))
-            else:
+            if not out.is_file():
                 print(f"(reference run {name} has no cached file at {out}; pass --run-reference to execute it)", file=sys.stderr)
             continue
-        outs.append(str(out))
         if run.get("baseline") == "gemini":
             cmd = [sys.executable, "-m", "eval.runners.gemini", bench, "--root", cfg["root"], "--model", run.get("model", "gemini-3.8-flash"),
                    "--mode", run.get("mode", "agentic"), "--jobs", str(min(a.jobs, 2)), "--resume", "--out", str(out)] + sampling
@@ -68,6 +68,7 @@ def main():
             subprocess.run(cmd, check=False)
     report = a.out or f"docs/results/{bench}-{tag}-{dt.date.today().isoformat()}.md"
     title = a.title or f"{bench}: {'{:.0%}'.format(a.fraction) if a.fraction else (a.sample or 'all')} stratified sample, seed {a.seed}"
+    outs = [o for o in dict.fromkeys(outs) if Path(o).is_file()]
     cmd = [sys.executable, "-m", "eval.report", bench, *outs, "--out", report, "--title", title]
     print("$", " ".join(cmd), file=sys.stderr, flush=True)
     if not a.dry_run:
