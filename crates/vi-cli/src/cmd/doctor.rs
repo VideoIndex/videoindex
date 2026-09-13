@@ -334,7 +334,7 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
                 ));
             }
         }
-        s.push_str("youtube: yt-dlp is blocked from datacenter IPs; transfer videos with sidecars into the incoming dir (docs/11-deployment.md)");
+        s.push_str("youtube: yt-dlp is blocked from datacenter IPs; transfer videos with sidecars into the incoming dir, or run yt-dlp with a JS runtime and retries (see eval/README.md)");
         s.trim_end().to_string()
     });
     if args.show_config {

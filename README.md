@@ -2,7 +2,7 @@
 
 APIs to index and query long videos. A Rust core (decode, index, retrieval, agent loop) with Python and Node.js bindings, a `vi` CLI, and a server with HTTP, SSE and MCP. Applications such as the video QnA chat app are built on the SDK, never inside it.
 
-The design lives in [`docs/`](docs/README.md); read it in order the first time. [`docs/10-roadmap.md`](docs/10-roadmap.md) tracks milestones, the decisions log in the internal `vi_internal` repository, [`docs/MACHINE.md`](the internal repository's machine notes) describes the current development host (a GCP A100 machine), and [`docs/MACHINE-azuremc.md`](docs/MACHINE-azuremc.md) the first one.
+The design lives in [`docs/`](docs/README.md); read it in order the first time. [`docs/10-roadmap.md`](docs/10-roadmap.md) tracks milestones and [`docs/results/`](docs/results/) holds the benchmark results pages. Deployment notes, machine facts, kickoff prompts and the dated decisions log are internal and live in the `vi_internal` repository.
 
 ## Status
 
