@@ -11,7 +11,26 @@ import json
 import sys
 from pathlib import Path
 
+from .datasets import load
 from .metrics import score
+from .runners.answer import parse_letter
+
+
+def rescore(run: dict, questions: dict) -> int:
+    """Re-parse answers that had no letter using the option-text fallback
+    (added after the first runs); returns how many changed."""
+    changed = 0
+    for r in run.get("results", []):
+        if r.get("status") != "ok" or r.get("parsed"):
+            continue
+        q = questions.get(r["id"])
+        if not q or not r.get("text"):
+            continue
+        letter = parse_letter(r["text"], q.letters, q.options)
+        if letter:
+            r["predicted"], r["parsed"], r["correct"] = letter, True, letter == q.answer
+            changed += 1
+    return changed
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -23,10 +42,22 @@ def main():
     ap.add_argument("runs", nargs="+")
     ap.add_argument("--out", required=True)
     ap.add_argument("--title")
+    ap.add_argument("--root", help="benchmark root (default: read from the first run's config or /data/videoindex/eval/<benchmark>)")
     a = ap.parse_args()
     rows = []
+    questions = {}
+    try:
+        root = a.root or f"/data/videoindex/eval/{a.benchmark}"
+        questions = {q.id: q for q in load(a.benchmark, root)}
+    except SystemExit:
+        pass
     for path in a.runs:
         run = json.loads(Path(path).read_text())
+        if questions:
+            n = rescore(run, questions)
+            if n:
+                Path(path).write_text(json.dumps(run, indent=1))
+                print(f"{Path(path).name}: {n} answers matched an option by text", file=sys.stderr)
         s = score(run)
         cfg = run["config"]
         label = cfg.get("policy", Path(path).stem)

@@ -135,7 +135,7 @@ def answer_one(root: Path, q: Question, path: Path, frames: int, model: str, use
         return {"id": q.id, "status": "failed", "error": str(e)[:300], "ms": int((time.time() - t) * 1000)}
     pin, pout = PRICES.get(model, (3.0, 15.0))
     tin, tout = usage.get("input_tokens", 0), usage.get("output_tokens", 0)
-    letter = parse_letter(text, q.letters)
+    letter = parse_letter(text, q.letters, q.options)
     return {
         "id": q.id, "status": "ok", "video_key": q.video_key, "task_types": q.task_types, "video_type": q.video_type,
         "answer": q.answer, "predicted": letter, "correct": letter == q.answer, "parsed": letter is not None,

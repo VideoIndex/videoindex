@@ -474,10 +474,53 @@ async fn run(
                     ));
                     continue;
                 }
-                partial = true;
-                reason.get_or_insert_with(|| {
-                    format!("model returned an empty answer (finish: {})", turn.finish)
-                });
+                // Last resort: a fresh, compact request built from the
+                // notes the tools produced, with no tool history at all.
+                tracing::warn!(finish = %turn.finish, steps = steps.len(), "two empty answer turns; answering from notes");
+                let notes = notes_from_steps(&steps, &evidence);
+                let system_text = messages
+                    .first()
+                    .filter(|m| m.role == Role::System)
+                    .and_then(|m| {
+                        m.parts.iter().find_map(|p| match p {
+                            ContentPart::Text(t) => Some(t.clone()),
+                            _ => None,
+                        })
+                    })
+                    .unwrap_or_default();
+                let mut greq2 = GenerateRequest::new(vec![
+                    Message::text(Role::System, system_text),
+                    Message::text(
+                        Role::User,
+                        format!(
+                            "{}\n\nNotes gathered from the index (tool: result):\n{notes}\n\nWrite the final answer from these notes, citing timestamps as [[cite:VIDEO_ID:T0-T1]]. If the notes do not settle the question, give the most likely answer and say what is uncertain.",
+                            req.question
+                        ),
+                    ),
+                ]);
+                greq2.max_tokens = 1500;
+                let turn2 = generate_turn(
+                    llm.as_ref(),
+                    greq2,
+                    &tx,
+                    &mut scanner,
+                    &known,
+                    &evidence,
+                    &mut answer,
+                    usage,
+                )
+                .await?;
+                usage.provider_calls += 1;
+                if turn2.text.trim().is_empty() {
+                    partial = true;
+                    reason.get_or_insert_with(|| {
+                        format!("model returned an empty answer (finish: {})", turn.finish)
+                    });
+                } else {
+                    reason.get_or_insert_with(|| {
+                        "answered from tool notes after two empty turns".into()
+                    });
+                }
             }
             break;
         }
@@ -619,6 +662,45 @@ async fn run_tool(
         })
         .await;
     Ok(out)
+}
+
+/// Compact record of what the tools found, for the answer-from-notes fallback.
+fn notes_from_steps(
+    steps: &[(ToolCall, String)],
+    evidence: &[(VideoId, f64, f64, String)],
+) -> String {
+    let mut out = String::new();
+    for (call, summary) in steps.iter().take(24) {
+        let args = call.args.to_string();
+        let args = if args.len() > 160 {
+            format!("{}…", &args[..160])
+        } else {
+            args
+        };
+        out.push_str(&format!(
+            "- {}({args}): {}\n",
+            call.name,
+            truncate(summary, 300)
+        ));
+    }
+    if !evidence.is_empty() {
+        out.push_str("\nEvidence seen (video, seconds, text):\n");
+        for (vid, t0, t1, text) in evidence.iter().take(40) {
+            out.push_str(&format!(
+                "- {vid} {t0:.0}-{t1:.0}: {}\n",
+                truncate(text, 240)
+            ));
+        }
+    }
+    out
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(n).collect::<String>())
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

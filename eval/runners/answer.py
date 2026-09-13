@@ -30,7 +30,12 @@ ANSWER_RE = re.compile(r"answer\s*[:\-]?\s*\(?\s*([A-H])\s*\)?\s*\.?\s*$", re.I 
 LONE_RE = re.compile(r"(?:^|\s)\(?([A-H])\)?\s*\.?\s*$")
 
 
-def parse_letter(text: str, letters: list[str]) -> str | None:
+def parse_letter(text: str, letters: list[str], options: list[str] | None = None) -> str | None:
+    """The chosen option letter. Prefers an explicit `Answer: X`, then a lone
+    letter on the last line, then `(X)` in the last line. When `options` are
+    given and no letter was found, an answer that restates exactly one
+    option's text (models do this with long sentence options) counts as
+    choosing it; two or more matching options stay unparsed."""
     text = text.strip().replace("**", "")
     m = ANSWER_RE.findall(text)
     if m and m[-1].upper() in letters:
@@ -44,6 +49,12 @@ def parse_letter(text: str, letters: list[str]) -> str | None:
         for l in letters:
             if re.search(rf"\(({l})\)", last):
                 return l
+    if options:
+        norm = lambda s: re.sub(r"[^a-z0-9 ]+", " ", s.lower()).split()  # noqa: E731
+        tail = " ".join(norm(text[-800:]))
+        hits = [l for l, o in zip(letters, options) if len(norm(o)) >= 4 and " ".join(norm(o)) in tail]
+        if len(hits) == 1:
+            return hits[0]
     return None
 
 
@@ -71,7 +82,7 @@ def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question,
             tools.append(ev["tool"])
         elif ev["type"] == "done":
             usage, partial = ev["usage"], ev["partial"]
-    letter = parse_letter(text, q.letters)
+    letter = parse_letter(text, q.letters, q.options)
     return {
         "id": q.id, "status": "ok", "video_key": q.video_key, "task_types": q.task_types, "video_type": q.video_type,
         "answer": q.answer, "predicted": letter, "correct": letter == q.answer, "parsed": letter is not None,
@@ -98,6 +109,7 @@ def main():
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--limit", type=int)
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--redo-unparsed", action="store_true", help="with --resume, also re-ask questions whose stored answer had no option letter")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
 
@@ -121,7 +133,7 @@ def main():
     if a.resume and out_path.is_file():
         # Keep scored answers; failed or errored questions are asked again.
         for r in json.loads(out_path.read_text()).get("results", []):
-            if r.get("status") == "ok":
+            if r.get("status") == "ok" and not (a.redo_unparsed and not r.get("parsed")):
                 results[r["id"]] = r
     todo = [q for q in qs if q.id not in results]
     config_record = {

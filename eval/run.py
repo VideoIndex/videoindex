@@ -30,6 +30,7 @@ def main():
     ap.add_argument("--vi", default="target/eval/release/vi")
     ap.add_argument("--out")
     ap.add_argument("--title")
+    ap.add_argument("--redo-unparsed", action="store_true", help="re-ask stored answers that had no option letter (index-based runs)")
     ap.add_argument("--run-reference", action="store_true", help="also execute runs marked reference = true (external systems such as Gemini; otherwise their cached run file is only reported)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
@@ -62,7 +63,7 @@ def main():
             cmd = [sys.executable, "-m", "eval.runners.answer", bench, "--root", cfg["root"], "--index", cfg["index"], "--config", cfg["config"],
                    "--vi", a.vi, "--policy", run["policy"], "--max-tool-calls", str(run.get("max_tool_calls", 6)),
                    "--budget-usd", str(run.get("budget_usd", 0.5)), "--budget-tokens", str(run.get("budget_tokens", 120000)),
-                   "--jobs", str(a.jobs), "--resume", "--out", str(out)] + sampling
+                   "--jobs", str(a.jobs), "--resume", "--out", str(out)] + (["--redo-unparsed"] if a.redo_unparsed else []) + sampling
         print("$", " ".join(cmd), file=sys.stderr, flush=True)
         if not a.dry_run:
             subprocess.run(cmd, check=False)

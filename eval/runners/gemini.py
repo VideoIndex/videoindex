@@ -41,7 +41,7 @@ def answer_one(q: Question, video: dict, model: str, mode: str, thinking: str | 
     ms = int((time.time() - t) * 1000)
     text = output_text(d)
     usage = d.get("usage", {}) or {}
-    letter = parse_letter(text, q.letters)
+    letter = parse_letter(text, q.letters, q.options)
     tin = (usage.get("total_input_tokens", 0) or 0) + (usage.get("total_tool_use_tokens", 0) or 0)
     tout = (usage.get("total_output_tokens", 0) or 0) + (usage.get("total_thought_tokens", 0) or 0)
     return {

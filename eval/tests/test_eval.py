@@ -60,3 +60,13 @@ def test_sample_size_and_determinism():
     a = [q.id for q in stratified_sample(qs, 12, 1)]
     b = [q.id for q in stratified_sample(list(reversed(qs)), 12, 1)]
     assert a == b, "the sample depends on the seed, not on the pool order"
+
+
+def test_option_text_fallback():
+    letters = ["A", "B", "C"]
+    opts = ["#4 in white dribbles the ball down court then passes", "#0 in white inbounds the ball to #4", "The referee stops play"]
+    assert parse_letter("The play was: #4 in white dribbles the ball down court then passes to #10.", letters, opts) == "A"
+    # Two options restated -> ambiguous -> unparsed
+    assert parse_letter("#4 in white dribbles the ball down court then passes; then #0 in white inbounds the ball to #4.", letters, opts) is None
+    assert parse_letter("Something else entirely.", letters, opts) is None
+    assert parse_letter("Answer: C", letters, opts) == "C"
