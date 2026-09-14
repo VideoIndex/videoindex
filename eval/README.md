@@ -57,7 +57,7 @@ the first option letter that appears in the last line; unparseable answers count
 and are logged. Accuracy is exact match on the letter. LVBench's `time_reference` is kept
 for a citation-in-range metric when the answer carries citations.
 
-1H-VideoQA has no public answers (the Kaggle benchmark scores submissions): its runs produce predictions, and `eval.report --submission out.csv` writes them in the leaderboard's `Final Answer: (X)` form.
+1H-VideoQA has no public answers: Kaggle injects them server-side when a `kaggle-benchmarks` task runs, so the score comes from a task that asks the hosted VideoIndex API the same questions (kept with the deployment tooling). Local runs over this set produce predictions only; `eval.report --submission out.csv` exports them in the `Final Answer: (X)` form for reference.
 
 Licensing: LVBench is CC BY-NC-SA 4.0 (research only); Minerva CC BY 4.0; 1H-VideoQA via
 Kaggle terms. Benchmark videos are public YouTube content and may be in model training

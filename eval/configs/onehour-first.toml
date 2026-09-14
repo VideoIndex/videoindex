@@ -1,0 +1,19 @@
+# 1H-VideoQA (Kaggle release, 101 questions over 21 hour-long videos). The public CSV
+# carries no answers, so this is a predictions-only run: the agent's letters are written
+# for the Kaggle grader and no accuracy is reported. All questions, no sample.
+benchmark = "onehour_videoqa"
+root = "/data/videoindex/eval/onehour"
+index = "/data/videoindex/indexes/eval-onehour.vidx"
+config = "config/gcp-a100.toml"
+seed = 1
+
+[[runs]]
+name = "agent"
+policy = "agent"
+max_tool_calls = 6
+budget_usd = 0.5
+budget_tokens = 120000
+
+[[runs]]
+name = "retrieval-only"
+policy = "retrieval-only"

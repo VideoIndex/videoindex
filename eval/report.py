@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import collections
 import sys
 from pathlib import Path
 
@@ -72,7 +73,11 @@ def main():
     assets = out.parent / "assets"
     assets.mkdir(exist_ok=True)
     plot = assets / f"{out.stem}-pareto.svg"
+    ungraded = [s.get("ungraded") == s["n"] and s["n"] > 0 for _, _, s, _ in rows]
+    all_ungraded = bool(rows) and all(ungraded)
     try:
+        if all_ungraded:
+            raise RuntimeError("predictions-only runs have no accuracy to plot")
         from report import charts  # noqa: PLC0415
 
         pts = [(label, s["cost_mean"], 100 * s["accuracy"], i % 8) for i, (label, _, s, _) in enumerate(rows)]
@@ -104,7 +109,16 @@ def main():
                "the numbers here are absolute, on LVBench, and directly comparable across rows because every row answered the same "
                "questions under the same scoring. VideoIndex's per-question cost excludes indexing (done once per video); Gemini's "
                "per-question cost is the whole cost. Both systems are scored with the same letter parser.", ""]
-    md += ["", "## Accuracy by task type", ""]
+    if all_ungraded:
+        md += ["", "## Predicted letters", "",
+               "No public answers exist for this set, so there is no accuracy here; scoring happens on Kaggle, where a "
+               "kaggle-benchmarks task asks the hosted VideoIndex API the same questions. The letter distribution is a sanity check "
+               "for position bias (five-way questions: about 20% each if the answers are spread evenly).", ""]
+        for label, _, s, path in rows:
+            run = json.loads(Path(path).read_text())
+            cnt = collections.Counter(r.get("predicted") or "—" for r in run["results"] if r.get("status") == "ok")
+            md.append(f"**{label}**: " + ", ".join(f"{k} {v}" for k, v in sorted(cnt.items())))
+    md += ["", "## Questions by task type" if all_ungraded else "## Accuracy by task type", ""]
     types = sorted({t for _, _, s, _ in rows for t in s["per_type"]})
     md.append("| Task type | " + " | ".join(label for label, _, _, _ in rows) + " |")
     md.append("|---|" + "---|" * len(rows))
@@ -112,7 +126,10 @@ def main():
         cells = []
         for _, _, s, _ in rows:
             pt = s["per_type"].get(t)
-            cells.append(f"{100 * pt['accuracy']:.0f}% (n={pt['n']})" if pt else "—")
+            if pt and all_ungraded:
+                cells.append(f"n={pt['n']}")
+            else:
+                cells.append(f"{100 * pt['accuracy']:.0f}% (n={pt['n']})" if pt else "—")
         md.append(f"| {t} | " + " | ".join(cells) + " |")
     md += ["", "## Tool-call profiles", ""]
     for label, _, s, _ in rows:

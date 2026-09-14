@@ -4,8 +4,9 @@ https://www.kaggle.com/benchmarks/deepmind/video-qa. The Kaggle export is a
 CSV with `Video URL`, `Question`, `Capability` (Recall / Reasoning) and a
 `Prompt` that embeds the options as `Options: (A) ... (B) ...` and asks for
 `Final Answer: (X)`. **It carries no answers**: scoring happens on the Kaggle
-leaderboard, so runs over this set produce predictions
-(`eval.report --submission`) rather than an accuracy.
+leaderboard, so runs over this set produce predictions rather than an accuracy;
+the score comes from a kaggle-benchmarks task that asks the hosted VideoIndex
+API the same questions (`eval.report --submission` exports the local predictions).
 
 Place the CSV (or the zip's extracted folder) under `<root>/`; older exports
 with explicit `option_a..e` / `answer` columns are also accepted.

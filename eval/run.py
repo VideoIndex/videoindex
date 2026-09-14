@@ -68,7 +68,8 @@ def main():
         if not a.dry_run:
             subprocess.run(cmd, check=False)
     report = a.out or f"docs/results/{bench}-{tag}-{dt.date.today().isoformat()}.md"
-    title = a.title or f"{bench}: {'{:.0%}'.format(a.fraction) if a.fraction else (a.sample or 'all')} stratified sample, seed {a.seed}"
+    subset = f"{a.fraction:.0%} stratified sample, seed {a.seed}" if a.fraction else (f"{a.sample}-question stratified sample, seed {a.seed}" if a.sample else "all questions")
+    title = a.title or f"{bench}: {subset}"
     outs = [o for o in dict.fromkeys(outs) if Path(o).is_file()]
     cmd = [sys.executable, "-m", "eval.report", bench, *outs, "--out", report, "--title", title]
     print("$", " ".join(cmd), file=sys.stderr, flush=True)
