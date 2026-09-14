@@ -43,6 +43,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--title")
     ap.add_argument("--root", help="benchmark root (default: read from the first run's config or /data/videoindex/eval/<benchmark>)")
+    ap.add_argument("--submission", help="also write a Kaggle-style CSV of predictions (row,answer) for benchmarks without public answers")
     a = ap.parse_args()
     rows = []
     questions = {}
@@ -90,6 +91,9 @@ def main():
            "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for label, cfg, s, _ in rows:
         cir = f"{100 * s['citation_in_range']:.0f}% (n={s['citation_in_range_n']})" if s["citation_in_range"] is not None else "—"
+        if s.get("ungraded") == s["n"] and s["n"]:
+            md.append(f"| {label} | {s['n']} | predictions only (no public answers) | — | {s['unparsed']} | ${s['cost_mean']:.3f} | {s['tokens_mean']:,.0f} | {s['tool_calls_mean']:.2f} | {s['latency_p50']:.1f} s | {s['latency_p95']:.1f} s | {100 * s['no_decode_fraction']:.0f}% | — |")
+            continue
         md.append(f"| {label} | {s['n']} | **{100 * s['accuracy']:.1f}%** | {100 * s['ci'][0]:.1f}–{100 * s['ci'][1]:.1f} | {s['unparsed']} | ${s['cost_mean']:.3f} | {s['tokens_mean']:,.0f} | {s['tool_calls_mean']:.2f} | {s['latency_p50']:.1f} s | {s['latency_p95']:.1f} s | {100 * s['no_decode_fraction']:.0f}% | {cir} |")
     if any(l.startswith("gemini") for l, _, _, _ in rows):
         md += ["", "## Where this stands against Gemini agentic video", "",
@@ -119,6 +123,17 @@ def main():
         md.append(f"- **{label}**: `{path}` — {json.dumps({k: v for k, v in cfg.items() if k not in ('index', 'config')})}")
     md.append("")
     md.append(f"Questions per run: up to {n_q}. Benchmark videos are public YouTube content and may be in model training data; read per-configuration deltas rather than absolute scores.")
+    if a.submission:
+        import csv  # noqa: PLC0415
+
+        run = json.loads(Path(a.runs[0]).read_text())
+        with open(a.submission, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["", "Final Answer"])
+            for r in sorted(run["results"], key=lambda r: int(r.get("kaggle_row") or 0) if str(r.get("kaggle_row", "")).isdigit() else 0):
+                if r.get("status") == "ok":
+                    w.writerow([r.get("kaggle_row", ""), f"Final Answer: ({r.get('predicted') or 'A'})"])
+        print(a.submission)
     out.write_text("\n".join(md) + "\n")
     print(out)
 

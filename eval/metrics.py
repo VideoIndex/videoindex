@@ -42,7 +42,7 @@ def parse_ref(ref: str | None) -> tuple[float, float] | None:
 def score(run: dict) -> dict:
     res = [r for r in run["results"] if r.get("status") == "ok"]
     n = len(res)
-    correct = sum(r["correct"] for r in res)
+    correct = sum(bool(r.get("correct")) for r in res)
     lo, hi = wilson(correct, n)
     by_type: dict[str, list[dict]] = {}
     for r in res:
@@ -50,7 +50,7 @@ def score(run: dict) -> dict:
             by_type.setdefault(t, []).append(r)
     per_type = {}
     for t, rs in sorted(by_type.items()):
-        k = sum(x["correct"] for x in rs)
+        k = sum(bool(x.get("correct")) for x in rs)
         l2, h2 = wilson(k, len(rs))
         per_type[t] = {"n": len(rs), "accuracy": k / len(rs), "ci": (l2, h2)}
     costs = [r["usage"].get("cost_usd", 0) for r in res]
@@ -68,6 +68,7 @@ def score(run: dict) -> dict:
                 in_range += 1
     return {
         "n": n, "accuracy": correct / n if n else 0.0, "ci": (lo, hi), "unparsed": sum(not r.get("parsed", True) for r in res),
+        "ungraded": sum(r.get("correct") is None for r in res),
         "failed": sum(r.get("status") != "ok" for r in run["results"]),
         "per_type": per_type,
         "cost_mean": sum(costs) / n if n else 0.0, "cost_total": sum(costs), "cost_p95": pct(costs, 0.95),

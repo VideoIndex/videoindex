@@ -83,9 +83,11 @@ def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question,
         elif ev["type"] == "done":
             usage, partial = ev["usage"], ev["partial"]
     letter = parse_letter(text, q.letters, q.options)
+    known = q.answer in q.letters
     return {
         "id": q.id, "status": "ok", "video_key": q.video_key, "task_types": q.task_types, "video_type": q.video_type,
-        "answer": q.answer, "predicted": letter, "correct": letter == q.answer, "parsed": letter is not None,
+        "answer": q.answer if known else None, "predicted": letter, "correct": (letter == q.answer) if known else None,
+        "parsed": letter is not None, "kaggle_row": q.extra.get("kaggle_row"),
         "text": text.strip()[-600:], "citations": cites, "tools": tools, "usage": usage, "partial": partial, "ms": ms,
         "time_reference": q.time_reference,
     }
@@ -174,13 +176,15 @@ def main():
             results[r["id"]] = r
             done += 1
             ok = r.get("correct")
-            print(f"[{done}/{len(todo)}] {r['id']} {'OK ' if ok else ('MISS' if r.get('status') == 'ok' else 'ERR ')} pred={r.get('predicted')} gt={r.get('answer')} ${r.get('usage', {}).get('cost_usd', 0):.3f} {r.get('ms', 0)/1000:.1f}s", flush=True)
+            mark = "PRED" if ok is None and r.get("status") == "ok" else ("OK " if ok else ("MISS" if r.get("status") == "ok" else "ERR "))
+            print(f"[{done}/{len(todo)}] {r['id']} {mark} pred={r.get('predicted')} gt={r.get('answer')} ${r.get('usage', {}).get('cost_usd', 0):.3f} {r.get('ms', 0)/1000:.1f}s", flush=True)
             if done % 5 == 0:
                 flush()
     flush()
     scored = [r for r in results.values() if r.get("status") == "ok"]
-    acc = sum(r["correct"] for r in scored) / max(1, len(scored))
-    print(json.dumps({"n": len(scored), "accuracy": round(acc, 3), "unparsed": sum(not r["parsed"] for r in scored),
+    graded = [r for r in scored if r.get("correct") is not None]
+    acc = sum(r["correct"] for r in graded) / max(1, len(graded))
+    print(json.dumps({"n": len(scored), "graded": len(graded), "accuracy": round(acc, 3) if graded else None, "unparsed": sum(not r["parsed"] for r in scored),
                       "cost_usd_total": round(sum(r["usage"].get("cost_usd", 0) for r in scored), 3)}, indent=1))
 
 
