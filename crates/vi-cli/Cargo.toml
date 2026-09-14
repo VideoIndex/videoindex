@@ -12,6 +12,7 @@ authors.workspace = true
 default = []
 # ONNX Runtime CUDA execution provider for the in-process models.
 cuda = ["vi-perceive/cuda"]
+onnx-dynamic = ["vi-perceive/onnx-dynamic"]
 
 [[bin]]
 name = "vi"

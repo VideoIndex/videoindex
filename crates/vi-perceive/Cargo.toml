@@ -13,6 +13,10 @@ default = []
 # ONNX Runtime CUDA execution provider. Needs libcudart 12, cuBLAS and
 # cuDNN 9 on the loader path at run time.
 cuda = ["ort/cuda"]
+# Load ONNX Runtime at run time from ORT_DYLIB_PATH instead of linking the
+# prebuilt static libraries, for hosts whose glibc/libstdc++ are older than
+# the ones those libraries were built against (Debian 12 serving hosts).
+onnx-dynamic = ["ort/load-dynamic"]
 
 [dependencies]
 vi-core = { workspace = true }
