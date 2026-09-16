@@ -1,3 +1,95 @@
+● They are tools of the agent itself, not a feature of the portal. Every question answered with the agent policy runs the same tool loop, wherever it is called from.
+  
+  Where the agent runs. The vi ask command, the API's ask endpoint, the MCP ask tool, and the Python and Node bindings all drive one agent loop. The videoindex.app chat calls the API's
+  ask endpoint with the agent policy, so yes, the portal uses them too, indirectly. The Kaggle task file calls the same endpoint.
+  
+  What the tools do. The agent has eight tools. Six read what the index already stores: search, list videos, timeline, transcript, OCR text, and the fine-pass descriptions. Two need the
+  video file itself:
+  
+  - view decodes frames from a time range and hands the model a labelled grid of images. The agent reaches for it when the question is about something visual that the transcript and OCR
+    do not settle. On LVBench it appeared in most tool profiles.
+  - describe decodes frames and asks the vision model to write a description of that range, which is cheaper than the model looking at a large grid itself.
+
+  What happens without media. When the file is missing, the tool returns an error saying the media is not on this machine, the agent notes it and answers from transcript, OCR and
+  embeddings. Nothing crashes, but visual questions get weaker answers. This is the state of both indexes on gcp_internal_1 today. The lecture index shipped without its 16 GB of media
+  by design for the first cut, and the 1H-VideoQA index has its media on the host but under a different path.
+
+  Why it matters for Kaggle specifically. 1H-VideoQA is mostly visual recall about films and vlogs, and in the local run the agent called view or describe in the large majority of
+  questions. Run through the host without the symlink, the Kaggle score would measure a transcript-only system. The one-line symlink from my previous message gives the host's copy the
+  same tools the local run had.
+  
+  For the portal, the equivalent step is deploying with --with-media, which copies the lecture videos to the host's large volume where the index already expects them.
+  
+✻ Cooked for 26s · done 12:49 AM · 1 monitor still running
+  
+❯ so we are exposing the kaggle 1hr videos through the app portal ?                                                                                                                      
+  
+  Ran 1 shell command 
+  
+● No. The portal is pinned to the lecture index and cannot reach the 1H-VideoQA one.
+  
+  How the portal is scoped. The chat backend reads its index name from its environment file on the host, which says dataset, and builds every API path from that constant. The browser
+  never sends an index name, so there is no request a visitor could make that lands on eval-onehour. The videos list, search, ask, timeline and thumbnails all stay inside the lecture
+  set.
+  
+  Where the 1H-VideoQA index is reachable. Only through the API with a valid key. The API lists both indexes to anyone holding the key, and the Kaggle task uses that path. The one key
+  on the host is shared between the chat backend and the Kaggle notebook, so a key in a Kaggle secret is also a key that can query the lecture index. If you want them separated, the
+  server accepts several keys and I can add a second one for Kaggle with its own daily cap.
+
+  What the portal exposes of any video. It streams nothing itself. Playback is the YouTube embed of the source URL, and the portal serves only index data: transcript spans, OCR,
+  thumbnails and the agent's answers. That holds for the lecture set today and would hold for the 1H-VideoQA set if you ever pointed the portal at it.
+
+  If you would rather not have the benchmark index on the public host at all, deleting its directory under the host's index root removes it, and the Kaggle task could instead run
+  against an SSH tunnel to this machine.
+------------------------------------------------------------------------------------------------------------------------
+  1H-VideoQA via gcp_internal_1: complete. The host downloaded all 21 videos (9.2 GB) with no errors, a sync loop pulled them here, and the local pipeline indexed them in 57 minutes.
+  The agent then answered all 101 questions.
+  
+  ┌─────────────────────────┬──────────────────────────────┐
+  │                         │          agent run           │
+  ├─────────────────────────┼──────────────────────────────┤
+  │ questions               │ 101                          │
+  ├─────────────────────────┼──────────────────────────────┤
+  │ unparsed                │ 1                            │
+  ├─────────────────────────┼──────────────────────────────┤
+  │ cost                    │ $12.71 ($0.126 per question) │
+  ├─────────────────────────┼──────────────────────────────┤
+  │ tool calls per question │ 4.9                          │
+  ├─────────────────────────┼──────────────────────────────┤
+  │ latency p50 / p95       │ 21 s / 46 s                  │
+  ├─────────────────────────┼──────────────────────────────┤
+  │ predicted letters A–E   │ 20 / 23 / 21 / 16 / 20       │
+  └─────────────────────────┴──────────────────────────────┘
+  
+  No accuracy is possible locally because the Kaggle export carries no answers. The results page is docs/results/onehour_videoqa-full-2026-09-14.md, and the report writer now shows a
+  letter distribution instead of a misleading 0% for predictions-only runs.
+  
+  Scoring on Kaggle is ready. vi_internal/tools/kaggle_videoqa_task.py is a self-contained kaggle-benchmarks task that answers each row through the hosted API and asserts the injected
+  hidden answer. The eval-onehour index is deployed on the host alongside the lecture index, and a smoke test over an SSH tunnel returned the same letter as the local run for the first
+  question. To run it, paste the file into a Kaggle notebook with three secrets: the API URL https://api.videoindex.app, the API key from /etc/videoindex/api_key on the host, and index
+  eval-onehour.
+  
+  One limitation: the host's copy of the index cannot use the view and describe tools because the videos sit at /recall/videoindex/eval/onehour/videos while the index expects 
+  /data/videoindex/eval/onehour/videos. Creating that path was blocked for me as a change to the host's shared filesystem. If you want full-tool answers on Kaggle, run on the host:
+  
+  sudo mkdir -p /data/videoindex/eval && sudo ln -s /recall/videoindex/eval/onehour /data/videoindex/eval/onehour
+  
+  Repositories. vi_internal is pushed (two commits, and its remote was updated to the moved VideoIndex/vi_internal URL). The core repo has one new commit on top of the earlier unpushed
+  ones for you to push.------------------------------------------------------------------------------------------------------------------------
+
+● VideoIndex is running on gcp_internal_1. The deploy script lives in the internal repo (vi_internal/deploy/gcp_internal_1/deploy.sh, pushed) and is idempotent: rerun it after code changes (about two minutes for the on-host build), or with --skip-build for app or data changes.
+  
+  What the host required, and how the script handles it
+  - Debian 12's glibc is older than the one the Rust ONNX Runtime crate's prebuilt libraries were built against, so the first build failed to link. I added an onnx-dynamic feature to the core (loads the official libonnxruntime.so at run time via ORT_DYLIB_PATH); the script builds vi on the host in tmpfs with a
+    throwaway toolchain and cleans up after itself. Disk is tight on the 15 GB root, so everything lives on the 350 GB /recall disk.
+  - Port 8080 is taken there, so the API listens on 127.0.0.1:8090 and the chat app on 127.0.0.1:3000; both are systemd units running as a dedicated videoindex user with hardening and the secrets in /etc/videoindex (the demo key stays on the host; the script no longer prints it).
+  - First cut ships the dataset index (2.5 GB) and the two query-time models without the 16 GB of media: search and answers work, the player streams from YouTube, and the agent's view/describe tools have nothing to decode until you run with --with-media.
+  
+  Verified on the host: services active, /healthz and the index listing answer, the chat page serves, and a real question streamed through the chat proxy with tokens, three tool calls and three citations. Host RAM in use is about 2 GB.
+  
+  Your step: the nginx server block is written to /etc/nginx/sites-available/videoindex for videoindex.app, www. and api.videoindex.app but not enabled, because it needs the DNS records to point at the host first (34.134.103.130) and I did not want to touch the shared nginx without you. Once DNS is in place:
+  deploy.sh --skip-build --enable-nginx, then certbot --nginx for TLS (certbot is not installed there yet). If you prefer a different hostname, pass --domain.
+------------------------------------------------------------------------------------------------------------------------
 ● Both requests are done.
   
   Gemini 3.8 Flash agentic video on the same LVBench sample (run once, cached, now a permanent reference row in the results and never re-run by the matrix):
