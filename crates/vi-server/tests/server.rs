@@ -521,6 +521,28 @@ async fn ask_streams_events_and_returns_json_and_enforces_the_daily_cap() {
         .to_string();
     wait_job(&client, &base, &job).await;
 
+    // The chat models a caller may pick; the agent role marks the default.
+    let models: Value = client
+        .get(format!("{base}/v1/models"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        models,
+        json!({"models": [{"provider": "fake", "adapter": "openai_compat", "model": "fake", "default": true}]})
+    );
+    let r = client
+        .post(format!("{base}/v1/indexes/t/ask"))
+        .json(&json!({"question": "what?", "model": "nope"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400);
+    assert!(r.text().await.unwrap().contains("unknown model 'nope'"));
+
     // JSON answer.
     let a: Value = client
         .post(format!("{base}/v1/indexes/t/ask"))
@@ -538,7 +560,7 @@ async fn ask_streams_events_and_returns_json_and_enforces_the_daily_cap() {
     let resp = client
         .post(format!("{base}/v1/indexes/t/ask"))
         .header("accept", "text/event-stream")
-        .json(&json!({"question": "what?", "policy": "retrieval-only"}))
+        .json(&json!({"question": "what?", "policy": "retrieval-only", "model": "fake"}))
         .send()
         .await
         .unwrap();

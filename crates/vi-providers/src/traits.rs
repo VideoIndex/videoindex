@@ -320,6 +320,9 @@ pub enum ContentPart {
         name: String,
         /// JSON arguments.
         arguments: String,
+        /// Opaque provider state that must travel back with the call
+        /// (Gemini 3 thought signatures; other adapters leave it `None`).
+        signature: Option<String>,
     },
     /// A tool call result being returned to the model.
     ToolResult {
@@ -449,6 +452,10 @@ pub enum GenerateEvent {
         name: String,
         /// JSON arguments.
         arguments: String,
+        /// Opaque provider state to echo back in the history entry
+        /// (Gemini 3 thought signatures).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
     },
     /// Usage so far or final.
     Usage(crate::cost::Usage),

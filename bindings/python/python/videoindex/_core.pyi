@@ -68,6 +68,7 @@ class Index:
         videos: Optional[Sequence[str]] = None,
         session_id: Optional[str] = None,
         policy: Optional[Union[str, Any]] = None,
+        model: Optional[str] = None,
     ) -> AskStream: ...
     def aask(
         self,
@@ -76,6 +77,7 @@ class Index:
         videos: Optional[Sequence[str]] = None,
         session_id: Optional[str] = None,
         policy: Optional[Union[str, Any]] = None,
+        model: Optional[str] = None,
     ) -> AsyncIterator[dict[str, Any]]: ...
     def view(self, video_id: str, t0: float, t1: float, fps: float = 1.0, cols: int = 3) -> dict[str, Any]: ...
     def frame(self, video_id: str, t: float, max_dim: int = 640) -> Any: ...

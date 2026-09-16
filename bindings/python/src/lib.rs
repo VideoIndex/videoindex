@@ -483,9 +483,18 @@ impl Index {
         videos: Option<Vec<String>>,
         session_id: Option<String>,
         policy: Option<&Bound<'_, PyAny>>,
+        model: Option<String>,
     ) -> PyResult<AskStream> {
         let videos = parse_videos(videos)?;
         let mut agent = Agent::new(self.storage.clone(), self.prov(), self.cfg());
+        if let Some(model) = model.as_deref() {
+            let provider = self.prov().find_llm_provider(model).ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "unknown model '{model}'; pass a [providers.*] name or its model id"
+                ))
+            })?;
+            agent = agent.with_provider(provider);
+        }
         match policy {
             None => {}
             Some(p) if p.is_instance_of::<pyo3::types::PyString>() => {
@@ -682,7 +691,7 @@ impl Index {
     }
 
     /// Ask a question; iterate the returned stream for events.
-    #[pyo3(signature = (question, budget = None, videos = None, session_id = None, policy = None))]
+    #[pyo3(signature = (question, budget = None, videos = None, session_id = None, policy = None, model = None))]
     fn ask(
         &self,
         question: &str,
@@ -690,6 +699,7 @@ impl Index {
         videos: Option<Vec<String>>,
         session_id: Option<String>,
         policy: Option<&Bound<'_, PyAny>>,
+        model: Option<String>,
     ) -> PyResult<AskStream> {
         self.ask_stream(
             question.to_string(),
@@ -697,11 +707,12 @@ impl Index {
             videos,
             session_id,
             policy,
+            model,
         )
     }
 
     /// Ask a question; `async for ev in idx.aask(...)`.
-    #[pyo3(signature = (question, budget = None, videos = None, session_id = None, policy = None))]
+    #[pyo3(signature = (question, budget = None, videos = None, session_id = None, policy = None, model = None))]
     fn aask(
         &self,
         question: &str,
@@ -709,6 +720,7 @@ impl Index {
         videos: Option<Vec<String>>,
         session_id: Option<String>,
         policy: Option<&Bound<'_, PyAny>>,
+        model: Option<String>,
     ) -> PyResult<AskStream> {
         self.ask_stream(
             question.to_string(),
@@ -716,6 +728,7 @@ impl Index {
             videos,
             session_id,
             policy,
+            model,
         )
     }
 

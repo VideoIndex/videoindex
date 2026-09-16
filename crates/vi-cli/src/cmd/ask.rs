@@ -1,4 +1,4 @@
-//! `vi ask <index-dir> "<question>" [--budget-usd ..] [--video ID] [--session ID] [--json]`
+//! `vi ask <index-dir> "<question>" [--budget-usd ..] [--video ID] [--session ID] [--model NAME] [--json]`
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -41,6 +41,10 @@ pub struct Args {
     /// search, then answer).
     #[arg(long, default_value = "agent")]
     pub policy: String,
+    /// Chat model: a `[providers.*]` name or its model id (default: the
+    /// `agent_llm` role).
+    #[arg(long)]
+    pub model: Option<String>,
 }
 
 pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
@@ -54,7 +58,7 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
         tokio_util::sync::CancellationToken::new(),
     ));
     vi_perceive::OnnxLocal::register(&providers);
-    let mut agent = Agent::new(idx.clone(), providers, config);
+    let mut agent = Agent::new(idx.clone(), providers.clone(), config);
     if matches!(args.policy.as_str(), "retrieval-only" | "retrieval_only") {
         agent = agent.with_policy(Arc::new(RetrievalOnlyPolicy { k: 8 }));
     } else if args.policy != "agent" {
@@ -62,6 +66,17 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
             "unknown policy '{}'; expected agent or retrieval-only",
             args.policy
         );
+    }
+    if let Some(model) = &args.model {
+        let provider = providers.find_llm_provider(model).with_context(|| {
+            let known: Vec<String> = providers
+                .llm_providers()
+                .iter()
+                .map(|p| format!("{} ({})", p.provider, p.model))
+                .collect();
+            format!("unknown model '{model}'; configured: {}", known.join(", "))
+        })?;
+        agent = agent.with_provider(provider);
     }
     let req = AskRequest {
         question: args.question.clone(),

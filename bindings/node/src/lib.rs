@@ -69,6 +69,9 @@ pub struct AskOptions {
     pub session_id: Option<String>,
     /// `agent` (default) or `retrieval-only`.
     pub policy: Option<String>,
+    /// Chat model: a `[providers.*]` name or its model id (default: the
+    /// `agent_llm` role).
+    pub model: Option<String>,
     /// Tokens across all calls.
     pub max_tokens: Option<u32>,
     /// USD.
@@ -241,6 +244,13 @@ impl Index {
                 agent = agent.with_policy(Arc::new(RetrievalOnlyPolicy { k: 8 }));
             }
             other => return Err(err(format!("unknown policy '{other}'"))),
+        }
+        if let Some(model) = opts.model.as_deref() {
+            let provider = self
+                .providers
+                .find_llm_provider(model)
+                .ok_or_else(|| err(format!("unknown model '{model}'")))?;
+            agent = agent.with_provider(provider);
         }
         let d = AskBudget::default();
         let req = AskRequest {

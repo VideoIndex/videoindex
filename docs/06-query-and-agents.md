@@ -71,6 +71,8 @@ pub trait Policy: Send + Sync {
 
 The default policy is a tool-using LLM: it receives the question, the retrieval hits, the observations so far, and the remaining budget, and picks a tool call or answers. Python and JS can supply their own `Policy` through the bridge. Fixed strategies such as "always view the top-3 scenes at 1 fps then answer" are also policies and are useful as eval baselines.
 
+The reasoning model is the `agent_llm` role (`agent_vlm` when bound) unless the caller picks one per question: `ask` takes `model`, a `[providers.*]` name or its model id (`vi ask --model gemini-3.8-flash`, `idx.ask(q, model=...)`, `{"model": ...}` over HTTP; `GET /v1/models` lists the chat providers and marks the default). The tools keep their own roles, so switching the model changes who reasons, not how the index is read. Gemini 3 function calls carry a thought signature that must return with the call in later turns; the tool call keeps it as an opaque `signature` and the Gemini adapter echoes it.
+
 ### Tools
 
 Every tool is read-only against the index and the media. Tools are exposed identically to the internal LLM, to Python/JS callers, and over MCP.

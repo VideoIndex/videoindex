@@ -159,6 +159,7 @@ pub struct Agent {
     providers: Arc<ProviderRegistry>,
     config: Arc<Config>,
     policy: Option<Arc<dyn Policy>>,
+    provider: Option<String>,
 }
 
 impl std::fmt::Debug for Agent {
@@ -185,6 +186,7 @@ impl Agent {
             providers,
             config,
             policy: None,
+            provider: None,
         }
     }
 
@@ -195,6 +197,13 @@ impl Agent {
         self
     }
 
+    /// Reason with this `[providers.<name>]` chat model instead of the
+    /// `agent_llm` role; the tools keep their own roles.
+    pub fn with_provider(mut self, provider: impl Into<String>) -> Self {
+        self.provider = Some(provider.into());
+        self
+    }
+
     /// Ask, streaming events. The stream ends with [`AskEvent::Done`].
     pub fn ask(&self, req: AskRequest) -> impl Stream<Item = AskEvent> + Send + 'static {
         let (tx, rx) = mpsc::channel::<AskEvent>(64);
@@ -202,6 +211,7 @@ impl Agent {
         let providers = self.providers.clone();
         let config = self.config.clone();
         let policy = self.policy.clone();
+        let provider = self.provider.clone();
         tokio::spawn(async move {
             let started = Instant::now();
             let mut usage = AskUsage::default();
@@ -210,6 +220,7 @@ impl Agent {
                 providers,
                 config,
                 policy,
+                provider,
                 req,
                 tx.clone(),
                 &mut usage,
@@ -284,12 +295,16 @@ async fn run(
     providers: Arc<ProviderRegistry>,
     config: Arc<Config>,
     policy: Option<Arc<dyn Policy>>,
+    provider: Option<String>,
     req: AskRequest,
     tx: mpsc::Sender<AskEvent>,
     usage: &mut AskUsage,
     started: Instant,
 ) -> Result<(bool, Option<String>)> {
-    let llm: Arc<dyn Vlm> = providers.agent_vlm()?;
+    let llm: Arc<dyn Vlm> = match &provider {
+        Some(name) => providers.vlm_for_provider(name)?,
+        None => providers.agent_vlm()?,
+    };
     let caps = llm.vlm_capabilities();
     let with_describe = providers.has_role(roles::VLM_DESCRIBE);
     let ctx = ToolContext {
@@ -534,6 +549,7 @@ async fn run(
                 id: c.id.clone(),
                 name: c.name.clone(),
                 arguments: c.args.to_string(),
+                signature: c.signature.clone(),
             });
         }
         messages.push(Message {
@@ -757,9 +773,15 @@ async fn generate_turn(
                 id,
                 name,
                 arguments,
+                signature,
             } => {
                 let args: serde_json::Value = serde_json::from_str(&arguments).unwrap_or(json!({}));
-                turn.calls.push(ToolCall { id, name, args });
+                turn.calls.push(ToolCall {
+                    id,
+                    name,
+                    args,
+                    signature,
+                });
             }
             GenerateEvent::Usage(_) => {}
             GenerateEvent::Done {

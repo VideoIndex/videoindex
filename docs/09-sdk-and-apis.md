@@ -103,7 +103,8 @@ Base path `/v1`. JSON in, JSON or SSE out. OpenAPI document served at `/v1/opena
 | GET | `/jobs/{id}` | job status; `Accept: text/event-stream` for progress |
 | DELETE | `/jobs/{id}` | cancel |
 | POST | `/indexes/{id}/search` | hybrid search |
-| POST | `/indexes/{id}/ask` | agentic answer; SSE stream of the events in 06 |
+| POST | `/indexes/{id}/ask` | agentic answer; SSE stream of the events in 06; optional `model` picks a configured chat provider |
+| GET | `/models` | chat providers `ask` accepts as `model` (name, adapter, model id, default) |
 | POST | `/indexes/{id}/view` | frame grid as PNG or WebP |
 | GET | `/indexes/{id}/videos/{vid}/timeline` | segments |
 | GET | `/indexes/{id}/videos/{vid}/transcript?t0&t1` | spans |

@@ -62,6 +62,7 @@ impl ToolCallBuilder {
             } else {
                 self.arguments
             },
+            signature: None,
         }
     }
 }

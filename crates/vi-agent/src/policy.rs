@@ -53,6 +53,7 @@ impl Policy for RetrievalOnlyPolicy {
                 id: "policy_search".into(),
                 name: "search".into(),
                 args: json!({"query": state.question, "k": self.k.max(1)}),
+                signature: None,
             }));
         }
         Ok(Step::Answer)

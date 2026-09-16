@@ -102,6 +102,19 @@ pub type ExternalFactory = Arc<
         + Sync,
 >;
 
+/// A chat provider a caller may select per request.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct LlmProvider {
+    /// Provider name (the `[providers.<name>]` key).
+    pub provider: String,
+    /// Adapter kind.
+    pub adapter: String,
+    /// Model id the provider is configured with.
+    pub model: String,
+    /// Whether the agent's role binds to this provider.
+    pub default: bool,
+}
+
 /// One line of the role report.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct RoleReport {
@@ -192,6 +205,26 @@ impl ProviderRegistry {
             .config
             .provider_for_role(role)
             .map_err(|e| ProviderError::NotConfigured(e.to_string()))?;
+        self.adapter_for_binding(binding, cfg)
+    }
+
+    /// The adapter for a `[providers.<name>]` table with no role overrides.
+    fn adapter_for_provider(&self, name: &str) -> Result<Arc<Adapter>> {
+        let cfg = self.config.providers.get(name).ok_or_else(|| {
+            ProviderError::NotConfigured(format!("no [providers.{name}] table in the config"))
+        })?;
+        let binding = RoleBinding {
+            provider: name.to_string(),
+            ..RoleBinding::default()
+        };
+        self.adapter_for_binding(&binding, cfg)
+    }
+
+    fn adapter_for_binding(
+        &self,
+        binding: &RoleBinding,
+        cfg: &ProviderConfig,
+    ) -> Result<Arc<Adapter>> {
         // Overrides make a distinct instance; the governor is per provider.
         let key = format!(
             "{}|{}|{}",
@@ -348,6 +381,78 @@ impl ProviderRegistry {
             self.vlm(roles::AGENT_VLM)
         } else {
             self.vlm(roles::AGENT_LLM)
+        }
+    }
+
+    /// A chat model addressed by provider name rather than by role, for a
+    /// caller that picks the model per request (`ask` with `model`).
+    pub fn vlm_for_provider(&self, name: &str) -> Result<Arc<dyn Vlm>> {
+        match &*self.adapter_for_provider(name)? {
+            Adapter::OpenAiCompat(a) => Ok(a.clone()),
+            Adapter::Anthropic(a) => Ok(a.clone()),
+            Adapter::Gemini(a) => Ok(a.clone()),
+            Adapter::External(_) => Err(ProviderError::Unsupported {
+                provider: name.to_string(),
+                capability: "vlm",
+            }),
+        }
+    }
+
+    /// Chat-capable providers in the config, in name order: the choices a
+    /// caller may pass as `model`. `default` marks the provider behind the
+    /// agent's role (`agent_vlm`, else `agent_llm`).
+    pub fn llm_providers(&self) -> Vec<LlmProvider> {
+        let default = [roles::AGENT_VLM, roles::AGENT_LLM]
+            .iter()
+            .find_map(|r| self.config.roles.get(*r))
+            .map(|b| b.provider.clone());
+        self.config
+            .providers
+            .iter()
+            .filter(|(_, cfg)| {
+                matches!(
+                    AdapterKind::parse(&cfg.adapter),
+                    Some(AdapterKind::Anthropic | AdapterKind::Gemini | AdapterKind::OpenAiCompat)
+                )
+            })
+            .filter_map(|(name, cfg)| {
+                // A chat provider names its model; a Whisper or embedding
+                // server on `openai_compat` is filtered by the role it serves.
+                let model = cfg.model.clone()?;
+                if cfg.adapter == "openai_compat" && self.serves_non_chat_role(name) {
+                    return None;
+                }
+                Some(LlmProvider {
+                    provider: name.clone(),
+                    adapter: cfg.adapter.clone(),
+                    model,
+                    default: default.as_deref() == Some(name.as_str()),
+                })
+            })
+            .collect()
+    }
+
+    fn serves_non_chat_role(&self, provider: &str) -> bool {
+        self.config.roles.iter().any(|(role, b)| {
+            b.provider == provider
+                && matches!(
+                    role.as_str(),
+                    roles::ASR | roles::OCR | roles::IMAGE_EMBED | roles::TEXT_EMBED | roles::RERANKER
+                )
+        })
+    }
+
+    /// Resolve a `model` argument to a provider name: a provider name, or
+    /// the model id of exactly one chat provider (`gemini-3.8-flash`).
+    pub fn find_llm_provider(&self, name_or_model: &str) -> Option<String> {
+        let providers = self.llm_providers();
+        if let Some(p) = providers.iter().find(|p| p.provider == name_or_model) {
+            return Some(p.provider.clone());
+        }
+        let mut by_model = providers.iter().filter(|p| p.model == name_or_model);
+        match (by_model.next(), by_model.next()) {
+            (Some(p), None) => Some(p.provider.clone()),
+            _ => None,
         }
     }
 

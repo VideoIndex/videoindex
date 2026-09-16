@@ -12,6 +12,8 @@ export interface AskOptions {
   videos?: string[];
   sessionId?: string;
   policy?: "agent" | "retrieval-only";
+  /** Chat model: a `[providers.*]` name or its model id (default: the `agent_llm` role). */
+  model?: string;
   maxTokens?: number;
   maxCostUsd?: number;
   maxWallclockSecs?: number;

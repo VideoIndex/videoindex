@@ -31,6 +31,14 @@ model = "claude-sonnet-5"
 concurrency = 4
 requests_per_minute = 50
 
+# Alternative chat model for `vi ask --model gemini-3.8-flash` and the server's
+# `model` field (key in $GEMINI_API_KEY, from the git-ignored .env).
+[providers.gemini]
+adapter = "gemini"
+model = "gemini-3.8-flash"
+concurrency = 4
+requests_per_minute = 50
+
 # In-process ONNX models (SigLIP, RapidOCR, bge-small).
 [providers.local]
 adapter = "onnx_local"

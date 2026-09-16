@@ -41,6 +41,11 @@ pub async fn healthz(State(state): State<Arc<AppState>>) -> Json<Value> {
     }))
 }
 
+/// `GET /v1/models`: the chat models `ask` accepts as `model`.
+pub async fn models(State(state): State<Arc<AppState>>) -> Json<Value> {
+    Json(json!({"models": state.providers.llm_providers()}))
+}
+
 /// `GET /v1/indexes`.
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<Value> {
     let items: Vec<Value> = state
@@ -202,6 +207,7 @@ pub async fn transcript(
             id: "http".into(),
             name: tool.into(),
             args: json!({"video_id": vid.to_string(), "t0": q.t0, "t1": t1}),
+            signature: None,
         },
     )
     .await?;

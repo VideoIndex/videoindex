@@ -129,6 +129,10 @@ pub struct AskBody {
     /// `agent` (default) or `retrieval-only`.
     #[serde(default = "default_policy")]
     pub policy: String,
+    /// Chat model for this answer: a provider name or model id from
+    /// `GET /v1/models`; default is the `agent_llm` role.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 fn default_policy() -> String {
@@ -152,6 +156,14 @@ pub fn ask_stream(
             agent = agent.with_policy(Arc::new(RetrievalOnlyPolicy { k: 8 }));
         }
         other => return Err(ApiError::bad_request(format!("unknown policy '{other}'"))),
+    }
+    if let Some(model) = body.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+        let provider = state.providers.find_llm_provider(model).ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "unknown model '{model}'; GET /v1/models lists the choices"
+            ))
+        })?;
+        agent = agent.with_provider(provider);
     }
     let req = AskRequest {
         question: body.question,

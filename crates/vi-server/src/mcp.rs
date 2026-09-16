@@ -119,7 +119,8 @@ pub fn tool_list(state: &AppState) -> Vec<Value> {
             "question": {"type": "string"},
             "video_id": {"type": "string", "description": "Restrict to one video."},
             "max_tool_calls": {"type": "integer", "default": 6},
-            "max_cost_usd": {"type": "number", "default": 0.3}
+            "max_cost_usd": {"type": "number", "default": 0.3},
+            "model": {"type": "string", "description": "Chat model: a provider name or model id from GET /v1/models; default is the agent_llm role."}
         }, "required": ["question"]}
     }));
     tools
@@ -216,6 +217,7 @@ async fn call_tool(
                 },
                 session_id: None,
                 policy: "agent".into(),
+                model: args.get("model").and_then(Value::as_str).map(str::to_string),
             };
             let stream = ask_stream(state, ix, body)?;
             let v = collect(state, &key.bucket(), stream).await;
@@ -270,6 +272,7 @@ async fn call_tool(
                     id: "mcp".into(),
                     name: name.to_string(),
                     args,
+                    signature: None,
                 },
             )
             .await?;

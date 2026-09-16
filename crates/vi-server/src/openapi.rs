@@ -37,6 +37,11 @@ pub fn spec() -> Value {
         "/v1/openapi.json".into(),
         json!({"get": op("This document", "system")}),
     );
+    paths.insert("/v1/models".into(), json!({
+        "get": {"summary": "Chat models `ask` accepts as `model`: provider name, adapter, model id, and which one the agent role uses by default", "tags": ["query"],
+                "responses": {"200": {"description": "models", "content": {"application/json": {"schema": {"type": "object", "properties": {"models": {"type": "array", "items": {"type": "object", "properties": {
+                    "provider": {"type": "string"}, "adapter": {"type": "string"}, "model": {"type": "string"}, "default": {"type": "boolean"}}}}}}}}}}}
+    }));
     paths.insert("/v1/indexes".into(), json!({
         "get": op("List indexes under the index root", "indexes"),
         "post": {"summary": "Create an empty index", "tags": ["indexes"],
@@ -69,7 +74,8 @@ pub fn spec() -> Value {
         "requestBody": json_body(json!({"type": "object", "required": ["question"], "properties": {
             "question": {"type": "string"}, "videos": {"type": "array", "items": {"type": "string"}},
             "budget": {"type": "object", "properties": {"max_tokens": {"type": "integer"}, "max_cost_usd": {"type": "number"}, "max_wallclock_secs": {"type": "number"}, "max_tool_calls": {"type": "integer"}}},
-            "session_id": {"type": "string"}, "policy": {"type": "string", "enum": ["agent", "retrieval-only"], "default": "agent"}}})),
+            "session_id": {"type": "string"}, "policy": {"type": "string", "enum": ["agent", "retrieval-only"], "default": "agent"},
+            "model": {"type": "string", "description": "provider name or model id from GET /v1/models; default: the agent_llm role"}}})),
         "responses": {"200": {"description": "answer"}, "429": {"description": "daily spend cap reached"}}}}));
     paths.insert("/v1/indexes/{index}/view".into(), json!({"post": {"summary": "Labelled frame grid as PNG", "tags": ["query"], "parameters": [index_param],
         "requestBody": json_body(json!({"type": "object", "required": ["video_id", "t0", "t1"], "properties": {

@@ -26,6 +26,6 @@ pub use adapters::{Anthropic, Gemini, OpenAiCompat};
 pub use cost::{provenance_for, CallStats, Usage};
 pub use error::{ProviderError, Result};
 pub use governor::Governor;
-pub use registry::{AdapterKind, ProviderRegistry};
+pub use registry::{AdapterKind, LlmProvider, ProviderRegistry};
 pub use retry::RetryPolicy;
 pub use traits::*;

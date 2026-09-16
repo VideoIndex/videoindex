@@ -50,6 +50,10 @@ pub struct ToolCall {
     pub name: String,
     /// Arguments.
     pub args: Value,
+    /// Opaque provider state returned with the call (Gemini 3 thought
+    /// signatures); echoed back when the call enters the history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 /// What a tool produced.

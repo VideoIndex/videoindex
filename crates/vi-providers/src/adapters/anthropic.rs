@@ -127,6 +127,7 @@ impl Anthropic {
                         id,
                         name,
                         arguments,
+                        ..
                     } => {
                         let input: serde_json::Value =
                             serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
@@ -510,6 +511,7 @@ mod tests {
                     id: "toolu_0".into(),
                     name: "search".into(),
                     arguments: "{\"q\":\"x\"}".into(),
+                    signature: None,
                 }],
             },
             Message {

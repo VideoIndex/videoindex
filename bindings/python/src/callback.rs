@@ -452,6 +452,7 @@ impl Policy for PyPolicy {
                     id: format!("policy_{n}"),
                     name,
                     args,
+                    signature: None,
                 }))
             }
             other => Err(Error::Other(format!(

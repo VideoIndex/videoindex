@@ -127,11 +127,20 @@ impl Gemini {
                         parts.push(json!({"inlineData": {"mimeType": mime, "data": base64::engine::general_purpose::STANDARD.encode(bytes)}}));
                     }
                     ContentPart::ToolCall {
-                        name, arguments, ..
+                        name,
+                        arguments,
+                        signature,
+                        ..
                     } => {
                         let args: serde_json::Value =
                             serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
-                        parts.push(json!({"functionCall": {"name": name, "args": args}}));
+                        let mut part = json!({"functionCall": {"name": name, "args": args}});
+                        // Gemini 3 rejects a history whose function calls lack
+                        // the thought signature it sent with them.
+                        if let Some(sig) = signature {
+                            part["thoughtSignature"] = json!(sig);
+                        }
+                        parts.push(part);
                     }
                     ContentPart::ToolResult { name, content, .. } => {
                         let response: serde_json::Value = serde_json::from_str(content)
@@ -270,8 +279,10 @@ impl Gemini {
                                     st.usage.tokens_in = u["promptTokenCount"]
                                         .as_u64()
                                         .unwrap_or(st.usage.tokens_in);
+                                    // Thinking tokens are billed as output.
                                     st.usage.tokens_out = u["candidatesTokenCount"]
                                         .as_u64()
+                                        .map(|n| n + u["thoughtsTokenCount"].as_u64().unwrap_or(0))
                                         .unwrap_or(st.usage.tokens_out);
                                 }
                                 for cand in v["candidates"].as_array().into_iter().flatten() {
@@ -291,6 +302,9 @@ impl Gemini {
                                                 id: format!("call_{}", st.calls),
                                                 name: fc["name"].as_str().unwrap_or("").to_string(),
                                                 arguments: fc["args"].to_string(),
+                                                signature: part["thoughtSignature"]
+                                                    .as_str()
+                                                    .map(str::to_string),
                                             });
                                         }
                                     }
@@ -492,5 +506,108 @@ mod tests {
         assert_eq!((out.usage.tokens_in, out.usage.tokens_out), (100, 2));
         assert!(g.vlm_capabilities().native_video);
         assert!(out.stats.unwrap().cost_usd > 0.0);
+    }
+
+    /// Gemini 3 sends a thought signature with each function call and
+    /// rejects a later turn whose history lacks it, so the signature rides
+    /// on the tool call and comes back on the `functionCall` part.
+    #[test]
+    fn thought_signatures_round_trip_through_the_history() {
+        std::env::set_var("VI_TEST_GEMINI_KEY2", "g-key");
+        let cfg = ProviderConfig {
+            adapter: "gemini".into(),
+            api_key_env: Some("VI_TEST_GEMINI_KEY2".into()),
+            ..ProviderConfig::default()
+        };
+        let gov = Arc::new(Governor::from_config("g", &cfg));
+        let g = Gemini::from_config("g", &cfg, None, gov, CancellationToken::new()).unwrap();
+        let req = GenerateRequest::new(vec![
+            Message::text(Role::User, "find it"),
+            Message {
+                role: Role::Assistant,
+                parts: vec![
+                    ContentPart::ToolCall {
+                        id: "call_1".into(),
+                        name: "search".into(),
+                        arguments: "{\"query\":\"x\"}".into(),
+                        signature: Some("sig-abc".into()),
+                    },
+                    ContentPart::ToolCall {
+                        id: "call_2".into(),
+                        name: "list_videos".into(),
+                        arguments: "{}".into(),
+                        signature: None,
+                    },
+                ],
+            },
+        ]);
+        let body = g.body(&req).unwrap();
+        let parts = body["contents"][1]["parts"].as_array().unwrap();
+        assert_eq!(parts[0]["thoughtSignature"], "sig-abc");
+        assert_eq!(parts[0]["functionCall"]["name"], "search");
+        assert!(parts[1].get("thoughtSignature").is_none());
+    }
+
+    #[tokio::test]
+    async fn function_calls_carry_their_signature_and_thinking_counts_as_output() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 65536];
+            let mut n = 0;
+            loop {
+                let r = sock.read(&mut buf[n..]).await.unwrap();
+                if r == 0 {
+                    break;
+                }
+                n += r;
+                let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                if let Some(pos) = head.find("\r\n\r\n") {
+                    let len: usize = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length: "))
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(0);
+                    if n >= pos + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let chunk = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"search","args":{"query":"x"}},"thoughtSignature":"sig-xyz"}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":5,"thoughtsTokenCount":40}}"#;
+            let body = format!("data: {chunk}\r\n\r\n");
+            let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            sock.write_all(resp.as_bytes()).await.unwrap();
+            sock.shutdown().await.unwrap();
+        });
+        std::env::set_var("VI_TEST_GEMINI_KEY3", "g-key");
+        let cfg = ProviderConfig {
+            adapter: "gemini".into(),
+            base_url: Some(format!("http://{addr}/v1beta")),
+            api_key_env: Some("VI_TEST_GEMINI_KEY3".into()),
+            model: Some("gemini-3.8-flash".into()),
+            ..ProviderConfig::default()
+        };
+        let gov = Arc::new(Governor::from_config("g", &cfg));
+        let g = Gemini::from_config("g", &cfg, None, gov, CancellationToken::new()).unwrap();
+        let req = GenerateRequest::new(vec![Message::text(Role::User, "find it")]);
+        let mut stream = Llm::generate(&g, req).await.unwrap();
+        let mut signature = None;
+        let mut usage = Usage::default();
+        while let Some(ev) = stream.next().await {
+            match ev.unwrap() {
+                GenerateEvent::ToolCall {
+                    name, signature: s, ..
+                } => {
+                    assert_eq!(name, "search");
+                    signature = s;
+                }
+                GenerateEvent::Usage(u) => usage = u,
+                _ => {}
+            }
+        }
+        assert_eq!(signature.as_deref(), Some("sig-xyz"));
+        assert_eq!((usage.tokens_in, usage.tokens_out), (100, 45));
     }
 }

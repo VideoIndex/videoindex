@@ -32,6 +32,7 @@ pub use state::AppState;
 /// everything under `/v1` else requires a key when keys are configured.
 pub fn router(state: Arc<AppState>) -> Router {
     let api = Router::new()
+        .route("/models", get(indexes::models))
         .route("/indexes", get(indexes::list).post(indexes::create))
         .route("/indexes/{index}", get(indexes::status))
         .route(

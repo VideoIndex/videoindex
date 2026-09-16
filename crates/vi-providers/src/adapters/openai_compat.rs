@@ -147,6 +147,7 @@ impl OpenAiCompat {
                                 id,
                                 name,
                                 arguments,
+                                ..
                             } => tool_calls.push(json!({
                                 "id": id, "type": "function",
                                 "function": {"name": name, "arguments": arguments}
@@ -790,6 +791,7 @@ pub async fn collect_stream(mut stream: EventStream) -> Result<Collected> {
                 id,
                 name,
                 arguments,
+                ..
             } => out.tool_calls.push((id, name, arguments)),
             GenerateEvent::Usage(u) => out.usage = u,
             GenerateEvent::Done {
