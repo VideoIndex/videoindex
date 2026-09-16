@@ -73,7 +73,7 @@ pub fn spec() -> Value {
     paths.insert("/v1/indexes/{index}/ask".into(), json!({"post": {"summary": "Agentic answer; SSE with Accept: text/event-stream (events: status, tool_call, tool_result, token, citation, done), else JSON", "tags": ["query"], "parameters": [index_param],
         "requestBody": json_body(json!({"type": "object", "required": ["question"], "properties": {
             "question": {"type": "string"}, "videos": {"type": "array", "items": {"type": "string"}},
-            "budget": {"type": "object", "properties": {"max_tokens": {"type": "integer"}, "max_cost_usd": {"type": "number"}, "max_wallclock_secs": {"type": "number"}, "max_tool_calls": {"type": "integer"}}},
+            "budget": {"type": "object", "properties": {"max_tokens": {"type": "integer"}, "max_cost_usd": {"type": "number"}, "max_wallclock_secs": {"type": "number"}, "max_tool_calls": {"type": "integer"}, "max_answer_tokens": {"type": "integer"}}},
             "session_id": {"type": "string"}, "policy": {"type": "string", "enum": ["agent", "retrieval-only"], "default": "agent"},
             "model": {"type": "string", "description": "provider name or model id from GET /v1/models; default: the agent_llm role"}}})),
         "responses": {"200": {"description": "answer"}, "429": {"description": "daily spend cap reached"}}}}));

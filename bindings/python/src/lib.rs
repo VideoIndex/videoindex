@@ -239,6 +239,7 @@ impl From<&Budget> for AskBudget {
             max_cost_usd: b.max_cost_usd,
             max_wallclock_secs: b.max_wallclock_secs,
             max_tool_calls: b.max_tool_calls,
+            ..AskBudget::default()
         }
     }
 }

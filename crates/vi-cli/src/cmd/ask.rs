@@ -34,6 +34,9 @@ pub struct Args {
     /// Max tool calls.
     #[arg(long, default_value_t = 8)]
     pub max_tool_calls: u32,
+    /// Max output tokens per model turn (length of the answer).
+    #[arg(long, default_value_t = 4_000)]
+    pub max_answer_tokens: u64,
     /// Conversation id to continue.
     #[arg(long)]
     pub session: Option<String>,
@@ -86,6 +89,7 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
             max_cost_usd: args.budget_usd,
             max_wallclock_secs: args.budget_secs,
             max_tool_calls: args.max_tool_calls,
+            max_answer_tokens: args.max_answer_tokens,
         },
         session_id: args.session.clone(),
     };

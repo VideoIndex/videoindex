@@ -70,3 +70,47 @@ def test_option_text_fallback():
     assert parse_letter("#4 in white dribbles the ball down court then passes; then #0 in white inbounds the ball to #4.", letters, opts) is None
     assert parse_letter("Something else entirely.", letters, opts) is None
     assert parse_letter("Answer: C", letters, opts) == "C"
+
+
+# ---------------------------------------------------------------- corpus set
+
+def test_corpus_set_is_consistent():
+    from eval.datasets.corpus import KINDS, load as load_corpus  # noqa: PLC0415
+
+    qs = load_corpus()
+    assert len(qs) >= 20
+    assert len({q.id for q in qs}) == len(qs)
+    for q in qs:
+        assert q.kind in KINDS
+        assert not (set(q.expected) & set(q.acceptable)), q.id
+        if q.kind == "negative":
+            assert not q.expected
+        if q.kind in ("synthesis", "library"):
+            assert q.facts, q.id
+        for k in q.anchors:
+            assert k in q.expected or k in q.acceptable, (q.id, k)
+    assert "Videos: N" in qs[0].prompt()
+
+
+def test_corpus_scoring():
+    from eval.datasets.corpus import CorpusQuestion  # noqa: PLC0415
+    from eval.judge import score_result  # noqa: PLC0415
+
+    q = CorpusQuestion(id="t", kind="mention", question="?", expected=["a", "b", "c"], acceptable=["d"],
+                       anchors={"a": [100.0], "b": [50.0]}, anchors_ocr={"c": [900.0]})
+    j = {"claims": [{"video_key": "a", "timestamps_s": [130]}, {"video_key": "b", "timestamps_s": [400]},
+                    {"video_key": "d", "timestamps_s": []}, {"video_key": "unknown", "timestamps_s": [5]}], "facts_covered": []}
+    s = score_result(q, j)
+    assert s["precision"] == round(2 / 3, 4)  # a, b right; unknown wrong; d ignored
+    assert s["recall"] == round(2 / 3, 4)
+    assert s["wrong"] == ["unknown"] and s["missed"] == ["c"] and s["acceptable_claimed"] == ["d"]
+    assert s["anchor_hit"] == 0.5 and s["anchors_checked"] == 2
+    assert s["quality"] == s["f1"]
+    neg = CorpusQuestion(id="n", kind="negative", question="?", acceptable=["x"])
+    assert score_result(neg, {"claims": [{"video_key": "x", "timestamps_s": []}], "facts_covered": []})["quality"] == 1.0
+    assert score_result(neg, {"claims": [{"video_key": "y", "timestamps_s": []}], "facts_covered": []})["quality"] == 0.0
+    syn = CorpusQuestion(id="s", kind="synthesis", question="?", expected=["a", "b"], facts=["f1", "f2", "f3", "f4"])
+    s = score_result(syn, {"claims": [{"video_key": "a", "timestamps_s": []}, {"video_key": "b", "timestamps_s": []}], "facts_covered": [True, True, False, False]})
+    assert s["f1"] == 1.0 and s["fact_coverage"] == 0.5 and abs(s["quality"] - (0.3 + 0.35)) < 1e-6
+    lib = CorpusQuestion(id="l", kind="library", question="?", facts=["f1", "f2"])
+    assert score_result(lib, {"claims": [], "facts_covered": [True, False]})["quality"] == 0.5

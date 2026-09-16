@@ -95,7 +95,7 @@ Tool arguments are validated against JSON Schema; `t0 < t1`, windows are clamped
 
 ### Budgets
 
-An `ask` carries `Budget { max_tokens, max_cost_usd, max_wallclock, max_tool_calls }`. The loop checks the budget before each tool call and passes the remainder to the policy so it can plan. On exhaustion the loop answers with what it has and sets `partial: true` with the reason.
+An `ask` carries `Budget { max_tokens, max_cost_usd, max_wallclock, max_tool_calls, max_answer_tokens }`; the last one caps the output of each model turn (4,000 by default; answers that list many videos need more than a single-video answer). The loop checks the budget before each tool call and passes the remainder to the policy so it can plan. On exhaustion the loop answers with what it has and sets `partial: true` with the reason.
 
 ### Coarse to fine in practice
 

@@ -99,6 +99,8 @@ pub struct BudgetBody {
     pub max_wallclock_secs: Option<f64>,
     /// Tool calls.
     pub max_tool_calls: Option<u32>,
+    /// Output tokens per model turn (answer length).
+    pub max_answer_tokens: Option<u64>,
 }
 
 impl BudgetBody {
@@ -109,6 +111,7 @@ impl BudgetBody {
             max_cost_usd: self.max_cost_usd.unwrap_or(d.max_cost_usd),
             max_wallclock_secs: self.max_wallclock_secs.unwrap_or(d.max_wallclock_secs),
             max_tool_calls: self.max_tool_calls.unwrap_or(d.max_tool_calls),
+            max_answer_tokens: self.max_answer_tokens.unwrap_or(d.max_answer_tokens),
         }
     }
 }

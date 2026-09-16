@@ -33,9 +33,12 @@ def main():
     ap.add_argument("--redo-unparsed", action="store_true", help="re-ask stored answers that had no option letter (index-based runs)")
     ap.add_argument("--run-reference", action="store_true", help="also execute runs marked reference = true (external systems such as Gemini; otherwise their cached run file is only reported)")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--pdf", help="corpus matrices: also build the PDF report at this path")
     a = ap.parse_args()
     cfg = tomllib.loads(Path(a.config).read_text())
     bench = cfg["benchmark"]
+    if bench == "corpus":
+        return run_corpus(cfg, a)
     tag = f"f{a.fraction:g}" if a.fraction else (f"n{a.sample}" if a.sample else "full")
     only = set(a.only.split(",")) if a.only else None
     sampling = (["--fraction", str(a.fraction)] if a.fraction else []) + (["--sample", str(a.sample)] if a.sample else []) + ["--seed", str(a.seed)]
@@ -75,6 +78,41 @@ def main():
     print("$", " ".join(cmd), file=sys.stderr, flush=True)
     if not a.dry_run:
         subprocess.run(cmd, check=False)
+
+
+def run_corpus(cfg: dict, a) -> None:
+    """The corpus set has no sampling and its own runners, judge and report."""
+    runs_dir = Path(cfg.get("runs_dir", a.runs_dir))
+    only = set(a.only.split(",")) if a.only else None
+    outs = []
+    for run in cfg["runs"]:
+        out = runs_dir / f"corpus-{run['name']}.json"
+        if out.is_file() or (not (only and run["name"] not in only) and not (run.get("reference") and not a.run_reference)):
+            outs.append(str(out))
+        if only and run["name"] not in only:
+            continue
+        if run.get("reference") and not a.run_reference:
+            if not out.is_file():
+                print(f"(reference run {run['name']} has no cached file at {out}; pass --run-reference to execute it)", file=sys.stderr)
+            continue
+        if run.get("system") == "gemini":
+            cmd = [sys.executable, "-m", "eval.runners.corpus_gemini", "--index", cfg["index"], "--model", run.get("model", "gemini-3.8-flash"),
+                   "--batch-size", str(run.get("batch_size", 10)), "--jobs", str(min(a.jobs, 2)), "--resume", "--out", str(out)]
+        else:
+            cmd = [sys.executable, "-m", "eval.runners.corpus", "--index", cfg["index"], "--config", cfg["config"], "--vi", a.vi,
+                   "--policy", run.get("policy", "agent"), "--jobs", str(a.jobs), "--resume", "--out", str(out)]
+            if run.get("model"):
+                cmd += ["--model", run["model"]]
+        print("$", " ".join(cmd), file=sys.stderr, flush=True)
+        if not a.dry_run:
+            subprocess.run(cmd, check=False)
+    outs = [o for o in dict.fromkeys(outs) if Path(o).is_file()]
+    for cmd in ([sys.executable, "-m", "eval.judge", *outs],
+                [sys.executable, "-m", "eval.corpus_report", *outs, "--out", a.out or f"docs/results/corpus-{dt.date.today().isoformat()}.md"]
+                + (["--pdf", a.pdf] if a.pdf else []) + (["--title", a.title] if a.title else [])):
+        print("$", " ".join(cmd), file=sys.stderr, flush=True)
+        if not a.dry_run and outs:
+            subprocess.run(cmd, check=False)
 
 
 if __name__ == "__main__":

@@ -29,6 +29,14 @@ pub struct AskBudget {
     pub max_wallclock_secs: f64,
     /// Tool calls.
     pub max_tool_calls: u32,
+    /// Output tokens per model turn (the length of the final answer). List
+    /// answers over a whole library need more than a single-video answer.
+    #[serde(default = "default_answer_tokens")]
+    pub max_answer_tokens: u64,
+}
+
+fn default_answer_tokens() -> u64 {
+    4_000
 }
 
 impl Default for AskBudget {
@@ -38,6 +46,7 @@ impl Default for AskBudget {
             max_cost_usd: 0.50,
             max_wallclock_secs: 120.0,
             max_tool_calls: 8,
+            max_answer_tokens: default_answer_tokens(),
         }
     }
 }
@@ -425,7 +434,7 @@ async fn run(
             greq.tools = specs.clone();
             greq.tool_choice = ToolChoice::None;
         }
-        greq.max_tokens = 1500;
+        greq.max_tokens = req.budget.max_answer_tokens.clamp(256, u32::MAX as u64) as u32;
         if over.is_some() {
             greq.messages.push(Message::text(
                 Role::User,
@@ -513,7 +522,7 @@ async fn run(
                         ),
                     ),
                 ]);
-                greq2.max_tokens = 1500;
+                greq2.max_tokens = req.budget.max_answer_tokens.clamp(256, u32::MAX as u64) as u32;
                 let turn2 = generate_turn(
                     llm.as_ref(),
                     greq2,

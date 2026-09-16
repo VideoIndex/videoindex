@@ -261,6 +261,7 @@ impl Index {
                 max_cost_usd: opts.max_cost_usd.unwrap_or(d.max_cost_usd),
                 max_wallclock_secs: opts.max_wallclock_secs.unwrap_or(d.max_wallclock_secs),
                 max_tool_calls: opts.max_tool_calls.unwrap_or(d.max_tool_calls),
+                max_answer_tokens: d.max_answer_tokens,
             },
             session_id: opts.session_id,
         };

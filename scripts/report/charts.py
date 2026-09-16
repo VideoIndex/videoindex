@@ -61,8 +61,10 @@ def _style(ax, *, horizontal=False, grid=True):
     ax.set_axisbelow(True)
 
 
-def _rounded_bar(ax, x, y, w, h, color, horizontal=False, radius=0.0):
-    """A bar with a rounded data end and a square baseline end."""
+def _rounded_bar(ax, x, y, w, h, color, horizontal=False, radius=0.0, aspect=1.0):
+    """A bar with a rounded data end and a square baseline end. `radius` is in
+    x data units; `aspect` (y span / x span) keeps the corner round when the
+    y axis spans hundreds of units and the x axis a few categories."""
     if h == 0 and not horizontal:
         return
     if horizontal:
@@ -74,11 +76,11 @@ def _rounded_bar(ax, x, y, w, h, color, horizontal=False, radius=0.0):
         # square the baseline end
         ax.add_patch(plt.Rectangle((x, y), min(r, w), h, fc=color, ec="none"))
     else:
-        r = min(radius, h / 2 if h else 0)
+        r = min(radius, w / 2, (h / 2) / aspect if h else 0)
         patch = FancyBboxPatch((x, y), w, h, boxstyle=f"round,pad=0,rounding_size={r}",
-                               fc=color, ec="none")
+                               fc=color, ec="none", mutation_aspect=aspect)
         ax.add_patch(patch)
-        ax.add_patch(plt.Rectangle((x, y), w, min(r, h), fc=color, ec="none"))
+        ax.add_patch(plt.Rectangle((x, y), w, min(r * aspect, h), fc=color, ec="none"))
 
 
 def save(fig, path: Path):
@@ -102,7 +104,7 @@ def grouped_bars(path, categories, series, *, title, ylabel="", ylim=None, fmt="
         for xi, v in zip(xs, values):
             if v is None:
                 continue
-            _rounded_bar(ax, xi + offs - width / 2, 0, width, v, SERIES[i], radius=0.04 * top)
+            _rounded_bar(ax, xi + offs - width / 2, 0, width, v, SERIES[i], radius=0.3 * width, aspect=top / max(1, len(categories)))
             if label_all:
                 ax.text(xi + offs, v + top * 0.015, fmt.format(v), ha="center", va="bottom", fontsize=7.8, color=INK2)
         ax.bar([0], [0], color=SERIES[i], label=name, width=0)  # legend proxy
@@ -111,7 +113,8 @@ def grouped_bars(path, categories, series, *, title, ylabel="", ylim=None, fmt="
     ax.set_xlim(-0.6, len(categories) - 0.4)
     ax.set_ylim(0, top)
     ax.set_ylabel(ylabel)
-    ax.set_title(title, pad=26)
+    legend_rows = -(-n // 3)
+    ax.set_title(title, pad=12 + 14 * legend_rows)
     _style(ax)
     ax.legend(loc="lower left", bbox_to_anchor=(0, 1.0), ncol=min(n, 3), handlelength=1.0, handleheight=1.0, borderaxespad=0)
     if note:

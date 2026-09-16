@@ -1,0 +1,36 @@
+# Corpus QA over the 30-video dataset index: questions that span the library
+# (which talks mention X, moments about a topic, cross-video synthesis, whole-
+# library summaries). Run with
+#   python3 -m eval.run eval/configs/corpus-dataset.toml [--run-reference] [--jobs 3]
+# which answers, judges (Claude Opus 5) and writes docs/results/corpus-<date>.md
+# (add --pdf <path> for the PDF report).
+benchmark = "corpus"
+index = "/data/videoindex/indexes/dataset.vidx"
+config = "config/gcp-a100.toml"
+runs_dir = "/data/videoindex/eval/runs/corpus"
+
+[[runs]]
+name = "vi-agent-sonnet"
+system = "videoindex"
+policy = "agent"
+
+[[runs]]
+name = "vi-agent-gemini"
+system = "videoindex"
+policy = "agent"
+model = "gemini-3.8-flash"
+
+[[runs]]
+name = "vi-retrieval-only"
+system = "videoindex"
+policy = "retrieval-only"
+
+# External reference: Gemini agentic video, map-reduce over batches of 10 files
+# (the API's per-request maximum) plus a merge call. Run once (--run-reference),
+# cached afterwards.
+[[runs]]
+name = "gemini-agentic"
+system = "gemini"
+reference = true
+model = "gemini-3.8-flash"
+batch_size = 10
