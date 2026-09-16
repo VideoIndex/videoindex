@@ -111,6 +111,63 @@ def wrap(label: str, width: int = 16) -> str:
     return "\n".join(textwrap.wrap(label, width))
 
 
+# ---------------------------------------------------------------- headline chart
+
+def _esc(t: str) -> str:
+    return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def headline_svg(path: Path, vi: dict, gem: dict, n_questions: int, n_videos: int) -> Path:
+    """Four small panels, VideoIndex against Gemini agentic video, one metric
+    each (cost, latency, F1, quality). Hand-built SVG in the brand tokens so the
+    same file sits on videoindex.org, the docs site and in the results page.
+    Emphasis form: VideoIndex in the accent hue, the reference in the muted
+    ink; every value is labelled, so the gray needs no legend contrast."""
+    NAVY, ACCENT, MUTED, INK, INK2, LINE = "#0a2347", "#3186e9", "#8a8880", "#0b0b0b", "#4d4c48", "#e3e1d8"
+    SANS = "IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif"
+    MONO = "IBM Plex Mono, ui-monospace, SF Mono, Menlo, monospace"
+    panels = [
+        ("Cost per question", "lower is better", vi["cost_mean"], gem["cost_mean"], lambda v: f"${v:.2f}", f"{gem['cost_mean'] / vi['cost_mean']:.1f}× cheaper"),
+        ("Median latency", "lower is better · p95 " + f"{vi['latency_p95']:.0f} s against {gem['latency_p95']:.0f} s", vi["latency_p50"], gem["latency_p50"], lambda v: f"{v:.0f} s", f"{gem['latency_p50'] / vi['latency_p50']:.1f}× faster"),
+        ("Videos found (F1)", "higher is better", 100 * vi["f1"], 100 * gem["f1"], lambda v: f"{v:.0f}%", None),
+        ("Answer quality", "higher is better · judge-scored against ground truth", 100 * vi["quality"], 100 * gem["quality"], lambda v: f"{v:.0f}%", None),
+    ]
+    W, H = 720, 400
+    PW, PH, PX0, PY0, GX, GY = 340, 118, 20, 92, 20, 14
+    LABEL_W, VAL_W = 96, 60
+    out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" role="img" '
+           f'aria-label="VideoIndex against Gemini agentic video on {n_questions} library-wide questions: cost, latency, videos found and answer quality">',
+           f'<title>VideoIndex against Gemini agentic video, {n_questions} library-wide questions over {n_videos} talks</title>',
+           f'<rect width="{W}" height="{H}" fill="none"/>',
+           f'<text x="20" y="30" font-family="{SANS}" font-size="16" font-weight="600" fill="{NAVY}">Questions that span the whole library</text>',
+           f'<text x="20" y="50" font-family="{SANS}" font-size="12.5" fill="{INK2}">{n_questions} questions over {n_videos} talks (36.6 hours): which videos mention X, the moments about a topic, cross-video</text>',
+           f'<text x="20" y="67" font-family="{SANS}" font-size="12.5" fill="{INK2}">comparisons, library summaries. Same questions, same answer format, same judge for both systems.</text>']
+    for i, (title, note, v_vi, v_gem, fmt, callout) in enumerate(panels):
+        x = PX0 + (i % 2) * (PW + GX)
+        y = PY0 + (i // 2) * (PH + GY)
+        out.append(f'<rect x="{x}" y="{y}" width="{PW}" height="{PH}" rx="12" fill="#fffefb" stroke="{LINE}"/>')
+        out.append(f'<text x="{x + 16}" y="{y + 24}" font-family="{SANS}" font-size="13.5" font-weight="600" fill="{INK}">{_esc(title)}</text>')
+        out.append(f'<text x="{x + 16}" y="{y + 40}" font-family="{SANS}" font-size="11" fill="{MUTED}">{_esc(note)}</text>')
+        bx = x + 16 + LABEL_W
+        bw_max = PW - 32 - LABEL_W - VAL_W
+        vmax = max(v_vi, v_gem) or 1.0
+        for j, (name, v, color, weight) in enumerate([("VideoIndex", v_vi, ACCENT, "600"), ("Gemini agentic", v_gem, MUTED, "400")]):
+            by = y + 56 + j * 28
+            bw = max(4.0, bw_max * v / vmax)
+            out.append(f'<text x="{x + 16}" y="{by + 12}" font-family="{SANS}" font-size="12" font-weight="{weight}" fill="{NAVY if j == 0 else INK2}">{name}</text>')
+            # square baseline end, rounded data end (two shapes)
+            out.append(f'<rect x="{bx}" y="{by}" width="{bw:.1f}" height="16" rx="4" fill="{color}"/>')
+            out.append(f'<rect x="{bx}" y="{by}" width="{min(4.0, bw):.1f}" height="16" fill="{color}"/>')
+            out.append(f'<text x="{bx + bw + 8:.1f}" y="{by + 12}" font-family="{MONO}" font-size="12" fill="{INK}">{_esc(fmt(v))}</text>')
+            if j == 0 and callout:
+                out.append(f'<text x="{x + PW - 16}" y="{by + 12}" text-anchor="end" font-family="{MONO}" font-size="11.5" font-weight="500" fill="{ACCENT}">{_esc(callout)}</text>')
+    out.append(f'<text x="20" y="{H - 24}" font-family="{SANS}" font-size="10.5" fill="{MUTED}">VideoIndex cost excludes indexing, paid once per video. Gemini agentic video takes ten videos per request, so each question is three parallel</text>')
+    out.append(f'<text x="20" y="{H - 10}" font-family="{SANS}" font-size="10.5" fill="{MUTED}">agentic requests plus a merge, and its cost is the whole cost. Provider list prices, September 2026.</text>')
+    out.append("</svg>")
+    path.write_text("\n".join(out))
+    return path
+
+
 def fmt_pct(x):
     return "—" if x is None else f"{100 * x:.0f}%"
 
@@ -159,6 +216,11 @@ def main():
         by_id = {r["id"]: r for r in run["results"]}
         grid.append([by_id[q].get("scores", {}).get("quality") if q in by_id else None for q in qid])
     heatmap(assets / f"{stem}-per-question.svg", short, [q.replace("corpus-", "q") for q in qid], grid, title="Quality per question")
+    vi_rows = [s for l, _, s, _ in runs if l.lower().startswith("videoindex") and "cap" not in l]
+    gem_rows = [s for l, _, s, _ in runs if "gemini agentic" in l.lower()]
+    headline = None
+    if vi_rows and gem_rows:
+        headline = headline_svg(assets / f"{stem}-headline.svg", max(vi_rows, key=lambda s: s["quality"]), gem_rows[0], len(qs), len(runs[0][1].get("catalog", [])))
 
     # ---- markdown
     n_videos = len(runs[0][1].get("catalog", []))
@@ -172,6 +234,7 @@ def main():
           "of a real mention in the index, key-fact coverage, and a per-question quality score (mention → F1; topic → mean of F1 and "
           "facts; synthesis → 0.3 F1 + 0.7 facts; whole-library → facts; nothing-matches → 1 unless a video is invented). Costs are "
           "provider list prices for every call a question needed; VideoIndex's costs exclude indexing (done once per video), Gemini's are the whole cost.", "",
+          *([f"![](assets/{stem}-headline.svg)", ""] if headline else []),
           f"![](assets/{stem}-quality-by-kind.svg)", "",
           "| Configuration | n | quality | precision | recall | F1 | timestamps near a mention | facts covered | wrong videos | missed videos |",
           "|---|---|---|---|---|---|---|---|---|---|"]
