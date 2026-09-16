@@ -117,7 +117,7 @@ def _esc(t: str) -> str:
     return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def headline_svg(path: Path, vi: dict, gem: dict, n_questions: int, n_videos: int) -> Path:
+def headline_svg(path: Path, vi: dict, gem: dict, n_questions: int, n_videos: int, columns: int = 2) -> Path:
     """Four small panels, VideoIndex against Gemini agentic video, one metric
     each (cost, latency, F1, quality). Hand-built SVG in the brand tokens so the
     same file sits on videoindex.org, the docs site and in the results page.
@@ -132,19 +132,28 @@ def headline_svg(path: Path, vi: dict, gem: dict, n_questions: int, n_videos: in
         ("Videos found (F1)", "higher is better", 100 * vi["f1"], 100 * gem["f1"], lambda v: f"{v:.0f}%", None),
         ("Answer quality", "higher is better · judge-scored against ground truth", 100 * vi["quality"], 100 * gem["quality"], lambda v: f"{v:.0f}%", None),
     ]
-    W, H = 720, 400
-    PW, PH, PX0, PY0, GX, GY = 340, 118, 20, 92, 20, 14
+    import textwrap  # noqa: PLC0415
+
+    PW, PH, PX0, GX, GY = 340, 118, 20, 20, 14
     LABEL_W, VAL_W = 96, 60
+    rows = -(-len(panels) // columns)
+    W = 2 * PX0 + columns * PW + (columns - 1) * GX
+    sub = textwrap.wrap(f"{n_questions} questions over {n_videos} talks (36.6 hours): which videos mention X, the moments about a topic, cross-video "
+                        "comparisons, library summaries. Same questions, same answer format, same judge for both systems.", int((W - 40) / 6.2))
+    foot = textwrap.wrap("VideoIndex cost excludes indexing, paid once per video. Gemini agentic video takes ten videos per request, so each question is "
+                         "three parallel agentic requests plus a merge, and its cost is the whole cost. Provider list prices, September 2026.", int((W - 40) / 5.2))
+    PY0 = 58 + 17 * len(sub)
+    H = PY0 + rows * PH + (rows - 1) * GY + 22 + 14 * len(foot)
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" role="img" '
            f'aria-label="VideoIndex against Gemini agentic video on {n_questions} library-wide questions: cost, latency, videos found and answer quality">',
            f'<title>VideoIndex against Gemini agentic video, {n_questions} library-wide questions over {n_videos} talks</title>',
            f'<rect width="{W}" height="{H}" fill="none"/>',
-           f'<text x="20" y="30" font-family="{SANS}" font-size="16" font-weight="600" fill="{NAVY}">Questions that span the whole library</text>',
-           f'<text x="20" y="50" font-family="{SANS}" font-size="12.5" fill="{INK2}">{n_questions} questions over {n_videos} talks (36.6 hours): which videos mention X, the moments about a topic, cross-video</text>',
-           f'<text x="20" y="67" font-family="{SANS}" font-size="12.5" fill="{INK2}">comparisons, library summaries. Same questions, same answer format, same judge for both systems.</text>']
+           f'<text x="20" y="30" font-family="{SANS}" font-size="16" font-weight="600" fill="{NAVY}">Questions that span the whole library</text>']
+    for k, line in enumerate(sub):
+        out.append(f'<text x="20" y="{50 + 17 * k}" font-family="{SANS}" font-size="12.5" fill="{INK2}">{_esc(line)}</text>')
     for i, (title, note, v_vi, v_gem, fmt, callout) in enumerate(panels):
-        x = PX0 + (i % 2) * (PW + GX)
-        y = PY0 + (i // 2) * (PH + GY)
+        x = PX0 + (i % columns) * (PW + GX)
+        y = PY0 + (i // columns) * (PH + GY)
         out.append(f'<rect x="{x}" y="{y}" width="{PW}" height="{PH}" rx="12" fill="#fffefb" stroke="{LINE}"/>')
         out.append(f'<text x="{x + 16}" y="{y + 24}" font-family="{SANS}" font-size="13.5" font-weight="600" fill="{INK}">{_esc(title)}</text>')
         out.append(f'<text x="{x + 16}" y="{y + 40}" font-family="{SANS}" font-size="11" fill="{MUTED}">{_esc(note)}</text>')
@@ -161,8 +170,8 @@ def headline_svg(path: Path, vi: dict, gem: dict, n_questions: int, n_videos: in
             out.append(f'<text x="{bx + bw + 8:.1f}" y="{by + 12}" font-family="{MONO}" font-size="12" fill="{INK}">{_esc(fmt(v))}</text>')
             if j == 0 and callout:
                 out.append(f'<text x="{x + PW - 16}" y="{by + 12}" text-anchor="end" font-family="{MONO}" font-size="11.5" font-weight="500" fill="{ACCENT}">{_esc(callout)}</text>')
-    out.append(f'<text x="20" y="{H - 24}" font-family="{SANS}" font-size="10.5" fill="{MUTED}">VideoIndex cost excludes indexing, paid once per video. Gemini agentic video takes ten videos per request, so each question is three parallel</text>')
-    out.append(f'<text x="20" y="{H - 10}" font-family="{SANS}" font-size="10.5" fill="{MUTED}">agentic requests plus a merge, and its cost is the whole cost. Provider list prices, September 2026.</text>')
+    for k, line in enumerate(foot):
+        out.append(f'<text x="20" y="{H - 10 - 14 * (len(foot) - 1 - k)}" font-family="{SANS}" font-size="10.5" fill="{MUTED}">{_esc(line)}</text>')
     out.append("</svg>")
     path.write_text("\n".join(out))
     return path
@@ -220,7 +229,9 @@ def main():
     gem_rows = [s for l, _, s, _ in runs if "gemini agentic" in l.lower()]
     headline = None
     if vi_rows and gem_rows:
-        headline = headline_svg(assets / f"{stem}-headline.svg", max(vi_rows, key=lambda s: s["quality"]), gem_rows[0], len(qs), len(runs[0][1].get("catalog", [])))
+        best_vi = max(vi_rows, key=lambda s: s["quality"])
+        headline = headline_svg(assets / f"{stem}-headline.svg", best_vi, gem_rows[0], len(qs), len(runs[0][1].get("catalog", [])))
+        headline_svg(assets / f"{stem}-headline-narrow.svg", best_vi, gem_rows[0], len(qs), len(runs[0][1].get("catalog", [])), columns=1)
 
     # ---- markdown
     n_videos = len(runs[0][1].get("catalog", []))
