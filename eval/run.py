@@ -66,7 +66,8 @@ def main():
             cmd = [sys.executable, "-m", "eval.runners.answer", bench, "--root", cfg["root"], "--index", cfg["index"], "--config", cfg["config"],
                    "--vi", a.vi, "--policy", run["policy"], "--max-tool-calls", str(run.get("max_tool_calls", 6)),
                    "--budget-usd", str(run.get("budget_usd", 0.5)), "--budget-tokens", str(run.get("budget_tokens", 120000)),
-                   "--jobs", str(a.jobs), "--resume", "--out", str(out)] + (["--redo-unparsed"] if a.redo_unparsed else []) + sampling
+                   "--jobs", str(a.jobs), "--resume", "--out", str(out)] + (["--model", run["model"]] if run.get("model") else []) \
+                + (["--label", run["label"]] if run.get("label") else []) + (["--redo-unparsed"] if a.redo_unparsed else []) + sampling
         print("$", " ".join(cmd), file=sys.stderr, flush=True)
         if not a.dry_run:
             subprocess.run(cmd, check=False)
