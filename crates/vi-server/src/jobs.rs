@@ -198,7 +198,7 @@ pub async fn add_videos(
     let e2 = entry.clone();
     let key_label = key.bucket();
     tokio::spawn(async move {
-        // Like `vi index`: a failing source is recorded and the job goes on
+        // Like `vidx index`: a failing source is recorded and the job goes on
         // with the next one; the job is Failed only when nothing succeeded.
         let mut errors: Vec<String> = Vec::new();
         let mut succeeded = 0usize;

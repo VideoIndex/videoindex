@@ -1,4 +1,4 @@
-//! `vi index <index-dir> <source>... [--policy P]`
+//! `vidx index <index-dir> <source>... [--policy P]`
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,7 +19,7 @@ pub struct Args {
     /// Index directory (created if missing).
     pub index_dir: PathBuf,
     /// Local video files, directories of them, or video-site URLs (yt-dlp;
-    /// playlists expand). Shell globs expand before `vi` sees them.
+    /// playlists expand). Shell globs expand before `vidx` sees them.
     #[arg(required = true)]
     pub sources: Vec<String>,
     /// Policy name from the config (`m0`, `coarse_only`, `lecture_default`, ...).

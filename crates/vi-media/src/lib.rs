@@ -49,7 +49,7 @@ pub use probe::{ChapterInfo, Probe, StreamInfo};
 pub use protocol::{AudioDecodeRequest, VideoDecodeRequest};
 pub use remote::{Http, ObjectStore};
 
-/// Argument that makes the `vi` binary (or any host binary) act as the decode
+/// Argument that makes the `vidx` binary (or any host binary) act as the decode
 /// worker. Hosts check `std::env::args().nth(1) == Some(WORKER_ARG)` before
 /// normal argument parsing and call [`worker::main`].
 pub const WORKER_ARG: &str = "__vi_media_worker";

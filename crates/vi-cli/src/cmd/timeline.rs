@@ -1,4 +1,4 @@
-//! `vi timeline <index-dir> <video-id> [--level chapter|scene|shot]`
+//! `vidx timeline <index-dir> <video-id> [--level chapter|scene|shot]`
 
 use std::path::PathBuf;
 

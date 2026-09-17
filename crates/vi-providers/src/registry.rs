@@ -457,7 +457,7 @@ impl ProviderRegistry {
     }
 
     /// One line per configured role, with the problem if it cannot be
-    /// built. Used by `vi doctor`.
+    /// built. Used by `vidx doctor`.
     pub fn report(&self) -> Vec<RoleReport> {
         let mut out = Vec::new();
         for (role, binding) in &self.config.roles {

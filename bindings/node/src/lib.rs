@@ -207,7 +207,7 @@ impl Index {
         );
         let src = vi_media::Source::parse(&source);
         let mut reports = Vec::new();
-        // Like `vi index`: one failing file does not abort the rest; it is
+        // Like `vidx index`: one failing file does not abort the rest; it is
         // reported as `{ok: false, error}` in its slot.
         for s in sched.expand(&src).await.map_err(err)? {
             let uri = s.uri();

@@ -1,4 +1,4 @@
-//! `vi probe <file>`
+//! `vidx probe <file>`
 
 use std::path::PathBuf;
 

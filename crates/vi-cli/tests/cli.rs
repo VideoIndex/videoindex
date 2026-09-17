@@ -1,4 +1,4 @@
-//! Black-box tests of the `vi` binary against the synthetic fixture.
+//! Black-box tests of the `vidx` binary against the synthetic fixture.
 
 #![allow(clippy::unwrap_used)]
 
@@ -7,12 +7,12 @@ use std::process::Command;
 
 use vi_testkit as fx;
 
-fn vi() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_vi"))
+fn vidx() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_vidx"))
 }
 
 fn run(args: &[&str]) -> (bool, String, String) {
-    let out = vi().args(args).output().unwrap();
+    let out = vidx().args(args).output().unwrap();
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).to_string(),
@@ -175,7 +175,7 @@ fn probe_and_doctor() {
 fn errors_have_stable_exit_codes() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("nope.vidx");
-    let st = vi()
+    let st = vidx()
         .args(["status", missing.to_str().unwrap()])
         .output()
         .unwrap();
@@ -184,7 +184,7 @@ fn errors_have_stable_exit_codes() {
 
     let idx = dir.path().join("t.vidx");
     assert!(run(&["init", idx.to_str().unwrap()]).0);
-    let st = vi()
+    let st = vidx()
         .args([
             "index",
             idx.to_str().unwrap(),
@@ -202,7 +202,7 @@ fn errors_have_stable_exit_codes() {
         "missing provider role exits 8: {}",
         String::from_utf8_lossy(&st.stderr)
     );
-    let st = vi()
+    let st = vidx()
         .args([
             "index",
             idx.to_str().unwrap(),
@@ -213,7 +213,7 @@ fn errors_have_stable_exit_codes() {
         .output()
         .unwrap();
     assert_eq!(st.status.code(), Some(2));
-    let st = vi()
+    let st = vidx()
         .args(["probe", dir.path().join("missing.mp4").to_str().unwrap()])
         .output()
         .unwrap();

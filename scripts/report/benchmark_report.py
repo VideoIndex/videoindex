@@ -211,7 +211,7 @@ def main():
         [("FTS ANDs every word (64 scored)", [R1["overall"][k] for k in ("video@1", "hit@1", "hit@5", "mrr")]),
          ("OR-ed terms, stopwords removed (72 scored)", [R2["overall"][k] for k in ("video@1", "hit@1", "hit@5", "mrr")])],
         title="Retrieval on the 72-question dev set, before and after the query fix", ylim=(0, 1.08), fmt="{:.2f}",
-        note="vi search, k = 5, hit = result within 30 s of the anchored ground truth. Source: scripts/devset_eval.py")
+        note="vidx search, k = 5, hit = result within 30 s of the anchored ground truth. Source: scripts/devset_eval.py")
     kinds = ["transcript", "ocr", "visual"]
     charts.grouped_bars(
         ASSETS / "retrieval-by-kind.svg",
@@ -429,7 +429,7 @@ moment that answers it. Accepted strings include common variants (`2,000`, `2000
 
 ### Retrieval scoring
 
-`scripts/devset_eval.py` runs `vi search` for every question with k = 5 and hybrid retrieval (BM25 per span kind, bge-small text
+`scripts/devset_eval.py` runs `vidx search` for every question with k = 5 and hybrid retrieval (BM25 per span kind, bge-small text
 vectors with the query instruction, SigLIP text-to-frame vectors, reciprocal-rank fusion with k = 60, grouping into shots or
 60-second pieces). A result is a hit when its video is the question's video and its time range, widened by 30 s, overlaps the
 ground-truth range. Reported metrics:
@@ -439,11 +439,11 @@ ground-truth range. Reported metrics:
 | video@1 | the top result is in the right video |
 | hit@1, hit@5 | a hit at rank 1; a hit anywhere in the top 5 |
 | MRR | mean of 1 / rank of the first hit (0 when none in the top 5) |
-| p50 latency | median wall-clock of the one-shot `vi search` process, including model load |
+| p50 latency | median wall-clock of the one-shot `vidx search` process, including model load |
 
 ### Question-answering scoring
 
-`scripts/devset_qa_eval.py` runs `vi ask --json` for every question with a budget of $0.30 and 6 tool calls, `claude-sonnet-5`
+`scripts/devset_qa_eval.py` runs `vidx ask --json` for every question with a budget of $0.30 and 6 tool calls, `claude-sonnet-5`
 as the agent model. The answer is **correct** when it contains any accepted string (case-insensitive substring). Citations are the
 `[[cite:VIDEO:T0-T1]]` markers the agent emits; **cited** means at least one, **citation video correct** means one names the
 question's video, and **citation in time** means one lies within 90 s of the anchor. Cost is Anthropic list price over every LLM
@@ -468,7 +468,7 @@ Two agent configurations and one baseline were run:
   minute" miss in retrieval and a citation-in-time miss in QA.
 - The dev sets were written by the developers of the system while it was being built. They are a regression gate and a smoke
   test for hour-scale retrieval, not a public benchmark; LVBench, Minerva and 1H-VideoQA runs are planned for M4.
-- `vi search` latency includes process start and loading the SigLIP text tower and bge-small (about 2 s); the search itself is
+- `vidx search` latency includes process start and loading the SigLIP text tower and bge-small (about 2 s); the search itself is
   tens of milliseconds and the Python binding pays the load once.
 
 ### Hardware and software
@@ -553,7 +553,7 @@ explicitly, before returning a partial answer; with the retrieval fix the agent 
 
 ### The dataset run
 
-The 30 videos ({hms(dur)}) were indexed in one `vi index` process with the `coarse_only` policy in {wall:,.0f} s ({wall / 3600:.1f} h), {dur / wall:.0f}× real
+The 30 videos ({hms(dur)}) were indexed in one `vidx index` process with the `coarse_only` policy in {wall:,.0f} s ({wall / 3600:.1f} h), {dur / wall:.0f}× real
 time overall, with zero failures. The machine was not idle: release builds, test suites and a second index were running at times, so
 the per-video numbers are an upper bound on the cost of the CPU build.
 

@@ -174,7 +174,7 @@ pub struct Window {
     pub descriptions: Vec<Description>,
 }
 
-/// Per-video counts for `vi status`.
+/// Per-video counts for `vidx status`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VideoStats {
     /// The video.
@@ -199,7 +199,7 @@ pub struct VideoStats {
     pub cost_usd: f64,
 }
 
-/// Index-wide numbers for `vi status`.
+/// Index-wide numbers for `vidx status`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IndexStats {
     /// Manifest.

@@ -1,4 +1,4 @@
-//! `vi ask <index-dir> "<question>" [--budget-usd ..] [--video ID] [--session ID] [--model NAME] [--json]`
+//! `vidx ask <index-dir> "<question>" [--budget-usd ..] [--video ID] [--session ID] [--model NAME] [--json]`
 
 use std::path::PathBuf;
 use std::sync::Arc;

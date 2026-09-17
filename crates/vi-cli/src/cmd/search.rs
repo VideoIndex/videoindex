@@ -1,4 +1,4 @@
-//! `vi search <index-dir> "<query>" [--k N] [--video ID] [--kind K]`
+//! `vidx search <index-dir> "<query>" [--k N] [--video ID] [--kind K]`
 
 use std::path::PathBuf;
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Per-video timing table from a `vi index` log.
+"""Per-video timing table from a `vidx index` log.
 
     python3 scripts/index_log_timings.py <log>[,<log>...] [index.vidx]
 

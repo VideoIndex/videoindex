@@ -6,7 +6,7 @@
 
 `--download` runs yt-dlp (720p, English subtitles, .info.json, archive file) for
 every video key the loader knows; without it the step only reports what is
-present. `--index` runs `vi index` over the present videos (the LocalFile
+present. `--index` runs `vidx index` over the present videos (the LocalFile
 acquirer imports the sidecars) and writes `<root>/video_map.json`: YouTube key
 -> VideoIndex video id, which the runners need.
 """
@@ -88,7 +88,7 @@ def main():
     ap.add_argument("--index")
     ap.add_argument("--config")
     ap.add_argument("--policy", default="coarse_only")
-    ap.add_argument("--vi", default="target/release/vi")
+    ap.add_argument("--vi", default="target/release/vidx")
     ap.add_argument("--sample", type=int, help="only the videos a stratified sample of N questions needs")
     ap.add_argument("--fraction", type=float, help="only the videos a stratified sample of this fraction needs")
     ap.add_argument("--seed", type=int, default=1)
