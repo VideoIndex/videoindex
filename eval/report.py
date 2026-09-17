@@ -63,7 +63,9 @@ def main():
         s = score(run)
         cfg = run["config"]
         label = cfg.get("policy", Path(path).stem)
-        if cfg.get("model") and not label.startswith("gemini"):
+        if cfg.get("label"):
+            label = cfg["label"]
+        elif cfg.get("model") and not label.startswith("gemini"):
             label += f" ({cfg['model']})"
         elif label.startswith("gemini"):
             label = f"{cfg.get('model', 'gemini')} {cfg.get('mode', '')} video".strip()

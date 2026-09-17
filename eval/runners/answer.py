@@ -58,11 +58,12 @@ def parse_letter(text: str, letters: list[str], options: list[str] | None = None
     return None
 
 
-def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question, policy: str, budget_usd: float, max_tool_calls: int, budget_tokens: int) -> dict:
+def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question, policy: str, budget_usd: float, max_tool_calls: int, budget_tokens: int,
+            model: str | None = None) -> dict:
     cmd = [vi] + (["--config", config] if config else []) + [
         "ask", index, q.prompt(tools=policy == "agent"), "--json", "--video", video_id, "--policy", policy,
         "--budget-usd", str(budget_usd), "--max-tool-calls", str(max_tool_calls), "--budget-tokens", str(budget_tokens),
-    ]
+    ] + (["--model", model] if model else [])
     t = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True)
     ms = int((time.time() - t) * 1000)
@@ -101,6 +102,8 @@ def main():
     ap.add_argument("--config")
     ap.add_argument("--vi", default="target/release/vi")
     ap.add_argument("--policy", default="agent")
+    ap.add_argument("--model", help="chat model for the agent (a [providers.*] name or model id); default: the config's agent_llm role")
+    ap.add_argument("--label", help="row label for the report (default: policy + model)")
     ap.add_argument("--budget-usd", type=float, default=0.5)
     ap.add_argument("--budget-tokens", type=int, default=120000)
     ap.add_argument("--retry-empty", type=int, default=1, help="re-ask when the answer text is empty (model ended a forced turn with no content)")
@@ -139,13 +142,13 @@ def main():
                 results[r["id"]] = r
     todo = [q for q in qs if q.id not in results]
     config_record = {
-        "benchmark": a.benchmark, "policy": a.policy, "budget_usd": a.budget_usd, "budget_tokens": a.budget_tokens,
+        "benchmark": a.benchmark, "policy": a.policy, "model": a.model, "label": a.label, "budget_usd": a.budget_usd, "budget_tokens": a.budget_tokens,
         "max_tool_calls": a.max_tool_calls, "sample": n, "fraction": a.fraction, "seed": a.seed, "config": a.config, "index": a.index,
         "skipped_not_indexed": len(missing),
         "vi_version": subprocess.run([a.vi, "--version"], capture_output=True, text=True).stdout.strip(),
         "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
-    print(f"{len(qs)} questions ({len(todo)} to run) with policy={a.policy} jobs={a.jobs}", file=sys.stderr)
+    print(f"{len(qs)} questions ({len(todo)} to run) with policy={a.policy} model={a.model or 'default'} jobs={a.jobs}", file=sys.stderr)
 
     def flush():
         out_path.write_text(json.dumps({"config": config_record, "n_questions": len(qs), "results": list(results.values())}, indent=1))
@@ -153,11 +156,11 @@ def main():
     done = 0
     with ThreadPoolExecutor(max_workers=a.jobs) as ex:
         def ask_with_retry(q: Question) -> dict:
-            r = ask_one(a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens)
+            r = ask_one(a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens, a.model)
             tries = 0
             while r.get("status") == "ok" and not r.get("text") and tries < a.retry_empty:
                 tries += 1
-                again = ask_one(a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens)
+                again = ask_one(a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens, a.model)
                 if again.get("status") != "ok":
                     # Keep the first (scored, empty) attempt rather than losing its spend.
                     r["retry_failed"] = again.get("error", again.get("status"))
