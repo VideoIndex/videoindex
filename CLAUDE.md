@@ -20,11 +20,11 @@ Every non-obvious technical choice gets a dated entry in `vi_internal/docs/DECIS
 
 ## Layout
 
-- `crates/`: `vi-core` (config, types, time model) · `vi-media` (libav decode in a sandboxed worker, acquirers, content-addressed media cache) · `vi-perceive` (ONNX: SigLIP, bge, RapidOCR, Silero VAD; features `cuda`, `onnx-dynamic`) · `vi-providers` (Anthropic/OpenAI/Gemini chat adapters, pricing, `tool_choice`) · `vi-index` (SQLite + FTS5 + blobs + vector store; `<id>.vidx` directories) · `vi-pipeline` (operator DAG scheduler, cache, planner, Python callback operators) · `vi-query` (hybrid retrieval, RRF) · `vi-agent` (tool loop: search, find_mentions, count_mentions, library_stats, list_videos, timeline, get_transcript, get_ocr, get_descriptions, view, describe; budgets; citations) · `vi-server` (axum: HTTP + SSE + blobs + API keys with daily spend cap + MCP streamable HTTP + metrics + OpenAPI; `vi serve`) · `vi-cli` (`vi`) · `vi-testkit`.
+- `crates/`: `vi-core` (config, types, time model) · `vi-media` (libav decode in a sandboxed worker, acquirers, content-addressed media cache) · `vi-perceive` (ONNX: SigLIP, bge, RapidOCR, Silero VAD; features `cuda`, `onnx-dynamic`) · `vi-providers` (Anthropic/OpenAI/Gemini chat adapters, pricing, `tool_choice`) · `vi-index` (SQLite + FTS5 + blobs + vector store; `<id>.vidx` directories) · `vi-pipeline` (operator DAG scheduler, cache, planner, Python callback operators) · `vi-query` (hybrid retrieval, RRF) · `vi-agent` (tool loop: search, find_mentions, count_mentions, library_stats, list_videos, timeline, get_transcript, get_ocr, get_descriptions, view, describe; budgets; citations) · `vi-server` (axum: HTTP + SSE + blobs + API keys with daily spend cap + MCP streamable HTTP + metrics + OpenAPI; `vidx serve`) · `vi-cli` (`vidx`) · `vi-testkit`.
 - `bindings/python` (PyO3/maturin, operators and policies in Python), `bindings/node` (napi-rs `@videoindex/core`).
 - `eval/`: benchmark harness (LVBench, MINERVA, 1H-VideoQA loaders; `runners/answer.py`, `runners/baselines.py`, `runners/gemini.py`; `run.py` matrix from `configs/*.toml`; `report.py` writes `docs/results/*.md`).
 - `scripts/`: ASR server, dev-set evals, `report/` (PDF technical reports into `vi_internal/reports`), Gemini dev-set harness, log timing tables.
-- `config/gcp-a100.toml`: the only real config; every `vi` command on the GPU box takes `--config config/gcp-a100.toml`.
+- `config/gcp-a100.toml`: the only real config; every `vidx` command on the GPU box takes `--config config/gcp-a100.toml`.
 
 ## Build and test
 
@@ -40,7 +40,7 @@ cd bindings/node && npm run build:debug && node --test test/index.test.js
 ## Rules that have bitten us
 
 - **Never `git add -A` here.** `maturin develop` drops a ~440 MB `.so` under `bindings/python/python/videoindex/` (ignored now, but it once forced a history rewrite). Stage files explicitly. `docs/vibe_summaries/` is the user's own notes; leave it unstaged.
-- **Never rebuild `target/release/vi` while a `vi index` run is active.** Evals use a separate binary at `target/eval/release/vi` (`cargo build --release -p vi-cli --features cuda --target-dir target/eval`).
+- **Never rebuild `target/release/vidx` while a `vidx index` run is active.** Evals use a separate binary at `target/eval/release/vidx` (`cargo build --release -p vi-cli --features cuda --target-dir target/eval`).
 - `pkill -f` patterns must not match your own shell (`dev[.]vidx` style); run long loops from script files with `setsid nohup`.
 - Keys: `ANTHROPIC_API_KEY` is in the environment; `GEMINI_API_KEY`, `ELEVENLABS_API_KEY` in the git-ignored `.env` (`set -a; source .env; set +a`). Never print them or the host's demo API key.
 - The user pushes this repo; commit and say so. Commit messages end with the Co-Authored-By line from the session.

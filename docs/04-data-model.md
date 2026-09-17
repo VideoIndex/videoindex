@@ -125,7 +125,7 @@ pub trait Storage: Send + Sync {
     async fn list_jobs(&self) -> Result<Vec<JobState>>;
     // maintenance
     async fn manifest(&self) -> Result<Manifest>;
-    async fn stats(&self) -> Result<IndexStats>;                        // sizes and per-video counts for `vi status`
+    async fn stats(&self) -> Result<IndexStats>;                        // sizes and per-video counts for `vidx status`
     async fn compact(&self) -> Result<()>;                              // VACUUM + refresh manifest hashes
 }
 ```

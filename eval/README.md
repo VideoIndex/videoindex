@@ -2,15 +2,15 @@
 
 Runs the long-video QA benchmarks named in `docs/08-evaluation.md` end to end over
 VideoIndex indexes, across policy and provider configurations, and reports accuracy
-against cost. Python; uses the `vi` CLI (and the HTTP API when a server is up). The
+against cost. Python; uses the `vidx` CLI (and the HTTP API when a server is up). The
 SDK knows nothing about benchmarks.
 
 ```
 eval/
-  datasets/    loaders: lvbench.py, minerva.py, onehour_videoqa.py; corpus.py (our cross-video set); acquire.py (yt-dlp + vi index)
+  datasets/    loaders: lvbench.py, minerva.py, onehour_videoqa.py; corpus.py (our cross-video set); acquire.py (yt-dlp + vidx index)
   data/corpus/ questions.json: the corpus question set with its derived ground truth
   runners/     answer.py (ask per question, parse the option letter), baselines.py (uniform frames),
-               gemini.py (Gemini agentic video, one video), corpus.py (vi ask over a whole index),
+               gemini.py (Gemini agentic video, one video), corpus.py (vidx ask over a whole index),
                corpus_gemini.py (Gemini agentic video over a library, map-reduce over batches of 10 files)
   metrics.py   accuracy overall and per task type, tokens, cost, latency, tool-call histogram, Wilson CIs
   judge.py     corpus scoring: a judge model extracts claims, then deterministic set / anchor / fact scores
@@ -85,7 +85,7 @@ coverage, and a per-kind quality score) are computed deterministically in `eval/
 
 ## Multiple-choice protocol
 
-The question and its lettered options go to `vi ask` restricted to the question's video
+The question and its lettered options go to `vidx ask` restricted to the question's video
 (`--video`) with a fixed budget. The prompt asks for reasoning then a final line
 `Answer: X`. The parser takes the last `Answer: X`, else a lone `(X)`/`X.` at the end, else
 the first option letter that appears in the last line; unparseable answers count as wrong
