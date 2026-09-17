@@ -134,11 +134,11 @@ SSE and MCP. Applications such as a video question-answering chat sit on top of 
   (Silero VAD + Whisper large-v3 on the GPU), read for on-screen text (RapidOCR), and embedded
   (SigLIP for frames, bge-small for text). Hybrid search fuses BM25, text vectors and image vectors.
 - **M2 is delivered.** Provider adapters for OpenAI-compatible servers, Anthropic and Gemini;
-  an agent loop with tools, budgets, sessions and timestamp citations (`vi ask`); the fine-pass
+  an agent loop with tools, budgets, sessions and timestamp citations (`vidx ask`); the fine-pass
   operators (scenes, chapters, VLM descriptions, entities and events); a Python binding with
   operators and agent policies written in Python.
 - **M3 is built and verified locally.** `vi-server` (HTTP API, SSE, blobs, API keys with a daily
-  spend cap, MCP, metrics, OpenAPI) and `vi serve`; the Node binding; and, in the separate
+  spend cap, MCP, metrics, OpenAPI) and `vidx serve`; the Node binding; and, in the separate
   `videoindex_app` repository, the site, the demo chat app with a player that seeks to citations,
   the SDK docs and the deployment templates. Pointing videoindex.app at the host is the remaining step.
 - **M4 has started.** The `eval/` harness runs LVBench, MINERVA and 1H-VideoQA; a first LVBench pilot

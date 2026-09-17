@@ -391,7 +391,7 @@ impl OpenAiCompat {
         })
     }
 
-    /// `GET /models`, used by `vi doctor` to check a server is up.
+    /// `GET /models`, used by `vidx doctor` to check a server is up.
     pub async fn list_models(&self) -> Result<Vec<String>> {
         #[derive(Deserialize)]
         struct Models {

@@ -1,4 +1,4 @@
-//! `vi status <index-dir>`
+//! `vidx status <index-dir>`
 
 use std::path::PathBuf;
 

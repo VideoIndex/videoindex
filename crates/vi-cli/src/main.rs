@@ -1,4 +1,4 @@
-//! The `vi` binary. See `docs/09-sdk-and-apis.md` for the command surface.
+//! The `vidx` binary. See `docs/09-sdk-and-apis.md` for the command surface.
 //! M0 shipped `init`, `probe`, `index`, `status`, `doctor`; M1 added
 //! `search`; M2 adds `ask`, `view` and `timeline`.
 
@@ -14,7 +14,7 @@ use clap::{Parser, Subcommand};
 
 /// VideoIndex: turn long videos into a queryable knowledge base.
 #[derive(Debug, Parser)]
-#[command(name = "vi", version, about, long_about = None)]
+#[command(name = "vidx", version, about, long_about = None)]
 struct Cli {
     /// Config file (default: $VI_CONFIG or built-in defaults). `VI_*`
     /// environment variables override individual keys.

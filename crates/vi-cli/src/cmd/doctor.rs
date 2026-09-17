@@ -1,4 +1,4 @@
-//! `vi doctor`: machine facts and toolchain checks.
+//! `vidx doctor`: machine facts and toolchain checks.
 
 use std::path::Path;
 use std::process::Command;
@@ -243,7 +243,7 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
 
     out.emit(&report, || {
         let mut s = String::new();
-        s.push_str(&format!("vi {}\n", report.vi_version));
+        s.push_str(&format!("vidx {}\n", report.vi_version));
         s.push_str(&format!("host: {} ({} {}, kernel {}, {})\n", report.hostname, report.os, report.arch, report.kernel, report.config_source));
         s.push_str(&format!(
             "cpu: {}  {} logical{}  rayon threads {}\n",

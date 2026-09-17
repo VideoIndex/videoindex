@@ -1,4 +1,4 @@
-//! `vi init <index-dir>`
+//! `vidx init <index-dir>`
 
 use std::path::PathBuf;
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Score `vi search` on the retrieval dev set (dataset/devset.jsonl).
+"""Score `vidx search` on the retrieval dev set (dataset/devset.jsonl).
 
     scripts/devset_eval.py <index.vidx> [--config FILE] [--k 5] [--tol 30]
-                           [--devset dataset/devset.jsonl] [--vi target/release/vi]
+                           [--devset dataset/devset.jsonl] [--vi target/release/vidx]
                            [--text-only] [--json OUT]
 
 Each question names a video and either an `anchor` phrase (resolved to a
@@ -70,7 +70,7 @@ def main():
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--tol", type=float, default=30.0)
     ap.add_argument("--devset", default="dataset/devset.jsonl")
-    ap.add_argument("--vi", default="target/release/vi")
+    ap.add_argument("--vi", default="target/release/vidx")
     ap.add_argument("--text-only", action="store_true")
     ap.add_argument("--json")
     a = ap.parse_args()

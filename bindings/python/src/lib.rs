@@ -855,7 +855,7 @@ impl Index {
         json_py(py, &v)
     }
 
-    /// Sizes, counts and jobs (what `vi status` prints).
+    /// Sizes, counts and jobs (what `vidx status` prints).
     fn status<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let storage = self.storage.clone();
         let s = py

@@ -733,7 +733,7 @@ impl Config {
         })
     }
 
-    /// Serialise to TOML (for `vi doctor --show-config` and tests).
+    /// Serialise to TOML (for `vidx doctor --show-config` and tests).
     pub fn to_toml(&self) -> Result<String> {
         toml::to_string_pretty(self).map_err(|e| Error::Config(e.to_string()))
     }

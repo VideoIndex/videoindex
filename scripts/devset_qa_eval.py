@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Score `vi ask` on the QA dev set (dataset/devset_qa.jsonl).
+"""Score `vidx ask` on the QA dev set (dataset/devset_qa.jsonl).
 
     scripts/devset_qa_eval.py <index.vidx> --config FILE [--k 8] [--policy agent|retrieval-only]
                               [--budget-usd 0.3] [--limit N] [--json OUT]
@@ -36,7 +36,7 @@ def main():
     ap.add_argument("--max-tool-calls", type=int, default=6)
     ap.add_argument("--limit", type=int)
     ap.add_argument("--devset", default="dataset/devset_qa.jsonl")
-    ap.add_argument("--vi", default="target/release/vi")
+    ap.add_argument("--vi", default="target/release/vidx")
     ap.add_argument("--json")
     a = ap.parse_args()
 

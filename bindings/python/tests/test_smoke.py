@@ -27,9 +27,9 @@ def make_clip(path, secs=20):
 
 def worker_env():
     # The decode worker re-executes the current binary; a Python process
-    # cannot act as the worker, so point at the built vi binary or worker.
+    # cannot act as the worker, so point at the built vidx binary or worker.
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    for cand in ("target/release/vi-media-worker", "target/debug/vi-media-worker", "target/release/vi", "target/debug/vi"):
+    for cand in ("target/release/vi-media-worker", "target/debug/vi-media-worker", "target/release/vidx", "target/debug/vidx"):
         p = os.path.join(root, cand)
         if os.path.exists(p):
             return p

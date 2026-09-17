@@ -1,4 +1,4 @@
-//! `vi serve [--bind ADDR] [--index-root DIR] [--api-key KEY]... [--no-mcp]`
+//! `vidx serve [--bind ADDR] [--index-root DIR] [--api-key KEY]... [--no-mcp]`
 use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;

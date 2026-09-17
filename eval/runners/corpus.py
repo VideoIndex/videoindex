@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Answer the corpus question set with `vi ask` over a whole index (no
+"""Answer the corpus question set with `vidx ask` over a whole index (no
 `--video` restriction: the agent must find the videos itself).
 
     python3 -m eval.runners.corpus --index /data/videoindex/indexes/dataset.vidx --config config/gcp-a100.toml \
@@ -59,7 +59,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--index", default="/data/videoindex/indexes/dataset.vidx")
     ap.add_argument("--config")
-    ap.add_argument("--vi", default="target/release/vi")
+    ap.add_argument("--vi", default="target/release/vidx")
     ap.add_argument("--policy", default="agent", choices=["agent", "retrieval-only"])
     ap.add_argument("--model", help="chat model (a [providers.*] name or model id); default: the config's agent_llm role")
     ap.add_argument("--budget-usd", type=float, default=1.0)

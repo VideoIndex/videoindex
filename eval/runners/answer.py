@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Answer a benchmark's questions with `vi ask` under one configuration.
+"""Answer a benchmark's questions with `vidx ask` under one configuration.
 
     python3 -m eval.runners.answer lvbench --root /data/videoindex/eval/lvbench \
         --index /data/videoindex/indexes/eval-lvbench.vidx --config config/gcp-a100.toml \
         --policy agent --max-tool-calls 6 --budget-usd 0.3 --sample 300 --seed 1 --jobs 4 \
         --out /data/videoindex/eval/runs/lvbench-agent.json
 
-Each question goes to `vi ask --json --video <id>` with the multiple-choice
+Each question goes to `vidx ask --json --video <id>` with the multiple-choice
 prompt; the run file keeps the events, usage, parsed letter and correctness.
 `--sample N` takes a stratified sample (by task type, then video) so a subset
 run is representative; `--resume` skips questions already in `--out`.
@@ -100,7 +100,7 @@ def main():
     ap.add_argument("--root", required=True)
     ap.add_argument("--index", required=True)
     ap.add_argument("--config")
-    ap.add_argument("--vi", default="target/release/vi")
+    ap.add_argument("--vi", default="target/release/vidx")
     ap.add_argument("--policy", default="agent")
     ap.add_argument("--model", help="chat model for the agent (a [providers.*] name or model id); default: the config's agent_llm role")
     ap.add_argument("--label", help="row label for the report (default: policy + model)")

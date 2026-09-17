@@ -1,4 +1,4 @@
-//! `vi view <index-dir> <video-id> --t0 .. --t1 .. [--fps ..] -o grid.png`
+//! `vidx view <index-dir> <video-id> --t0 .. --t1 .. [--fps ..] -o grid.png`
 
 use std::path::PathBuf;
 

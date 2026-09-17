@@ -9,11 +9,11 @@ const os = require("node:os");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..", "..", "..");
-const worker = ["target/release/vi-media-worker", "target/debug/vi-media-worker", "target/release/vi", "target/debug/vi"]
+const worker = ["target/release/vi-media-worker", "target/debug/vi-media-worker", "target/release/vidx", "target/debug/vidx"]
   .map((p) => path.join(root, p))
   .find((p) => fs.existsSync(p));
 
-test("index, add, videos, search, timeline, ask", { skip: !worker && "no vi binary built" }, async () => {
+test("index, add, videos, search, timeline, ask", { skip: !worker && "no vidx binary built" }, async () => {
   const { Index, version } = require("..");
   assert.match(version(), /^\d+\.\d+/);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vi-node-"));

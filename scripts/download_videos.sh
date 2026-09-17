@@ -98,5 +98,5 @@ Transfer to the server (resumable, run again if interrupted):
 
 Then on $AZUREMC_HOST:
 
-  vi index ./dataset.vidx $REMOTE_DIR/**/*.mp4
+  vidx index ./dataset.vidx $REMOTE_DIR/**/*.mp4
 MSG

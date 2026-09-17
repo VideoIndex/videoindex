@@ -4,7 +4,7 @@
     python3 -m eval.run eval/configs/lvbench-first.toml --fraction 0.25 [--seed 1] [--jobs 4] [--only agent,retrieval-only]
 
 The TOML names the benchmark, root, index, config and a list of `[[runs]]`
-(policy runs answered through `vi ask`, or `baseline = "uniform"` runs). Every
+(policy runs answered through `vidx ask`, or `baseline = "uniform"` runs). Every
 run answers the same stratified sample; run files land next to each other and
 `eval.report` turns them into `docs/results/<benchmark>-<date>.md`.
 """
@@ -27,7 +27,7 @@ def main():
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--only", help="comma-separated run names")
     ap.add_argument("--runs-dir", default="/data/videoindex/eval/runs")
-    ap.add_argument("--vi", default="target/eval/release/vi")
+    ap.add_argument("--vi", default="target/eval/release/vidx")
     ap.add_argument("--out")
     ap.add_argument("--title")
     ap.add_argument("--redo-unparsed", action="store_true", help="re-ask stored answers that had no option letter (index-based runs)")

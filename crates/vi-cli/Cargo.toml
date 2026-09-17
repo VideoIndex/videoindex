@@ -1,6 +1,6 @@
 [package]
 name = "vi-cli"
-description = "The `vi` command-line interface for VideoIndex"
+description = "The `vidx` command-line interface for VideoIndex"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +15,7 @@ cuda = ["vi-perceive/cuda"]
 onnx-dynamic = ["vi-perceive/onnx-dynamic"]
 
 [[bin]]
-name = "vi"
+name = "vidx"
 path = "src/main.rs"
 
 [dependencies]

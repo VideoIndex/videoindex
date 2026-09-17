@@ -38,7 +38,7 @@ pub fn worker_executable(cfg: &WorkerConfig) -> Result<PathBuf> {
     }
     // On Linux use the kernel's handle to the running image rather than its
     // path: a rebuild replaces the binary on disk mid-run and the old path
-    // no longer exists ("failed to spawn .../vi"), while /proc/self/exe
+    // no longer exists ("failed to spawn .../vidx"), while /proc/self/exe
     // keeps working for the life of the process.
     #[cfg(target_os = "linux")]
     {
@@ -159,7 +159,7 @@ pub struct WorkerInfo {
     pub libav: String,
 }
 
-/// Spawn a worker, complete the handshake, shut it down. Used by `vi doctor`.
+/// Spawn a worker, complete the handshake, shut it down. Used by `vidx doctor`.
 pub async fn worker_info(cfg: &WorkerConfig) -> Result<WorkerInfo> {
     let executable = worker_executable(cfg)?;
     let w = Worker::spawn(cfg).await?;

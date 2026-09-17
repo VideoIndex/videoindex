@@ -74,7 +74,7 @@ fn set_rlimit(resource: libc::__rlimit_resource_t, value: u64) {
 }
 
 /// Human-readable description of what the sandbox does on this platform,
-/// for `vi doctor`.
+/// for `vidx doctor`.
 pub fn describe() -> &'static str {
     if cfg!(target_os = "linux") {
         "child process; rlimits (AS, NOFILE, CORE) + no_new_privs; seccomp: not yet"
