@@ -42,6 +42,11 @@ pub struct SearchRequest {
     pub k: usize,
     /// Skip the vector lists (BM25 only).
     pub text_only: bool,
+    /// At most this many hits from any one video, so a ranked list over a
+    /// library is spread across videos instead of filled by the one that
+    /// talks most about the topic. `None` means no cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_video_k: Option<usize>,
 }
 
 impl SearchRequest {
@@ -53,6 +58,7 @@ impl SearchRequest {
             kinds: Vec::new(),
             k,
             text_only: false,
+            per_video_k: None,
         }
     }
 }
@@ -284,6 +290,7 @@ pub async fn search(
                 .unwrap_or(units.len().saturating_sub(1));
             groups.entry(idx).or_default().push(f);
         }
+        let mut video_hits: Vec<SearchHit> = Vec::new();
         for (idx, mut members) in groups {
             members.sort_by(|a, b| b.score.total_cmp(&a.score));
             let best = members[0].score;
@@ -318,7 +325,7 @@ pub async fn search(
                 })
                 .collect();
             let thumbnail = nearest_thumbnail(storage, video_id, anchor).await?;
-            results.push(SearchHit {
+            video_hits.push(SearchHit {
                 video_id,
                 title: title.clone(),
                 segment_id,
@@ -330,6 +337,11 @@ pub async fn search(
                 thumbnail,
             });
         }
+        if let Some(cap) = req.per_video_k {
+            video_hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+            video_hits.truncate(cap.max(1));
+        }
+        results.extend(video_hits);
     }
     results.sort_by(|a, b| b.score.total_cmp(&a.score));
     results.truncate(k);

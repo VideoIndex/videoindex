@@ -652,7 +652,8 @@ impl Index {
     }
 
     /// Hybrid search. Returns hit dicts.
-    #[pyo3(signature = (query, k = 10, videos = None, kinds = None, text_only = false))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (query, k = 10, videos = None, kinds = None, text_only = false, per_video_k = None))]
     fn search<'py>(
         &self,
         py: Python<'py>,
@@ -661,6 +662,7 @@ impl Index {
         videos: Option<Vec<String>>,
         kinds: Option<Vec<String>>,
         text_only: bool,
+        per_video_k: Option<usize>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let videos = parse_videos(videos)?;
         let kinds: Vec<Kind> = kinds
@@ -680,6 +682,7 @@ impl Index {
             kinds,
             k,
             text_only,
+            per_video_k,
         };
         let storage = self.storage.clone();
         let providers = self.prov();

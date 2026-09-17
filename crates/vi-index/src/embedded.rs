@@ -488,6 +488,29 @@ pub fn fts_query(input: &str) -> String {
         .join(" OR ")
 }
 
+/// Turn one term into an exact FTS5 phrase (`"deep seek"`), optionally with
+/// a prefix match on its last token (`"agent"*`). `None` when the term has
+/// no alphanumeric content.
+pub fn mention_fts_query(term: &str, prefix: bool) -> Option<String> {
+    let words: Vec<String> = term
+        .split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .replace('"', "\"\"")
+        })
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.is_empty() {
+        return None;
+    }
+    let phrase = words.join(" ");
+    Some(if prefix {
+        format!("\"{phrase}\"*")
+    } else {
+        format!("\"{phrase}\"")
+    })
+}
+
 /// English function words that carry no retrieval signal in a question.
 const STOPWORDS: &[&str] = &[
     "a", "an", "the", "and", "or", "but", "of", "to", "in", "on", "at", "for", "with", "by",
@@ -1368,6 +1391,149 @@ impl Storage for EmbeddedIndex {
         .await
     }
 
+    async fn find_mentions(&self, q: &MentionQuery) -> Result<Vec<VideoMentions>> {
+        let q = q.clone();
+        self.with_conn(move |c| {
+            let kinds: Vec<Kind> = if q.kinds.is_empty() {
+                vec![Kind::Transcript, Kind::Ocr, Kind::Description]
+            } else {
+                q.kinds.clone()
+            };
+            // rn <= samples keeps the earliest rows per video; with 0 samples
+            // one row per video still comes back (rn = 1) to carry the count.
+            let samples = q.samples_per_video as i64;
+            let mut by_video: std::collections::BTreeMap<String, VideoMentions> =
+                std::collections::BTreeMap::new();
+            let mut order: Vec<String> = Vec::new();
+            for term in &q.terms {
+                let Some(fts) = mention_fts_query(term, q.prefix) else {
+                    continue;
+                };
+                for kind in &kinds {
+                    let (filter, ids) = video_filter(&q.videos, "v.id");
+                    let sql = match kind {
+                        Kind::Transcript => format!(
+                            "SELECT * FROM (
+                               SELECT video_id, title, channel, t0_secs, t1_secs, snip,
+                                      COUNT(*) OVER (PARTITION BY video_id) AS n,
+                                      ROW_NUMBER() OVER (PARTITION BY video_id ORDER BY t0_secs) AS rn
+                               FROM (
+                                 SELECT v.id AS video_id, v.title, v.channel, s.t0_secs, s.t1_secs, m.snip
+                                 FROM (SELECT rowid, snippet(transcript_fts, 0, '[', ']', '…', 14) AS snip
+                                       FROM transcript_fts WHERE transcript_fts MATCH ?) m
+                                 JOIN transcript_spans s ON s.rowid = m.rowid
+                                 JOIN tracks tr ON tr.id = s.track_id JOIN videos v ON v.id = tr.video_id
+                                 WHERE 1{filter}
+                               )
+                             ) WHERE rn <= MAX(?, 1) ORDER BY video_id, t0_secs"
+                        ),
+                        // OCR repeats the same line on every sampled frame a
+                        // slide stays up: count distinct texts per minute.
+                        Kind::Ocr => format!(
+                            "SELECT * FROM (
+                               SELECT video_id, title, channel, t0_secs, t0_secs AS t1_secs, snip,
+                                      COUNT(*) OVER (PARTITION BY video_id) AS n,
+                                      ROW_NUMBER() OVER (PARTITION BY video_id ORDER BY t0_secs) AS rn
+                               FROM (
+                                 SELECT v.id AS video_id, v.title, v.channel, MIN(s.t_secs) AS t0_secs, s.text AS snip
+                                 FROM ocr_fts JOIN ocr_spans s ON s.rowid = ocr_fts.rowid
+                                 JOIN frame_samples f ON f.id = s.frame_sample_id
+                                 JOIN tracks tr ON tr.id = f.track_id JOIN videos v ON v.id = tr.video_id
+                                 WHERE ocr_fts MATCH ?{filter}
+                                 GROUP BY v.id, s.text, CAST(s.t_secs / 60 AS INTEGER)
+                               )
+                             ) WHERE rn <= MAX(?, 1) ORDER BY video_id, t0_secs"
+                        ),
+                        Kind::Description => format!(
+                            "SELECT * FROM (
+                               SELECT video_id, title, channel, t0_secs, t1_secs, snip,
+                                      COUNT(*) OVER (PARTITION BY video_id) AS n,
+                                      ROW_NUMBER() OVER (PARTITION BY video_id ORDER BY t0_secs) AS rn
+                               FROM (
+                                 SELECT v.id AS video_id, v.title, v.channel,
+                                        COALESCE(seg.t0_secs, f.t_secs) AS t0_secs,
+                                        COALESCE(seg.t1_secs, f.t_secs) AS t1_secs, m.snip
+                                 FROM (SELECT rowid, snippet(descriptions_fts, 0, '[', ']', '…', 14) AS snip
+                                       FROM descriptions_fts WHERE descriptions_fts MATCH ?) m
+                                 JOIN descriptions d ON d.rowid = m.rowid
+                                 LEFT JOIN segments seg ON seg.id = d.target_id AND d.target_kind = 'segment'
+                                 LEFT JOIN frame_samples f ON f.id = d.target_id AND d.target_kind = 'frame'
+                                 LEFT JOIN tracks tr ON tr.id = f.track_id
+                                 JOIN videos v ON v.id = COALESCE(seg.video_id, tr.video_id)
+                                 WHERE 1{filter}
+                               )
+                             ) WHERE rn <= MAX(?, 1) ORDER BY video_id, t0_secs"
+                        ),
+                        Kind::Segment | Kind::Frame => continue,
+                    };
+                    let mut st = c.prepare(&sql)?;
+                    let mut bound: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(fts.clone())];
+                    for id in ids {
+                        bound.push(Box::new(id));
+                    }
+                    bound.push(Box::new(samples));
+                    let params_ref: Vec<&dyn rusqlite::ToSql> =
+                        bound.iter().map(|b| b.as_ref()).collect();
+                    let rows = st.query_map(params_ref.as_slice(), |r| {
+                        Ok((
+                            r.get::<_, String>("video_id")?,
+                            r.get::<_, Option<String>>("title")?,
+                            r.get::<_, Option<String>>("channel")?,
+                            r.get::<_, f64>("t0_secs")?,
+                            r.get::<_, f64>("t1_secs")?,
+                            r.get::<_, String>("snip")?,
+                            r.get::<_, i64>("n")?,
+                            r.get::<_, i64>("rn")?,
+                        ))
+                    })?;
+                    for row in rows {
+                        let (vid, title, channel, t0, t1, snip, n, rn) = row?;
+                        let entry = match by_video.get_mut(&vid) {
+                            Some(e) => e,
+                            None => {
+                                order.push(vid.clone());
+                                by_video.entry(vid.clone()).or_insert(VideoMentions {
+                                    video_id: parse_id(vid.clone(), "video")?,
+                                    title,
+                                    channel,
+                                    counts: Vec::new(),
+                                    samples: Vec::new(),
+                                })
+                            }
+                        };
+                        if rn == 1 {
+                            entry.counts.push(MentionCount {
+                                term: term.clone(),
+                                kind: *kind,
+                                count: n.max(0) as u64,
+                            });
+                        }
+                        if samples > 0 {
+                            entry.samples.push(MentionHit {
+                                term: term.clone(),
+                                kind: *kind,
+                                t0: Timestamp::from_secs_f64(t0, 1000),
+                                t1: Timestamp::from_secs_f64(t1.max(t0), 1000),
+                                text: snip,
+                            });
+                        }
+                    }
+                }
+            }
+            let mut out: Vec<VideoMentions> = order
+                .into_iter()
+                .filter_map(|id| by_video.remove(&id))
+                .collect();
+            for v in &mut out {
+                v.samples.sort_by_key(|a| a.t0);
+            }
+            // Most mentions first; ties keep insertion (index) order.
+            out.sort_by_key(|a| std::cmp::Reverse(a.total()));
+            Ok(out)
+        })
+        .await
+    }
+
     async fn vector_search(&self, q: &VectorQuery) -> Result<Vec<Hit>> {
         let q = q.clone();
         let vectors = self.vectors.clone();
@@ -2224,6 +2390,160 @@ mod tests {
         let stats = idx.stats().await.unwrap();
         assert_eq!(stats.blob_count, 1);
         assert_eq!(stats.jobs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn find_mentions_counts_and_samples_per_video() {
+        let dir = tempfile::tempdir().unwrap();
+        let idx = EmbeddedIndex::create(&dir.path().join("m.vidx")).unwrap();
+        let prov = Provenance::local("asr", 1, serde_json::json!({}));
+        idx.put_provenance(&prov).await.unwrap();
+        // Video A: three spoken mentions and an on-screen one; video B: one
+        // spoken mention of a variant; video C: nothing.
+        let mut a = video("a");
+        a.title = Some("Talk A".into());
+        a.channel = Some("MOOC".into());
+        let mut b = video("b");
+        b.title = Some("Talk B".into());
+        b.channel = Some("Workshop".into());
+        let c = video("c");
+        for v in [&a, &b, &c] {
+            idx.put_video(v).await.unwrap();
+        }
+        let ta = Track {
+            kind: TrackKind::Subtitle,
+            ..track(a.id)
+        };
+        let va = track(a.id);
+        let tb = Track {
+            kind: TrackKind::Subtitle,
+            ..track(b.id)
+        };
+        idx.put_tracks(&[ta.clone(), va.clone(), tb.clone()])
+            .await
+            .unwrap();
+        let span = |track: TrackId, t0: i64, text: &str| {
+            Span::Transcript(TranscriptSpan {
+                id: SpanId::new(),
+                track_id: track,
+                t0: Timestamp::from_secs(t0),
+                t1: Timestamp::from_secs(t0 + 10),
+                text: text.into(),
+                speaker: None,
+                language: None,
+                confidence: None,
+                words: None,
+                provenance_id: prov.id,
+            })
+        };
+        idx.put_spans(&[
+            span(ta.id, 10, "Anthropic released a model, and Anthropic's team wrote it up"),
+            span(ta.id, 500, "we compared it with the anthropic api"),
+            span(ta.id, 900, "unrelated talk about lunch"),
+            span(ta.id, 1200, "back to Anthropic once more"),
+            span(tb.id, 40, "DeepSeek R1 is a reasoning model"),
+        ])
+        .await
+        .unwrap();
+        let frame = FrameSample {
+            id: FrameSampleId::new(),
+            track_id: va.id,
+            t: Timestamp::from_secs(505),
+            pts: 0,
+            is_keyframe: true,
+            phash: None,
+            thumbnail_blob: None,
+            width: 1280,
+            height: 720,
+        };
+        let frame2 = FrameSample {
+            id: FrameSampleId::new(),
+            t: Timestamp::from_secs(510),
+            ..frame.clone()
+        };
+        idx.put_frame_samples(&[frame.clone(), frame2.clone()])
+            .await
+            .unwrap();
+        let ocr = |f: FrameSampleId, t: Timestamp| {
+            Span::Ocr(OcrSpan {
+                id: SpanId::new(),
+                frame_sample_id: f,
+                t,
+                text: "console.anthropic.com".into(),
+                bbox: None,
+                confidence: Some(0.9),
+                provenance_id: prov.id,
+            })
+        };
+        // The same slide line on two frames within a minute counts once.
+        idx.put_spans(&[ocr(frame.id, frame.t), ocr(frame2.id, frame2.t)])
+            .await
+            .unwrap();
+
+        let q = MentionQuery {
+            terms: vec!["Anthropic".into(), "deep seek".into(), "DeepSeek".into()],
+            videos: vec![],
+            kinds: vec![],
+            prefix: false,
+            samples_per_video: 2,
+        };
+        let r = idx.find_mentions(&q).await.unwrap();
+        assert_eq!(r.len(), 2, "{r:#?}");
+        let ra = &r[0];
+        assert_eq!(ra.video_id, a.id);
+        assert_eq!(ra.channel.as_deref(), Some("MOOC"));
+        let count = |v: &VideoMentions, kind: Kind| -> u64 {
+            v.counts.iter().filter(|c| c.kind == kind).map(|c| c.count).sum()
+        };
+        assert_eq!(count(ra, Kind::Transcript), 3, "{ra:#?}");
+        assert_eq!(count(ra, Kind::Ocr), 1, "{ra:#?}");
+        assert_eq!(ra.total(), 4);
+        // Two earliest transcript samples plus the OCR one, in time order.
+        assert_eq!(ra.samples.len(), 3, "{ra:#?}");
+        assert_eq!(ra.samples[0].t0, Timestamp::from_secs(10));
+        assert!(ra.samples[0].text.contains("[Anthropic]"), "{}", ra.samples[0].text);
+        assert_eq!(ra.samples[1].t0, Timestamp::from_secs(500));
+        assert_eq!(ra.samples[2].kind, Kind::Ocr);
+        let rb = &r[1];
+        assert_eq!(rb.video_id, b.id);
+        assert_eq!(rb.total(), 1);
+        assert_eq!(rb.counts[0].term, "DeepSeek");
+
+        // Counts only, restricted to one video and one kind; prefix matching.
+        let r = idx
+            .find_mentions(&MentionQuery {
+                terms: vec!["anthrop".into()],
+                videos: vec![a.id],
+                kinds: vec![Kind::Transcript],
+                prefix: true,
+                samples_per_video: 0,
+            })
+            .await
+            .unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].total(), 3);
+        assert!(r[0].samples.is_empty());
+        let none = idx
+            .find_mentions(&MentionQuery {
+                terms: vec!["anthrop".into(), "  ".into()],
+                videos: vec![],
+                kinds: vec![],
+                prefix: false,
+                samples_per_video: 1,
+            })
+            .await
+            .unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn mention_fts_query_phrases() {
+        assert_eq!(mention_fts_query("DeepSeek", false).unwrap(), "\"DeepSeek\"");
+        assert_eq!(mention_fts_query(" deep seek ", true).unwrap(), "\"deep seek\"*");
+        // Edge punctuation is trimmed; an inner quote is doubled for FTS5.
+        assert_eq!(mention_fts_query("say \"hi\"", false).unwrap(), "\"say hi\"");
+        assert_eq!(mention_fts_query("o\"reilly", false).unwrap(), "\"o\"\"reilly\"");
+        assert!(mention_fts_query("...", false).is_none());
     }
 
     #[test]

@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 740 392" width="740" height="392" role="img" aria-label="VideoIndex against Gemini agentic video on 28 library-wide questions: cost, latency, videos found and answer quality">
+<title>VideoIndex against Gemini agentic video, 28 library-wide questions over 30 talks</title>
+<rect width="740" height="392" fill="none"/>
+<text x="20" y="30" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="16" font-weight="600" fill="#0a2347">Questions that span the whole library</text>
+<text x="20" y="50" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="12.5" fill="#4d4c48">28 questions over 30 talks (36.6 hours): which videos mention X, the moments about a topic, cross-video</text>
+<text x="20" y="67" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="12.5" fill="#4d4c48">comparisons, library summaries. Same questions, same answer format, same judge for both systems.</text>
+<rect x="20" y="92" width="340" height="118" rx="12" fill="#fffefb" stroke="#e3e1d8"/>
+<text x="36" y="116" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="13.5" font-weight="600" fill="#0b0b0b">Cost per question</text>
+<text x="36" y="132" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#8a8880">lower is better</text>
+<text x="36" y="160" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" font-weight="600" fill="#0a2347">VideoIndex</text>
+<rect x="132" y="148" width="59.1" height="16" rx="4" fill="#3186e9"/>
+<rect x="132" y="148" width="4.0" height="16" fill="#3186e9"/>
+<text x="199.1" y="160" font-family="IBM Plex Mono, ui-monospace, SF Mono, Menlo, monospace" font-size="12" fill="#0b0b0b">$0.16</text>
+<text x="344" y="160" text-anchor="end" font-family="IBM Plex Mono, ui-monospace, SF Mono, Menlo, monospace" font-size="11.5" font-weight="500" fill="#3186e9">2.6× cheaper</text>
+<text x="36" y="188" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" font-weight="400" fill="#4d4c48">Gemini agentic</text>
+<rect x="132" y="176" width="152.0" height="16" rx="4" fill="#8a8880"/>
+<rect x="132" y="176" width="4.0" height="16" fill="#8a8880"/>
+<text x="292.0" y="188" font-family="IBM Plex Mono, ui-monospace, SF Mono, Menlo, monospace" font-size="12" fill="#0b0b0b">$0.41</text>
+<rect x="380" y="92" width="340" height="118" rx="12" fill="#fffefb" stroke="#e3e1d8"/>
+<text x="396" y="116" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="13.5" font-weight="600" fill="#0b0b0b">Median latency</text>
+<text x="396" y="132" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#8a8880">lower is better · p95 58 s against 188 s</text>
+<text x="396" y="160" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" font-weight="600" fill="#0a2347">VideoIndex</text>
+<rect x="492" y="148" width="96.0" height="16" rx="4" fill="#3186e9"/>
+<rect x="492" y="148" width="4.0" height="16" fill="#3186e9"/>
+<text x="596.0" y="160" font-family="IBM Plex Mono, ui-monospace, SF Mono, Menlo, monospace" font-size="12" fill="#0b0b0b">28 s</text>
+<text x="704" y="160" text-anchor="end" font-family="IBM Plex Mono, ui-monospace, SF Mono, Menlo, monospace" font-size="11.5" font-weight="500" fill="#3186e9">1.6× faster</text>
+<text x="396" y="188" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" font-weight="400" fill="#4d4c48">Gemini agentic</text>
+<rect x="492" y="176" width="152.0" height="16" rx="4" fill="#8a8880"/>
+<rect x="492" y="176" width="4.0" height="16" fill="#8a8880"/>
+<text x="652.0" y="188" font-family="IBM Plex Mono, ui-monospace, SF Mono, Menlo, monospace" font-size="12" fill="#0b0b0b">45 s</text>
+<rect x="20" y="224" width="340" height="118" rx="12" fill="#fffefb" stroke="#e3e1d8"/>
+<text x="36" y="248" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="13.5" font-weight="600" fill="#0b0b0b">Videos found (F1)</text>
+<text x="36" y="264" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#8a8880">higher is better</text>
+<text x="36" y="292" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" font-weight="600" fill="#0a2347">VideoIndex</text>
+<rect x="132" y="280" width="152.0" height="16" rx="4" fill="#3186e9"/>
+<rect x="132" y="280" width="4.0" height="16" fill="#3186e9"/>
+<text x="292.0" y="292" font-family="IBM Plex Mono, ui-monospace, SF Mono, Menlo, monospace" font-size="12" fill="#0b0b0b">98%</text>
+<text x="36" y="320" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" font-weight="400" fill="#4d4c48">Gemini agentic</text>
+<rect x="132" y="308" width="151.9" height="16" rx="4" fill="#8a8880"/>
+<rect x="132" y="308" width="4.0" height="16" fill="#8a8880"/>
+<text x="291.9" y="320" font-family="IBM Plex Mono, ui-monospace, SF Mono, Menlo, monospace" font-size="12" fill="#0b0b0b">97%</text>
+<rect x="380" y="224" width="340" height="118" rx="12" fill="#fffefb" stroke="#e3e1d8"/>
+<text x="396" y="248" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="13.5" font-weight="600" fill="#0b0b0b">Answer quality</text>
+<text x="396" y="264" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#8a8880">higher is better · judge-scored against ground truth</text>
+<text x="396" y="292" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" font-weight="600" fill="#0a2347">VideoIndex</text>
+<rect x="492" y="280" width="151.5" height="16" rx="4" fill="#3186e9"/>
+<rect x="492" y="280" width="4.0" height="16" fill="#3186e9"/>
+<text x="651.5" y="292" font-family="IBM Plex Mono, ui-monospace, SF Mono, Menlo, monospace" font-size="12" fill="#0b0b0b">93%</text>
+<text x="396" y="320" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" font-weight="400" fill="#4d4c48">Gemini agentic</text>
+<rect x="492" y="308" width="152.0" height="16" rx="4" fill="#8a8880"/>
+<rect x="492" y="308" width="4.0" height="16" fill="#8a8880"/>
+<text x="652.0" y="320" font-family="IBM Plex Mono, ui-monospace, SF Mono, Menlo, monospace" font-size="12" fill="#0b0b0b">93%</text>
+<text x="20" y="368" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="10.5" fill="#8a8880">VideoIndex cost excludes indexing, paid once per video. Gemini agentic video takes ten videos per request, so each question is three</text>
+<text x="20" y="382" font-family="IBM Plex Sans, Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="10.5" fill="#8a8880">parallel agentic requests plus a merge, and its cost is the whole cost. Provider list prices, September 2026.</text>
+</svg>

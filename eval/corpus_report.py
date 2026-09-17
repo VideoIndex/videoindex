@@ -225,7 +225,7 @@ def main():
         by_id = {r["id"]: r for r in run["results"]}
         grid.append([by_id[q].get("scores", {}).get("quality") if q in by_id else None for q in qid])
     heatmap(assets / f"{stem}-per-question.svg", short, [q.replace("corpus-", "q") for q in qid], grid, title="Quality per question")
-    vi_rows = [s for l, _, s, _ in runs if l.lower().startswith("videoindex") and "cap" not in l]
+    vi_rows = [s for l, _, s, _ in runs if l.lower().startswith("videoindex") and "1,500-token" not in l]
     gem_rows = [s for l, _, s, _ in runs if "gemini agentic" in l.lower()]
     headline = None
     if vi_rows and gem_rows:
@@ -284,8 +284,29 @@ def main():
         md.append(f"Gemini's cost is uneven: {len(expensive)} of {len(gcosts)} questions cost more than $1 ({exp_desc}); on those the agent loaded "
                   f"transcript for most of the library and spent several hundred thousand thinking tokens, while the median question cost "
                   f"${gcosts[len(gcosts) // 2]:.2f}. VideoIndex's cost is flat because the index answers a library-wide scan with one full-text query; "
-                  f"its agent's lost points are mostly missed videos rather than wrong ones.")
-        capped = [(l, s) for l, s in vi if "cap" in l]
+                  + (f"its agent's lost points are mostly missed videos rather than wrong ones." if sv["missed_total"] > sv["wrong_total"]
+                     else f"its agent's lost points are now extra videos ({sv['wrong_total']} named outside the expected set) rather than missed ones, "
+                          f"and facts the judge did not find in the answer ({fmt_pct(sv['fact_coverage'])} of key facts covered)."))
+        tooled = [(l, s) for l, s in vi if "library tools" in l]
+        if tooled:
+            md.append("")
+            pairs = []
+            for lt, st in tooled:
+                base = lt.replace(" with library tools", "")
+                sb = next((s for l, s in vi if l == base), None)
+                if sb:
+                    pairs.append(f"{100 * sb['quality']:.0f}% → {100 * st['quality']:.0f}% quality, {sb['missed_total']} → {st['missed_total']} missed videos, "
+                                 f"${sb['cost_mean']:.3f} → ${st['cost_mean']:.3f} per question for {base}")
+            md.append("Rows marked 'with library tools' run the agent of 2026-09-17, which adds three exhaustive tools over the index: `find_mentions` "
+                      "(one full-text phrase query per term over every transcript segment, on-screen line and description, grouped by video with counts "
+                      "and the earliest timestamps), `count_mentions` (the same counts per term, per video or per channel) and `library_stats` (video "
+                      "count, duration, channels); `search` also caps hits per video so a ranked list spreads across the library. The system prompt "
+                      "routes 'which videos', 'find all', 'how many' and 'most discussed' questions to them before `search`."
+                      + (" Against the same agent without them: " + "; ".join(pairs) + "." if pairs else "")
+                      + " The remaining losses are extra videos on topic questions (the exhaustive scan surfaces peripheral mentions that the judge's "
+                      "ground truth does not list) and the ranking questions, where the counts include on-screen text and descriptions while the "
+                      "ground truth counts spoken mentions only.")
+        capped = [(l, s) for l, s in vi if "1,500-token" in l]
         if capped:
             lc, sc = capped[0]
             md.append("")

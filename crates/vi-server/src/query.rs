@@ -48,6 +48,9 @@ pub struct SearchBody {
     /// BM25 only (no embedding calls).
     #[serde(default)]
     pub text_only: bool,
+    /// At most this many hits per video; unset means no cap.
+    #[serde(default)]
+    pub per_video_k: Option<usize>,
 }
 
 fn default_k() -> usize {
@@ -73,6 +76,7 @@ pub async fn run_search(state: &AppState, ix: &OpenIndex, body: SearchBody) -> A
         kinds,
         k: body.k.clamp(1, 100),
         text_only: body.text_only,
+        per_video_k: body.per_video_k.map(|v| v.clamp(1, 100)),
     };
     let resp = vi_query::search(ix.storage.as_ref(), Some(&state.providers), &req).await?;
     to_json(&resp)

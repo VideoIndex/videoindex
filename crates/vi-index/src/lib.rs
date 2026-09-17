@@ -23,5 +23,6 @@ pub use embedded::EmbeddedIndex;
 pub use error::{IndexError, Result};
 pub use manifest::{FileHash, Manifest, SCHEMA_VERSION};
 pub use storage::{
-    Hit, HitKind, IndexStats, Kind, Storage, TextQuery, VectorQuery, VideoStats, Window,
+    Hit, HitKind, IndexStats, Kind, MentionCount, MentionHit, MentionQuery, Storage, TextQuery,
+    VectorQuery, VideoMentions, VideoStats, Window,
 };

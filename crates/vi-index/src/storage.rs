@@ -62,6 +62,76 @@ pub struct TextQuery {
     pub k: usize,
 }
 
+/// Exhaustive term search: every row whose text contains one of the
+/// terms, grouped by video (the agent's `find_mentions` and
+/// `count_mentions`). Unlike [`TextQuery`] nothing is ranked or truncated.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MentionQuery {
+    /// Terms; each is matched as a phrase on token boundaries, case- and
+    /// diacritic-insensitively.
+    pub terms: Vec<String>,
+    /// Restrict to these videos; empty means all.
+    pub videos: Vec<VideoId>,
+    /// Which row kinds to search; empty means transcript, ocr, description.
+    pub kinds: Vec<Kind>,
+    /// Match the last word of each term as a token prefix, so `agent` also
+    /// finds `agents` and `agentic`.
+    pub prefix: bool,
+    /// Earliest matching rows to return per video, term and kind; 0 for
+    /// counts only.
+    pub samples_per_video: usize,
+}
+
+/// Rows of one kind in one video that contain a term.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MentionCount {
+    /// The term as given.
+    pub term: String,
+    /// Row kind.
+    pub kind: Kind,
+    /// Matching rows (transcript spans, distinct on-screen texts per
+    /// minute, descriptions).
+    pub count: u64,
+}
+
+/// One matching row.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MentionHit {
+    /// The term as given.
+    pub term: String,
+    /// Row kind.
+    pub kind: Kind,
+    /// Start.
+    pub t0: Timestamp,
+    /// End (equals `t0` for point evidence).
+    pub t1: Timestamp,
+    /// Snippet around the match (the match in square brackets) or the row
+    /// text.
+    pub text: String,
+}
+
+/// A video's mentions of the queried terms.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VideoMentions {
+    /// Video.
+    pub video_id: VideoId,
+    /// Title.
+    pub title: Option<String>,
+    /// Channel.
+    pub channel: Option<String>,
+    /// Counts per term and kind (only non-zero entries).
+    pub counts: Vec<MentionCount>,
+    /// Earliest hits, by time.
+    pub samples: Vec<MentionHit>,
+}
+
+impl VideoMentions {
+    /// Matching rows over every term and kind.
+    pub fn total(&self) -> u64 {
+        self.counts.iter().map(|c| c.count).sum()
+    }
+}
+
 impl TextQuery {
     /// Search everything for `query`, top `k`.
     pub fn new(query: impl Into<String>, k: usize) -> Self {
@@ -230,6 +300,9 @@ pub trait Storage: Send + Sync {
 
     /// BM25 full-text search.
     async fn text_search(&self, q: &TextQuery) -> Result<Vec<Hit>>;
+    /// Every row containing one of the query's terms, grouped by video and
+    /// ordered by total matches, most first.
+    async fn find_mentions(&self, q: &MentionQuery) -> Result<Vec<VideoMentions>>;
     /// Nearest-neighbour search.
     async fn vector_search(&self, q: &VectorQuery) -> Result<Vec<Hit>>;
     /// Everything in `[t0, t1)` of a video.

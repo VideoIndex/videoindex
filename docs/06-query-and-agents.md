@@ -79,7 +79,11 @@ Every tool is read-only against the index and the media. Tools are exposed ident
 
 | Tool | Arguments | Returns | Cost class |
 |---|---|---|---|
-| `search` | query, filters, k | ranked hits with evidence | cheap, cached |
+| `search` | query, filters, k, per_video_k | ranked hits with evidence, at most `per_video_k` per video (default 3 when more than one video is in scope) | cheap, cached |
+| `find_mentions` | terms[], prefix?, kinds?, video_ids?, per_video | exhaustive FTS scan: per video, hit counts per kind and the earliest hits with timestamps and snippets; the tool for "which videos mention X" | cheap, deterministic |
+| `count_mentions` | terms[], group_by (library, video, channel), prefix?, kinds?, video_ids? | rows containing each term per kind, videos with a hit, optional per-video or per-channel breakdown; the tool for "discussed most", rankings, totals | cheap, deterministic |
+| `library_stats` | — | video count, total duration, channels with counts, every video's title, channel, duration and date | cheap |
+| `list_videos` | — | ids, titles, durations | cheap |
 | `timeline` | video_id, level | segments with titles and summaries | cheap |
 | `get_transcript` | video_id, t0, t1 | transcript text with timestamps and speakers | cheap |
 | `get_ocr` | video_id, t0, t1 | on-screen text with timestamps | cheap |
@@ -88,6 +92,8 @@ Every tool is read-only against the index and the media. Tools are exposed ident
 | `describe` | video_id, t0, t1, question? | runs the VLM on the window, stores the Description, returns text | decode + VLM call, improves index |
 | `listen` | video_id, t0, t1 | audio clip for audio-capable providers, else transcript | decode, maybe provider |
 | `find_similar_frames` | frame_sample_id or image | frames visually similar across the index | cheap |
+
+`search` samples: it ranks and truncates, so it cannot prove that no other video mentions a term. `find_mentions` and `count_mentions` are one FTS5 phrase query per term and kind over the whole index (no embedding call, sub-second on a 30-video library), grouped by video in SQL. Counts are rows containing the term: transcript segments, distinct on-screen lines per minute, descriptions. They inherit ASR spelling, so the agent is told to pass variants as separate terms (`LoRA`, `Laura`) and to quote counts as approximate. The system prompt routes "which videos", "find all", "how many" and "most discussed" questions to these tools before `search`; see `vi_internal/docs/planning/EVAL-IMPROVEMENTS.md` (workstreams A and B) for the evaluation that motivated them.
 
 `view` and `describe` differ in who does the looking. `view` hands pixels to the loop's own multimodal LLM; `describe` calls the configured VLM provider and persists the result. Policies choose based on the loop model's capabilities and cost.
 
@@ -129,7 +135,7 @@ An Index holds many Videos. `search` and `ask` accept a video filter; without on
 
 ## MCP server
 
-`vi-server` exposes an MCP server with the tools above, plus `list_videos` and `index_state`. An external agent such as Claude Code or a LangGraph graph can therefore run its own loop over a VideoIndex, which is also how VideoIndex is compared against other agent strategies in evaluation. Resources expose thumbnails and frame grids by blob URI.
+`vi-server` exposes an MCP server with the tools above, plus `index_state` and `ask`. An external agent such as Claude Code or a LangGraph graph can therefore run its own loop over a VideoIndex, which is also how VideoIndex is compared against other agent strategies in evaluation. Resources expose thumbnails and frame grids by blob URI.
 
 ## Performance targets
 

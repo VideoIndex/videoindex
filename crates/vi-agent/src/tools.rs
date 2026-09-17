@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use vi_core::config::{roles, Config};
 use vi_core::model::{Description, DescriptionKind, SegmentLevel, TargetKind, Video};
 use vi_core::{DescriptionId, Result, VideoId};
-use vi_index::{BlobKey, Kind, Storage};
+use vi_index::{BlobKey, Kind, MentionQuery, Storage};
 use vi_providers::{
     provenance_for, ContentPart, GenerateRequest, ImageData, Message, ProviderRegistry, Role,
     ToolSpec,
@@ -20,6 +20,12 @@ use crate::view::{media_path, render_view, ts, ViewRequest};
 
 /// Longest text a tool returns before truncation, characters.
 pub const MAX_TEXT_CHARS: usize = 8000;
+/// Longest `find_mentions` result, characters; samples are dropped until the
+/// per-video table fits.
+pub const MAX_MENTION_CHARS: usize = 24_000;
+/// `search` returns at most this many hits from one video unless told
+/// otherwise (or when the search is scoped to a single video).
+pub const DEFAULT_PER_VIDEO_K: usize = 3;
 
 /// What tools need.
 pub struct ToolContext {
@@ -81,13 +87,41 @@ pub fn specs(with_describe: bool) -> Vec<ToolSpec> {
     let mut v = vec![
         ToolSpec {
             name: "search".into(),
-            description: "Hybrid search over transcripts, on-screen text, descriptions and frames. Returns ranked time ranges with evidence. Use precise queries; call several times with different phrasings.".into(),
+            description: "Hybrid search over transcripts, on-screen text, descriptions and frames. Returns ranked time ranges with evidence, spread across videos (at most per_video_k hits per video). Use precise queries; call several times with different phrasings. For 'which videos mention X' questions use find_mentions instead: it is exhaustive, search is not.".into(),
             parameters: json!({"type":"object","properties":{
                 "query":{"type":"string","description":"What to look for."},
                 "k":{"type":"integer","minimum":1,"maximum":20,"default":8},
                 "video_id":{"type":"string","description":"Restrict to one video id."},
-                "kind":{"type":"string","enum":["transcript","ocr","description","frame"],"description":"Restrict to one evidence kind. 'frame' searches pixels with the query text."}
+                "kind":{"type":"string","enum":["transcript","ocr","description","frame"],"description":"Restrict to one evidence kind. 'frame' searches pixels with the query text."},
+                "per_video_k":{"type":"integer","minimum":1,"maximum":20,"default":3,"description":"Max hits from any one video; raise it to go deep into one video."}
             },"required":["query"]}),
+        },
+        ToolSpec {
+            name: "find_mentions".into(),
+            description: "Exhaustive scan of the whole index (or the given videos) for words or phrases: every transcript segment, on-screen text and description containing a term, grouped by video with counts per kind and the earliest hits with timestamps. Deterministic and cheap; the right tool for 'which videos mention X', 'find all', 'list every', 'how many videos'. Speech recognition misspells names, so pass spelling variants as separate terms (e.g. [\"LoRA\", \"Laura\"], [\"DeepSeek\", \"deep seek\"]). Every video listed has a real hit; confirm context with get_transcript when a term is ambiguous.".into(),
+            parameters: json!({"type":"object","properties":{
+                "terms":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":12,"description":"Words or phrases; each is matched exactly on word boundaries, case-insensitively."},
+                "prefix":{"type":"boolean","default":false,"description":"Also match longer words starting with the term's last word (agent -> agents, agentic)."},
+                "kinds":{"type":"array","items":{"type":"string","enum":["transcript","ocr","description"]},"description":"Restrict to evidence kinds; default all three."},
+                "video_ids":{"type":"array","items":{"type":"string"},"description":"Restrict to these video ids."},
+                "per_video":{"type":"integer","minimum":0,"maximum":10,"default":3,"description":"Earliest hits to return per video (0 = counts only)."}
+            },"required":["terms"]}),
+        },
+        ToolSpec {
+            name: "count_mentions".into(),
+            description: "Count how often terms occur across the library, from the index's transcripts and on-screen text: per term, the number of matching transcript segments, on-screen lines and descriptions, and the number of videos with at least one hit; optionally broken down per video or per channel. Use for 'which topic is discussed most', 'how often', rankings and totals. Quote counts as approximate and say they come from transcripts.".into(),
+            parameters: json!({"type":"object","properties":{
+                "terms":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":12,"description":"Words or phrases to count; add spelling variants as separate terms."},
+                "group_by":{"type":"string","enum":["library","video","channel"],"default":"library"},
+                "prefix":{"type":"boolean","default":false,"description":"Also count longer words starting with the term's last word."},
+                "kinds":{"type":"array","items":{"type":"string","enum":["transcript","ocr","description"]}},
+                "video_ids":{"type":"array","items":{"type":"string"}}
+            },"required":["terms"]}),
+        },
+        ToolSpec {
+            name: "library_stats".into(),
+            description: "Facts about the library as a whole: number of videos, total duration, channels with their video counts and durations, and every video's id, title, channel, duration and publication date. Use for 'how many videos/talks', 'which channels', 'how long'.".into(),
+            parameters: json!({"type":"object","properties":{}}),
         },
         ToolSpec {
             name: "list_videos".into(),
@@ -202,6 +236,9 @@ async fn video(ctx: &ToolContext, id: VideoId) -> std::result::Result<Video, Str
 pub async fn execute(ctx: &ToolContext, call: &ToolCall) -> Result<ToolOutput> {
     let r = match call.name.as_str() {
         "search" => tool_search(ctx, &call.args).await,
+        "find_mentions" => tool_find_mentions(ctx, &call.args).await,
+        "count_mentions" => tool_count_mentions(ctx, &call.args).await,
+        "library_stats" => tool_library_stats(ctx).await,
         "list_videos" => tool_list_videos(ctx).await,
         "timeline" => tool_timeline(ctx, &call.args).await,
         "get_transcript" => tool_window(ctx, &call.args, Kind::Transcript).await,
@@ -243,12 +280,23 @@ async fn tool_search(ctx: &ToolContext, args: &Value) -> ToolResult {
         Some("frame") => vec![Kind::Frame],
         _ => vec![],
     };
+    // A single-video search wants depth, not spread.
+    let per_video_k = if videos.len() == 1 {
+        None
+    } else {
+        Some(
+            args.get("per_video_k")
+                .and_then(|v| v.as_u64())
+                .map_or(DEFAULT_PER_VIDEO_K, |v| v.clamp(1, 20) as usize),
+        )
+    };
     let req = SearchRequest {
         query: query.clone(),
         videos,
         kinds,
         k,
         text_only: false,
+        per_video_k,
     };
     let resp = vi_query::search(ctx.storage.as_ref(), Some(&ctx.providers), &req)
         .await
@@ -275,6 +323,364 @@ async fn tool_search(ctx: &ToolContext, args: &Value) -> ToolResult {
     Ok(ToolOutput {
         content: json!({"query": query, "hits": hits, "index_state": resp.index_state}).to_string(),
         summary: format!("{} hits for \"{query}\"", resp.hits.len()),
+        ..ToolOutput::default()
+    })
+}
+
+
+fn terms_arg(args: &Value) -> std::result::Result<Vec<String>, String> {
+    let terms: Vec<String> = match args.get("terms") {
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(|t| t.as_str())
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect(),
+        Some(Value::String(t)) if !t.trim().is_empty() => vec![t.trim().to_string()],
+        _ => Vec::new(),
+    };
+    if terms.is_empty() {
+        return Err("terms is required: a list of words or phrases (add spelling variants)".into());
+    }
+    if terms.len() > 12 {
+        return Err("at most 12 terms per call".into());
+    }
+    Ok(terms)
+}
+
+fn text_kinds_arg(args: &Value) -> std::result::Result<Vec<Kind>, String> {
+    let mut out = Vec::new();
+    for k in args
+        .get("kinds")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+    {
+        match k.as_str() {
+            Some("transcript") => out.push(Kind::Transcript),
+            Some("ocr") => out.push(Kind::Ocr),
+            Some("description") => out.push(Kind::Description),
+            other => {
+                return Err(format!(
+                    "unknown kind {other:?}; expected transcript, ocr or description"
+                ))
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Videos a library-wide tool looks at: `video_ids` (or `video_id`) from the
+/// arguments, else the context's restriction, else the whole index.
+fn scope_arg(ctx: &ToolContext, args: &Value) -> std::result::Result<Vec<VideoId>, String> {
+    let mut ids = Vec::new();
+    for v in args
+        .get("video_ids")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str())
+        .chain(arg_str(args, "video_id"))
+    {
+        ids.push(VideoId::parse(v).map_err(|_| format!("'{v}' is not a video id"))?);
+    }
+    if ids.is_empty() {
+        ids = ctx.videos.clone();
+    }
+    Ok(ids)
+}
+
+/// Videos in scope, for "M of K videos" figures and channel sizes.
+async fn scoped_videos(
+    ctx: &ToolContext,
+    scope: &[VideoId],
+) -> std::result::Result<Vec<Video>, String> {
+    let all = ctx.storage.list_videos().await.map_err(|e| e.to_string())?;
+    Ok(all
+        .into_iter()
+        .filter(|v| scope.is_empty() || scope.contains(&v.id))
+        .collect())
+}
+
+fn kind_name(k: Kind) -> &'static str {
+    match k {
+        Kind::Transcript => "transcript",
+        Kind::Ocr => "ocr",
+        Kind::Description => "description",
+        Kind::Segment => "segment",
+        Kind::Frame => "frame",
+    }
+}
+
+fn round1(secs: f64) -> f64 {
+    (secs * 10.0).round() / 10.0
+}
+
+const MENTION_NOTE: &str = "Counts are index rows containing the term: transcript segments (speech, as recognised by ASR), distinct on-screen text lines per minute (OCR) and stored descriptions. ASR misspells names; add variants as extra terms. Cite hits as [[cite:VIDEO_ID:T0-T1]].";
+
+async fn tool_find_mentions(ctx: &ToolContext, args: &Value) -> ToolResult {
+    let terms = terms_arg(args)?;
+    let scope = scope_arg(ctx, args)?;
+    let kinds = text_kinds_arg(args)?;
+    let per_video = args
+        .get("per_video")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(3)
+        .clamp(0, 10) as usize;
+    let prefix = args
+        .get("prefix")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let found = ctx
+        .storage
+        .find_mentions(&MentionQuery {
+            terms: terms.clone(),
+            videos: scope.clone(),
+            kinds,
+            prefix,
+            samples_per_video: per_video,
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    let searched = scoped_videos(ctx, &scope).await?.len();
+    let total: u64 = found.iter().map(|v| v.total()).sum();
+    // Shrink the samples until the table fits the size cap.
+    let mut per = per_video;
+    loop {
+        let rows: Vec<Value> = found
+            .iter()
+            .map(|v| {
+                let mut counts = serde_json::Map::new();
+                for c in &v.counts {
+                    let e = counts
+                        .entry(kind_name(c.kind))
+                        .or_insert(Value::from(0u64));
+                    *e = Value::from(e.as_u64().unwrap_or(0) + c.count);
+                }
+                let first: Vec<Value> = v
+                    .samples
+                    .iter()
+                    .take(per)
+                    .map(|h| {
+                        json!({
+                            "kind": kind_name(h.kind),
+                            "t0": round1(h.t0.as_secs_f64()),
+                            "t1": round1(h.t1.as_secs_f64()),
+                            "term": h.term,
+                            "text": h.text.chars().take(160).collect::<String>(),
+                        })
+                    })
+                    .collect();
+                json!({
+                    "video_id": v.video_id.to_string(),
+                    "title": v.title,
+                    "counts": counts,
+                    "total": v.total(),
+                    "first": first,
+                })
+            })
+            .collect();
+        let content = json!({
+            "terms": terms,
+            "prefix": prefix,
+            "videos_searched": searched,
+            "videos_with_hits": found.len(),
+            "total_hits": total,
+            "videos": rows,
+            "note": MENTION_NOTE,
+        })
+        .to_string();
+        if content.len() <= MAX_MENTION_CHARS || per == 0 {
+            return Ok(ToolOutput {
+                content,
+                summary: format!(
+                    "{} of {} videos mention {} ({} hits)",
+                    found.len(),
+                    searched,
+                    terms.join(" / "),
+                    total
+                ),
+                ..ToolOutput::default()
+            });
+        }
+        per -= 1;
+    }
+}
+
+async fn tool_count_mentions(ctx: &ToolContext, args: &Value) -> ToolResult {
+    let terms = terms_arg(args)?;
+    let scope = scope_arg(ctx, args)?;
+    let kinds = text_kinds_arg(args)?;
+    let prefix = args
+        .get("prefix")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let group_by = arg_str(args, "group_by").unwrap_or("library");
+    if !matches!(group_by, "library" | "video" | "channel") {
+        return Err(format!(
+            "group_by must be library, video or channel, not '{group_by}'"
+        ));
+    }
+    let found = ctx
+        .storage
+        .find_mentions(&MentionQuery {
+            terms: terms.clone(),
+            videos: scope.clone(),
+            kinds,
+            prefix,
+            samples_per_video: 0,
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    let videos = scoped_videos(ctx, &scope).await?;
+    let channel_of = |c: &Option<String>| c.clone().unwrap_or_else(|| "unknown".into());
+
+    // Per term: rows per kind, total, and videos with at least one hit.
+    let per_term: Vec<Value> = terms
+        .iter()
+        .map(|t| {
+            let mut by_kind = serde_json::Map::new();
+            let mut total = 0u64;
+            let mut with = 0usize;
+            for v in &found {
+                let mut any = false;
+                for c in v.counts.iter().filter(|c| &c.term == t) {
+                    any = true;
+                    total += c.count;
+                    let e = by_kind
+                        .entry(kind_name(c.kind))
+                        .or_insert(Value::from(0u64));
+                    *e = Value::from(e.as_u64().unwrap_or(0) + c.count);
+                }
+                if any {
+                    with += 1;
+                }
+            }
+            json!({"term": t, "counts": by_kind, "total": total, "videos": with})
+        })
+        .collect();
+
+    let groups: Value = match group_by {
+        "video" => Value::Array(
+            found
+                .iter()
+                .map(|v| {
+                    let mut by_term = serde_json::Map::new();
+                    for c in &v.counts {
+                        let e = by_term
+                            .entry(c.term.clone())
+                            .or_insert(Value::from(0u64));
+                        *e = Value::from(e.as_u64().unwrap_or(0) + c.count);
+                    }
+                    json!({
+                        "video_id": v.video_id.to_string(),
+                        "title": v.title,
+                        "channel": v.channel,
+                        "total": v.total(),
+                        "by_term": by_term,
+                    })
+                })
+                .collect(),
+        ),
+        "channel" => {
+            let mut chans: std::collections::BTreeMap<String, (usize, usize, u64, serde_json::Map<String, Value>)> =
+                std::collections::BTreeMap::new();
+            for v in &videos {
+                chans.entry(channel_of(&v.channel)).or_default().0 += 1;
+            }
+            for v in &found {
+                let e = chans.entry(channel_of(&v.channel)).or_default();
+                e.1 += 1;
+                e.2 += v.total();
+                for c in &v.counts {
+                    let t = e.3.entry(c.term.clone()).or_insert(Value::from(0u64));
+                    *t = Value::from(t.as_u64().unwrap_or(0) + c.count);
+                }
+            }
+            let mut rows: Vec<(u64, Value)> = chans
+                .into_iter()
+                .map(|(name, (n, with, total, by_term))| {
+                    (
+                        total,
+                        json!({"channel": name, "videos": n, "videos_with_hits": with, "total": total, "by_term": by_term}),
+                    )
+                })
+                .collect();
+            rows.sort_by_key(|a| std::cmp::Reverse(a.0));
+            Value::Array(rows.into_iter().map(|(_, v)| v).collect())
+        }
+        _ => Value::Null,
+    };
+    let total: u64 = found.iter().map(|v| v.total()).sum();
+    let mut content = json!({
+        "terms": per_term,
+        "prefix": prefix,
+        "videos_searched": videos.len(),
+        "videos_with_hits": found.len(),
+        "total_hits": total,
+        "note": MENTION_NOTE,
+    });
+    if !groups.is_null() {
+        content[format!("by_{group_by}")] = groups;
+    }
+    Ok(ToolOutput {
+        content: content.to_string(),
+        summary: format!(
+            "{} hits for {} in {} of {} videos",
+            total,
+            terms.join(" / "),
+            found.len(),
+            videos.len()
+        ),
+        ..ToolOutput::default()
+    })
+}
+
+async fn tool_library_stats(ctx: &ToolContext) -> ToolResult {
+    let videos = scoped_videos(ctx, &ctx.videos).await?;
+    let total_secs: f64 = videos.iter().map(|v| v.duration.as_secs_f64()).sum();
+    let mut chans: std::collections::BTreeMap<String, (usize, f64)> =
+        std::collections::BTreeMap::new();
+    for v in &videos {
+        let e = chans
+            .entry(v.channel.clone().unwrap_or_else(|| "unknown".into()))
+            .or_default();
+        e.0 += 1;
+        e.1 += v.duration.as_secs_f64();
+    }
+    let mut channels: Vec<Value> = chans
+        .into_iter()
+        .map(|(name, (n, secs))| json!({"channel": name, "videos": n, "duration_secs": secs.round()}))
+        .collect();
+    channels.sort_by(|a, b| b["videos"].as_u64().cmp(&a["videos"].as_u64()));
+    let rows: Vec<Value> = videos
+        .iter()
+        .map(|v| {
+            json!({
+                "video_id": v.id.to_string(),
+                "title": v.title,
+                "channel": v.channel,
+                "duration_secs": v.duration.as_secs_f64().round(),
+                "published_at": v.published_at.map(|d| d.format("%Y-%m-%d").to_string()),
+                "index_state": v.index_state,
+            })
+        })
+        .collect();
+    Ok(ToolOutput {
+        content: json!({
+            "videos": videos.len(),
+            "total_duration_secs": total_secs.round(),
+            "total_duration": hms(total_secs),
+            "channels": channels,
+            "video_list": rows,
+        })
+        .to_string(),
+        summary: format!(
+            "{} videos, {} in {} channel(s)",
+            videos.len(),
+            hms(total_secs),
+            channels.len()
+        ),
         ..ToolOutput::default()
     })
 }

@@ -68,7 +68,8 @@ pub fn spec() -> Value {
             "query": {"type": "string"}, "k": {"type": "integer", "default": 10},
             "videos": {"type": "array", "items": {"type": "string"}},
             "kinds": {"type": "array", "items": {"type": "string", "enum": ["transcript", "ocr", "description", "frame"]}},
-            "text_only": {"type": "boolean", "default": false}}})),
+            "text_only": {"type": "boolean", "default": false},
+            "per_video_k": {"type": "integer", "description": "at most this many hits per video; unset means no cap"}}})),
         "responses": {"200": {"description": "hits, lists, grouping"}}}}));
     paths.insert("/v1/indexes/{index}/ask".into(), json!({"post": {"summary": "Agentic answer; SSE with Accept: text/event-stream (events: status, tool_call, tool_result, token, citation, done), else JSON", "tags": ["query"], "parameters": [index_param],
         "requestBody": json_body(json!({"type": "object", "required": ["question"], "properties": {

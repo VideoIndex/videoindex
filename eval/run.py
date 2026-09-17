@@ -103,6 +103,8 @@ def run_corpus(cfg: dict, a) -> None:
                    "--policy", run.get("policy", "agent"), "--jobs", str(a.jobs), "--resume", "--out", str(out)]
             if run.get("model"):
                 cmd += ["--model", run["model"]]
+            if run.get("label"):
+                cmd += ["--label", run["label"]]
         print("$", " ".join(cmd), file=sys.stderr, flush=True)
         if not a.dry_run:
             subprocess.run(cmd, check=False)

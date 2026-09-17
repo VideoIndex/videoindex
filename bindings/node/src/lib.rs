@@ -57,6 +57,8 @@ pub struct SearchOptions {
     pub kinds: Option<Vec<String>>,
     /// BM25 only.
     pub text_only: Option<bool>,
+    /// At most this many hits per video.
+    pub per_video_k: Option<u32>,
 }
 
 /// Ask options.
@@ -180,6 +182,7 @@ impl Index {
             kinds,
             k: opts.k.unwrap_or(10).clamp(1, 100) as usize,
             text_only: opts.text_only.unwrap_or(false),
+            per_video_k: opts.per_video_k.map(|v| v.clamp(1, 100) as usize),
         };
         let resp = vi_query::search(self.storage.as_ref(), Some(&self.providers), &req)
             .await

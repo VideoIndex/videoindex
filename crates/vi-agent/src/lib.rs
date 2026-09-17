@@ -1,9 +1,10 @@
 //! `vi-agent`: the agentic loop from `docs/06-query-and-agents.md`.
 //!
-//! [`Agent::ask`] streams [`AskEvent`]s: it searches first, lets a
-//! tool-using LLM decide whether to read transcript or OCR, look at pixels
-//! (`view`), or describe a range with the VLM, and composes an answer with
-//! inline citations, all under an [`AskBudget`]. Every tool is read-only
+//! [`Agent::ask`] streams [`AskEvent`]s: it searches first (or scans the
+//! whole index with `find_mentions` / `count_mentions` for library-wide
+//! questions), lets a tool-using LLM decide whether to read transcript or
+//! OCR, look at pixels (`view`), or describe a range with the VLM, and
+//! composes an answer with inline citations, all under an [`AskBudget`]. Every tool is read-only
 //! against the index and the media; [`tools`] is the same set the MCP server
 //! exposes.
 
