@@ -76,17 +76,17 @@ Packaging: `npm install @videoindex/core` with optional platform packages holdin
 ## CLI
 
 ```
-vi init  <index-dir>                            create an index
-vi acquire <source>... [--out DIR]              download/copy sources into the media cache (yt-dlp for video sites)
-vi index <index-dir> <source>... [--policy P] [--budget ...]   acquire + index, streams progress
-vi search <index-dir> "<query>" [--k N] [--json]
-vi ask   <index-dir> "<question>" [--budget ...] [--json]      streams answer with [HH:MM:SS] citations
-vi view  <index-dir> <video-id> --t0 .. --t1 .. --fps .. -o grid.png
-vi timeline <index-dir> <video-id>
-vi status <index-dir>                            videos, states, sizes, costs
-vi serve [--index-root DIR] [--bind 0.0.0.0:8080] [--mcp]
-vi eval  <config.toml>                          runs the eval harness (shells to Python in eval/)
-vi doctor                                       checks ffmpeg, hardware decode, yt-dlp, ONNX providers, GPU
+vidx init  <index-dir>                            create an index
+vidx acquire <source>... [--out DIR]              download/copy sources into the media cache (yt-dlp for video sites)
+vidx index <index-dir> <source>... [--policy P] [--budget ...]   acquire + index, streams progress
+vidx search <index-dir> "<query>" [--k N] [--json]
+vidx ask   <index-dir> "<question>" [--budget ...] [--json]      streams answer with [HH:MM:SS] citations
+vidx view  <index-dir> <video-id> --t0 .. --t1 .. --fps .. -o grid.png
+vidx timeline <index-dir> <video-id>
+vidx status <index-dir>                            videos, states, sizes, costs
+vidx serve [--index-root DIR] [--bind 0.0.0.0:8080] [--mcp]
+vidx eval  <config.toml>                          runs the eval harness (shells to Python in eval/)
+vidx doctor                                       checks ffmpeg, hardware decode, yt-dlp, ONNX providers, GPU
 ```
 
 All commands take `--config videoindex.toml` and `--json` for machine-readable output. Exit codes are stable.
@@ -114,7 +114,7 @@ Base path `/v1`. JSON in, JSON or SSE out. OpenAPI document served at `/v1/opena
 
 Auth: bearer API keys (`Authorization: Bearer <key>` or `X-API-Key`). Hosted mode adds tenants, quotas per key, and usage records. Self-hosted mode can run with auth disabled on localhost.
 
-Status (2026-09-12): implemented in `vi-server` and started with `vi serve`. Indexes live under `server.index_root` as `<id>.vidx` and open lazily; `POST /v1/indexes` creates one. Blobs are addressed per index (`/v1/indexes/{id}/blobs/{key}`), MCP per index (`/v1/indexes/{id}/mcp`) or over `server.default_index` (`/v1/mcp`). `ask` and job progress stream as SSE when the request carries `Accept: text/event-stream` and return JSON otherwise. `server.api_keys` turns authentication on; `server.daily_cost_cap_usd` caps each key's provider spend per UTC day (429 past the cap), which is how the public demo key is bounded. `/metrics` is Prometheus text produced without a metrics crate. The MCP endpoint is the stateless streamable-HTTP profile: JSON-RPC 2.0 over POST, notifications answered with 202, no server-initiated stream (GET returns 405); tools are the agent's tools plus `index_state` and `ask`.
+Status (2026-09-12): implemented in `vi-server` and started with `vidx serve`. Indexes live under `server.index_root` as `<id>.vidx` and open lazily; `POST /v1/indexes` creates one. Blobs are addressed per index (`/v1/indexes/{id}/blobs/{key}`), MCP per index (`/v1/indexes/{id}/mcp`) or over `server.default_index` (`/v1/mcp`). `ask` and job progress stream as SSE when the request carries `Accept: text/event-stream` and return JSON otherwise. `server.api_keys` turns authentication on; `server.daily_cost_cap_usd` caps each key's provider spend per UTC day (429 past the cap), which is how the public demo key is bounded. `/metrics` is Prometheus text produced without a metrics crate. The MCP endpoint is the stateless streamable-HTTP profile: JSON-RPC 2.0 over POST, notifications answered with 202, no server-initiated stream (GET returns 405); tools are the agent's tools plus `index_state` and `ask`.
 
 ## Configuration file
 
@@ -126,3 +126,4 @@ One `videoindex.toml` shared by all surfaces: providers and roles as in [07-mode
 - The index schema version is independent of the package version; readers refuse newer schemas and migrate older ones.
 - Event types in `ask` streams are additive; consumers must ignore unknown types.
 - The MCP tool set and the HTTP API are versioned under `/v1`.
+- The command-line tool is `vidx`. It was called `vi` until 2026-09-17 and was renamed so it no longer shadows the `vi` editor on machines that have both on `PATH`; subcommands, flags and exit codes did not change.

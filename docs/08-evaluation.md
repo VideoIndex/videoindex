@@ -22,7 +22,7 @@ eval/
     lvbench.py        loader: questions, options, answers, video ids, task type
     minerva.py
     onehour_videoqa.py
-    acquire.py        maps benchmark video ids to Sources, drives `vi acquire`
+    acquire.py        maps benchmark video ids to Sources, drives `vidx acquire`
   runners/
     index.py          builds indexes per policy config, reuses caches
     answer.py         runs `ask` per question with a fixed budget, records everything
