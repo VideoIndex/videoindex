@@ -2,8 +2,9 @@
 //! and `POST /v1/indexes/{index}/mcp`. Stateless: every request carries what
 //! it needs, `GET` (server-initiated streams) is not offered, and
 //! notifications are acknowledged with 202. Tools are the agent's own
-//! (`search`, `list_videos`, `timeline`, `get_transcript`, `get_ocr`,
-//! `get_descriptions`, `view`, `describe`) plus `index_state` and `ask`.
+//! (`search`, `find_mentions`, `count_mentions`, `library_stats`,
+//! `list_videos`, `timeline`, `get_transcript`, `get_ocr`, `get_descriptions`,
+//! `view`, `describe`) plus `index_state` and `ask`.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -249,6 +250,10 @@ async fn call_tool(
                     .map(|s| vec![s.to_string()])
                     .unwrap_or_default(),
                 text_only: false,
+                per_video_k: args
+                    .get("per_video_k")
+                    .and_then(Value::as_u64)
+                    .map(|v| v as usize),
             };
             if body.query.is_empty() {
                 return Err(ApiError::bad_request("search needs a query"));

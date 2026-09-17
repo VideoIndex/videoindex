@@ -7,6 +7,8 @@ export interface SearchOptions {
   videos?: string[];
   kinds?: Array<"transcript" | "ocr" | "description" | "frame">;
   textOnly?: boolean;
+  /** At most this many hits per video. */
+  perVideoK?: number;
 }
 export interface AskOptions {
   videos?: string[];

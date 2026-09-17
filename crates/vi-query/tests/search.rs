@@ -201,6 +201,33 @@ async fn fuses_kinds_and_groups_by_chapter() {
 }
 
 #[tokio::test]
+async fn per_video_k_caps_hits_from_one_video() {
+    let dir = tempfile::tempdir().unwrap();
+    let idx = EmbeddedIndex::create(&dir.path().join("q.vidx")).unwrap();
+    let (vid, _) = seed(&idx).await;
+    // Two chapters of the same video match "retrieval".
+    let all = search(&idx, None, &SearchRequest::new("retrieval", 10))
+        .await
+        .unwrap();
+    assert_eq!(all.hits.len(), 2);
+    assert!(all.hits.iter().all(|h| h.video_id == vid));
+    let capped = search(
+        &idx,
+        None,
+        &SearchRequest {
+            per_video_k: Some(1),
+            ..SearchRequest::new("retrieval", 10)
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(capped.hits.len(), 1);
+    // The cap keeps the video's best hit.
+    assert_eq!(capped.hits[0].t0, all.hits[0].t0);
+    assert_eq!(capped.hits[0].score, all.hits[0].score);
+}
+
+#[tokio::test]
 async fn falls_back_to_windows_without_chapters() {
     let dir = tempfile::tempdir().unwrap();
     let idx = EmbeddedIndex::create(&dir.path().join("q.vidx")).unwrap();

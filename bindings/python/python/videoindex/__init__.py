@@ -148,8 +148,9 @@ class Policy:
     ``Index.ask``. ``next_step(state)`` sees ``question``, ``steps`` (each
     ``{"tool", "args", "result"}``) and ``tool_calls_left``. Return
     ``{"tool": name, "args": {...}}`` to call a tool (``search``,
-    ``list_videos``, ``timeline``, ``get_transcript``, ``get_ocr``,
-    ``get_descriptions``, ``view``, ``describe``) or ``None`` to have the
+    ``find_mentions``, ``count_mentions``, ``library_stats``, ``list_videos``,
+    ``timeline``, ``get_transcript``, ``get_ocr``, ``get_descriptions``,
+    ``view``, ``describe``) or ``None`` to have the
     LLM write the answer from the observations so far.
     """
 

@@ -28,6 +28,9 @@ pub struct Args {
     /// BM25 only: skip the text-vector and image-vector lists.
     #[arg(long)]
     pub text_only: bool,
+    /// At most this many hits per video (spreads results across a library).
+    #[arg(long)]
+    pub per_video_k: Option<usize>,
 }
 
 fn parse_kind(s: &str) -> std::result::Result<Kind, String> {
@@ -56,6 +59,7 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
         kinds: args.kinds.clone(),
         k: args.k,
         text_only: args.text_only,
+        per_video_k: args.per_video_k,
     };
     let started = std::time::Instant::now();
     let resp = search(&idx, Some(&providers), &req).await?;

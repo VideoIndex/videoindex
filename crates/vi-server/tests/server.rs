@@ -300,6 +300,9 @@ async fn index_job_search_timeline_blobs_and_mcp() {
         .collect();
     for n in [
         "search",
+        "find_mentions",
+        "count_mentions",
+        "library_stats",
         "list_videos",
         "timeline",
         "get_transcript",
