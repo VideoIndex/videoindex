@@ -30,6 +30,9 @@ pub struct ViewRequest {
     pub cols: u32,
     /// Tile width in the grid.
     pub tile_width: u32,
+    /// Most frames in this grid (at most [`MAX_FRAMES`]); fps is lowered to
+    /// fit. Multi-window views use fewer frames per grid.
+    pub max_frames: usize,
 }
 
 impl Default for ViewRequest {
@@ -41,14 +44,17 @@ impl Default for ViewRequest {
             max_dim: 640,
             cols: 3,
             tile_width: 448,
+            max_frames: MAX_FRAMES,
         }
     }
 }
 
 impl ViewRequest {
     /// Clamp to the limits: window at most [`MAX_WINDOW_SECS`], frame count
-    /// at most [`MAX_FRAMES`] (lowering fps), inside the video.
+    /// at most `max_frames` (never above [`MAX_FRAMES`]; lowering fps), inside
+    /// the video.
     pub fn clamped(mut self, duration_secs: f64) -> Self {
+        self.max_frames = self.max_frames.clamp(1, MAX_FRAMES);
         self.t0 = self.t0.clamp(0.0, duration_secs.max(0.0));
         self.t1 = self
             .t1
@@ -60,8 +66,8 @@ impl ViewRequest {
             self.fps = 1.0;
         }
         let frames = (self.t1 - self.t0) * self.fps;
-        if frames > MAX_FRAMES as f64 {
-            self.fps = MAX_FRAMES as f64 / (self.t1 - self.t0);
+        if frames > self.max_frames as f64 {
+            self.fps = self.max_frames as f64 / (self.t1 - self.t0);
         }
         self
     }
@@ -109,7 +115,7 @@ pub async fn render_view(
     let mut frames: Vec<Arc<FrameBuffer>> = Vec::new();
     while let Some(f) = stream.next().await? {
         frames.push(f.to_owned_frame());
-        if frames.len() >= MAX_FRAMES {
+        if frames.len() >= req.max_frames {
             break;
         }
     }
@@ -194,5 +200,21 @@ mod tests {
         }
         .clamped(100.0);
         assert!(r.t0 <= 100.0 && r.t1 > r.t0);
+        // A lower frame cap lowers fps the same way.
+        let r = ViewRequest {
+            t0: 0.0,
+            t1: 60.0,
+            fps: 1.0,
+            max_frames: 12,
+            ..ViewRequest::default()
+        }
+        .clamped(3600.0);
+        assert!((r.t1 - r.t0) * r.fps <= 12.0 + 1e-9, "{r:?}");
+        let r = ViewRequest {
+            max_frames: 500,
+            ..ViewRequest::default()
+        }
+        .clamped(3600.0);
+        assert_eq!(r.max_frames, MAX_FRAMES);
     }
 }

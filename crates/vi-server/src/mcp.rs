@@ -287,7 +287,7 @@ async fn call_tool(
                 }
             }
             let mut content = vec![json!({"type": "text", "text": out.content})];
-            if let Some(img) = out.image {
+            for img in out.images {
                 let (mime, bytes) = match img {
                     ImageData::Encoded { mime, bytes } => (mime, bytes.to_vec()),
                     ImageData::Rgb8 { .. } => ("", Vec::new()),

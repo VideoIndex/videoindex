@@ -84,6 +84,10 @@ pub enum AskEvent {
         tool: String,
         /// Arguments.
         args: serde_json::Value,
+        /// Loop turn (1-based) that issued the call; calls sharing a turn
+        /// were requested in one model message and run concurrently.
+        #[serde(default)]
+        turn: u32,
     },
     /// A tool returned.
     ToolResult {
@@ -91,6 +95,12 @@ pub enum AskEvent {
         tool: String,
         /// One-line summary.
         summary: String,
+        /// Loop turn (1-based) that issued the call.
+        #[serde(default)]
+        turn: u32,
+        /// Wall time of the tool itself, milliseconds.
+        #[serde(default)]
+        ms: u64,
     },
     /// Answer text.
     Token {
@@ -271,7 +281,7 @@ impl Agent {
                 AskEvent::Citation {
                     video_id, t0, t1, ..
                 } => out.citations.push((video_id, t0, t1)),
-                AskEvent::ToolCall { tool, args } => out.tool_calls.push((tool, args)),
+                AskEvent::ToolCall { tool, args, .. } => out.tool_calls.push((tool, args)),
                 AskEvent::Done { partial, usage, .. } => {
                     out.partial = partial;
                     out.usage = usage;
@@ -378,6 +388,8 @@ async fn run(
     let mut reason: Option<String> = None;
     let mut steps: Vec<(ToolCall, String)> = Vec::new();
     let mut evidence: Vec<(VideoId, f64, f64, String)> = Vec::new();
+    // Loop turns: one per policy step or model turn; tool events carry it.
+    let mut turn_no: u32 = 0;
 
     let _ = tx
         .send(AskEvent::Status {
@@ -406,15 +418,16 @@ async fn run(
             _ => None,
         };
         if let Some(Step::Tool(call)) = policy_step {
-            let out = run_tool(&ctx, &call, &tx, usage, &mut evidence).await?;
+            turn_no += 1;
+            let out = run_tool(&ctx, &call, turn_no, &tx, usage, &mut evidence).await?;
             messages.push(Message::text(
                 Role::User,
                 format!("Result of {}({}):\n{}", call.name, call.args, out.content),
             ));
-            if let Some(img) = out.image {
+            if !out.images.is_empty() {
                 messages.push(Message {
                     role: Role::User,
-                    parts: vec![ContentPart::Image(img)],
+                    parts: out.images.into_iter().map(ContentPart::Image).collect(),
                 });
             }
             steps.push((call, out.summary));
@@ -435,17 +448,24 @@ async fn run(
             greq.tool_choice = ToolChoice::None;
         }
         greq.max_tokens = req.budget.max_answer_tokens.clamp(256, u32::MAX as u64) as u32;
-        if over.is_some() {
+        if let Some(why) = &over {
             greq.messages.push(Message::text(
                 Role::User,
-                "The budget for looking is exhausted. Answer now with what you have, and say what could not be checked.",
+                format!(
+                    "The budget for looking is exhausted ({why}) after {} tool call(s); no further calls are available. {LAST_TURN_RULE}",
+                    usage.tool_calls
+                ),
             ));
         } else if !allow_tools && history_has_tools {
             greq.messages.push(Message::text(
                 Role::User,
-                "No further tool calls are available in this turn. Write the answer now from the observations above, citing the timestamps you used; do not write tool calls.",
+                format!(
+                    "You have used {} of {} tool calls; no further calls are available. {LAST_TURN_RULE}",
+                    usage.tool_calls, req.budget.max_tool_calls
+                ),
             ));
         }
+        turn_no += 1;
         let turn = generate_turn(
             llm.as_ref(),
             greq,
@@ -565,21 +585,62 @@ async fn run(
             role: Role::Assistant,
             parts,
         });
+        // Announce every call, run them all at once, then record the results
+        // in call order so the history and the bookkeeping stay deterministic.
+        // `tools::execute` returns `Ok` with an error payload for tool errors
+        // and `Err` only for infrastructure failures, so `?` after the join
+        // is right. The call budget is a hard cap: calls past it are not run
+        // and get an error result instead, so every call in the history still
+        // has a result and the model sees the count.
+        let runnable = (tools_left as usize).min(turn.calls.len());
+        for call in &turn.calls[..runnable] {
+            let _ = tx
+                .send(AskEvent::ToolCall {
+                    tool: call.name.clone(),
+                    args: call.args.clone(),
+                    turn: turn_no,
+                })
+                .await;
+        }
+        let results = futures::future::join_all(turn.calls[..runnable].iter().map(|call| {
+            let ctx = &ctx;
+            async move {
+                let t = Instant::now();
+                let r = tools::execute(ctx, call).await;
+                (r, t.elapsed().as_millis() as u64)
+            }
+        }))
+        .await;
         let mut images = Vec::new();
+        let mut results = results.into_iter();
         for call in &turn.calls {
-            let out = run_tool(&ctx, call, &tx, usage, &mut evidence).await?;
+            // `results` holds one entry per runnable call, in call order.
+            let content = match results.next() {
+                Some((result, ms)) => {
+                    let out =
+                        record_tool_result(call, result?, turn_no, ms, &tx, usage, &mut evidence)
+                            .await;
+                    images.extend(out.images);
+                    steps.push((call.clone(), out.summary));
+                    out.content
+                }
+                None => {
+                    tracing::debug!(tool = %call.name, "call past the tool-call budget; not run");
+                    json!({"error": format!(
+                        "not run: the tool-call budget ({} of {}) is used up; answer from the observations you have",
+                        usage.tool_calls, req.budget.max_tool_calls
+                    )})
+                    .to_string()
+                }
+            };
             messages.push(Message {
                 role: Role::Tool,
                 parts: vec![ContentPart::ToolResult {
                     call_id: call.id.clone(),
                     name: call.name.clone(),
-                    content: out.content,
+                    content,
                 }],
             });
-            if let Some(img) = out.image {
-                images.push(img);
-            }
-            steps.push((call.clone(), out.summary));
         }
         if !images.is_empty() {
             messages.push(Message {
@@ -628,9 +689,17 @@ fn budget_exceeded(b: &AskBudget, u: &AskUsage, started: Instant) -> Option<Stri
     None
 }
 
+/// The instruction appended when the model must answer without more tools.
+/// Eight MINERVA answers at the cap were unparseable before it asked for a
+/// choice; naming the count stops the model from planning further calls.
+const LAST_TURN_RULE: &str = "Write the answer now from the observations above, citing the timestamps you used. If the question is multiple choice, pick the option best supported by the evidence and say what you could not check. Do not write tool calls.";
+
+/// Announce, execute and record one call (the fixed-policy path; the model
+/// path runs a turn's calls concurrently and records them in order).
 async fn run_tool(
     ctx: &ToolContext,
     call: &ToolCall,
+    turn: u32,
     tx: &mpsc::Sender<AskEvent>,
     usage: &mut AskUsage,
     evidence: &mut Vec<(VideoId, f64, f64, String)>,
@@ -639,9 +708,27 @@ async fn run_tool(
         .send(AskEvent::ToolCall {
             tool: call.name.clone(),
             args: call.args.clone(),
+            turn,
         })
         .await;
+    let t = Instant::now();
     let out = tools::execute(ctx, call).await?;
+    let ms = t.elapsed().as_millis() as u64;
+    Ok(record_tool_result(call, out, turn, ms, tx, usage, evidence).await)
+}
+
+/// Bookkeeping for one finished call: usage, evidence ranges (top-level
+/// `video_id/t0/t1`, `hits[]` and `windows[]`) for typed citations, and the
+/// `ToolResult` event.
+async fn record_tool_result(
+    call: &ToolCall,
+    out: tools::ToolOutput,
+    turn: u32,
+    ms: u64,
+    tx: &mpsc::Sender<AskEvent>,
+    usage: &mut AskUsage,
+    evidence: &mut Vec<(VideoId, f64, f64, String)>,
+) -> tools::ToolOutput {
     usage.tool_calls += 1;
     usage.cost_usd += out.cost_usd;
     usage.tokens_in += out.tokens_in;
@@ -664,29 +751,34 @@ async fn run_tool(
                 evidence.push((id, t0, t1, kind));
             }
         }
-        if let (Some(id), Some(t0), Some(t1)) = (
-            v["video_id"].as_str().and_then(|s| VideoId::parse(s).ok()),
-            v["t0"].as_f64(),
-            v["t1"].as_f64(),
-        ) {
-            let kind = v["kind"]
-                .as_str()
-                .unwrap_or(if call.name == "view" {
-                    "frame"
-                } else {
-                    "range"
-                })
-                .to_string();
-            evidence.push((id, t0, t1, kind));
+        let kind = v["kind"]
+            .as_str()
+            .unwrap_or(if call.name == "view" {
+                "frame"
+            } else {
+                "range"
+            })
+            .to_string();
+        if let Some(id) = v["video_id"].as_str().and_then(|s| VideoId::parse(s).ok()) {
+            if let (Some(t0), Some(t1)) = (v["t0"].as_f64(), v["t1"].as_f64()) {
+                evidence.push((id, t0, t1, kind.clone()));
+            }
+            for w in v["windows"].as_array().into_iter().flatten() {
+                if let (Some(t0), Some(t1)) = (w["t0"].as_f64(), w["t1"].as_f64()) {
+                    evidence.push((id, t0, t1, kind.clone()));
+                }
+            }
         }
     }
     let _ = tx
         .send(AskEvent::ToolResult {
             tool: call.name.clone(),
             summary: out.summary.clone(),
+            turn,
+            ms,
         })
         .await;
-    Ok(out)
+    out
 }
 
 /// Compact record of what the tools found, for the answer-from-notes fallback.

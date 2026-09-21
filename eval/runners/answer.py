@@ -69,7 +69,7 @@ def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question,
     ms = int((time.time() - t) * 1000)
     if proc.returncode != 0:
         return {"id": q.id, "status": "ask-failed", "error": proc.stderr[-400:], "ms": ms}
-    text, cites, tools, usage, partial = "", [], [], {}, False
+    text, cites, tools, calls, usage, partial = "", [], [], [], {}, False
     for line in proc.stdout.splitlines():
         try:
             ev = json.loads(line)
@@ -81,6 +81,14 @@ def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question,
             cites.append({"t0": ev["t0"], "t1": ev["t1"], "kind": ev.get("kind")})
         elif ev["type"] == "tool_call":
             tools.append(ev["tool"])
+            # One record per call: the loop turn that issued it (calls sharing
+            # a turn ran concurrently) and, once the result arrives, its wall time.
+            calls.append({"tool": ev["tool"], "turn": ev.get("turn"), "ms": None})
+        elif ev["type"] == "tool_result":
+            for c in calls:
+                if c["tool"] == ev["tool"] and c["ms"] is None and c["turn"] == ev.get("turn"):
+                    c["ms"] = ev.get("ms")
+                    break
         elif ev["type"] == "done":
             usage, partial = ev["usage"], ev["partial"]
     letter = parse_letter(text, q.letters, q.options)
@@ -89,7 +97,7 @@ def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question,
         "id": q.id, "status": "ok", "video_key": q.video_key, "task_types": q.task_types, "video_type": q.video_type,
         "answer": q.answer if known else None, "predicted": letter, "correct": (letter == q.answer) if known else None,
         "parsed": letter is not None, "kaggle_row": q.extra.get("kaggle_row"),
-        "text": text.strip()[-600:], "citations": cites, "tools": tools, "usage": usage, "partial": partial, "ms": ms,
+        "text": text.strip()[-600:], "citations": cites, "tools": tools, "calls": calls, "usage": usage, "partial": partial, "ms": ms,
         "time_reference": q.time_reference,
     }
 

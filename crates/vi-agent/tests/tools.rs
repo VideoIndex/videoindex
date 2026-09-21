@@ -1,5 +1,6 @@
 //! The library-wide tools (`find_mentions`, `count_mentions`,
-//! `library_stats`) and `search`'s per-video cap over a hand-built index.
+//! `library_stats`), `search`'s per-video cap and the multi-window text
+//! tools over a hand-built index.
 
 #![allow(clippy::unwrap_used)]
 
@@ -259,4 +260,63 @@ async fn search_spreads_hits_across_videos_unless_scoped() {
     )
     .await;
     assert_eq!(v["hits"].as_array().unwrap().len(), 5, "{v}");
+}
+
+#[tokio::test]
+async fn get_transcript_reads_several_windows_in_one_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let idx = Arc::new(EmbeddedIndex::create(&dir.path().join("t.vidx")).unwrap());
+    let (a, _b) = seed(&idx).await;
+    let ctx = ctx(idx);
+    // Three windows given out of order; the last two overlap and merge.
+    let (v, summary) = call(
+        &ctx,
+        "get_transcript",
+        json!({"video_id": a.to_string(), "windows": [
+            {"t0": 1390, "t1": 1420}, {"t0": 0, "t1": 30}, {"t0": 690, "t1": 720}, {"t0": 710, "t1": 800}
+        ]}),
+    )
+    .await;
+    assert_eq!(v["video_id"], a.to_string(), "{v}");
+    assert_eq!(v["kind"], "transcript");
+    assert!(v.get("t0").is_none(), "multi-window output has no top-level range: {v}");
+    let wins = v["windows"].as_array().unwrap();
+    assert_eq!(wins.len(), 3, "{v}");
+    assert_eq!(wins[0]["t0"], 0.0);
+    assert_eq!(wins[1]["t0"], 690.0);
+    assert_eq!(wins[1]["t1"], 800.0);
+    assert_eq!(wins[2]["t0"], 1390.0);
+    for w in wins {
+        assert_eq!(w["count"], 1, "{w}");
+    }
+    assert!(wins[0]["text"].as_str().unwrap().contains("theme of this talk"));
+    assert!(wins[1]["text"].as_str().unwrap().contains("call tools"));
+    assert!(wins[2]["text"].as_str().unwrap().contains("evaluation"));
+    assert!(summary.starts_with("3 windows, 3 transcript lines"), "{summary}");
+
+    // The single form keeps its flat shape.
+    let (v, summary) = call(
+        &ctx,
+        "get_transcript",
+        json!({"video_id": a.to_string(), "t0": 0, "t1": 30}),
+    )
+    .await;
+    assert_eq!(v["t0"], 0.0);
+    assert_eq!(v["count"], 1);
+    assert!(v.get("windows").is_none(), "{v}");
+    assert!(summary.starts_with("1 transcript lines"), "{summary}");
+
+    // Limits and bad windows come back as content.
+    let many: Vec<Value> = (0..7).map(|i| json!({"t0": i * 100, "t1": i * 100 + 10})).collect();
+    let (v, _) = call(&ctx, "get_ocr", json!({"video_id": a.to_string(), "windows": many})).await;
+    assert!(v["error"].as_str().unwrap().contains("at most 6 windows"), "{v}");
+    let (v, _) = call(
+        &ctx,
+        "get_ocr",
+        json!({"video_id": a.to_string(), "windows": [{"t0": 50, "t1": 40}]}),
+    )
+    .await;
+    assert!(v["error"].as_str().unwrap().contains("windows[0]"), "{v}");
+    let (v, _) = call(&ctx, "get_ocr", json!({"video_id": a.to_string(), "windows": []})).await;
+    assert!(v["error"].as_str().unwrap().contains("at least one"), "{v}");
 }

@@ -18,8 +18,15 @@ use vi_query::SearchRequest;
 
 use crate::view::{media_path, render_view, ts, ViewRequest};
 
-/// Longest text a tool returns before truncation, characters.
+/// Longest text a tool returns before truncation, characters; a multi-window
+/// call shares it across the windows.
 pub const MAX_TEXT_CHARS: usize = 8000;
+/// Most windows one `get_transcript` / `get_ocr` / `get_descriptions` call reads.
+pub const MAX_TEXT_WINDOWS: usize = 6;
+/// Most windows one `view` call renders (one grid each).
+pub const MAX_VIEW_WINDOWS: usize = 3;
+/// Frames per grid when a `view` covers several windows.
+pub const MULTI_VIEW_FRAMES: usize = 12;
 /// Longest `find_mentions` result, characters; samples are dropped until the
 /// per-video table fits.
 pub const MAX_MENTION_CHARS: usize = 24_000;
@@ -69,8 +76,9 @@ pub struct ToolOutput {
     pub content: String,
     /// One-line summary for the event stream.
     pub summary: String,
-    /// An image to show the model after the result (frame grids).
-    pub image: Option<ImageData>,
+    /// Images to show the model after the result (frame grids, one per
+    /// window), in order.
+    pub images: Vec<ImageData>,
     /// Provider spend inside the tool (`describe`).
     pub cost_usd: f64,
     /// Tokens used by the tool's own provider calls.
@@ -138,32 +146,27 @@ pub fn specs(with_describe: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "get_transcript".into(),
-            description: "Transcript text with timestamps for a time range of one video (seconds).".into(),
-            parameters: json!({"type":"object","properties":{
-                "video_id":{"type":"string"},"t0":{"type":"number"},"t1":{"type":"number"}
-            },"required":["video_id","t0","t1"]}),
+            description: format!("Transcript text with timestamps for one or more time ranges of one video (seconds). {WINDOWS_RULE}"),
+            parameters: text_window_params(),
         },
         ToolSpec {
             name: "get_ocr".into(),
-            description: "On-screen text (slides, captions, code) with timestamps for a time range of one video.".into(),
-            parameters: json!({"type":"object","properties":{
-                "video_id":{"type":"string"},"t0":{"type":"number"},"t1":{"type":"number"}
-            },"required":["video_id","t0","t1"]}),
+            description: format!("On-screen text (slides, captions, code) with timestamps for one or more time ranges of one video. {WINDOWS_RULE}"),
+            parameters: text_window_params(),
         },
         ToolSpec {
             name: "get_descriptions".into(),
-            description: "Stored visual descriptions for a time range of one video, when any exist.".into(),
-            parameters: json!({"type":"object","properties":{
-                "video_id":{"type":"string"},"t0":{"type":"number"},"t1":{"type":"number"}
-            },"required":["video_id","t0","t1"]}),
+            description: format!("Stored visual descriptions for one or more time ranges of one video, when any exist. {WINDOWS_RULE}"),
+            parameters: text_window_params(),
         },
         ToolSpec {
             name: "view".into(),
-            description: "Look at the pixels: decodes a time range (at most 120 s) at the given frame rate and returns a labelled frame grid image plus the transcript of the window. Costs decoding and image tokens; use after search has narrowed the range.".into(),
+            description: "Look at the pixels: decodes a time range (at most 120 s) at the given frame rate and returns a labelled frame grid image plus the transcript of the window. Several candidate moments in one call cost one tool call: pass windows=[{t0,t1},...] (up to 3, same video) instead of t0/t1 and get one grid per window (at most 12 frames each), images in window order. Costs decoding and image tokens; use after search has narrowed the range.".into(),
             parameters: json!({"type":"object","properties":{
                 "video_id":{"type":"string"},"t0":{"type":"number"},"t1":{"type":"number"},
-                "fps":{"type":"number","default":1,"description":"Frames per second; at most 16 frames per view."}
-            },"required":["video_id","t0","t1"]}),
+                "windows":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"t0":{"type":"number"},"t1":{"type":"number"}},"required":["t0","t1"]},"description":"Up to 3 time ranges of the same video, one grid each; use instead of t0/t1."},
+                "fps":{"type":"number","default":1,"description":"Frames per second; at most 16 frames per view (12 per window when several)."}
+            },"required":["video_id"]}),
         },
     ];
     if with_describe {
@@ -177,6 +180,15 @@ pub fn specs(with_describe: bool) -> Vec<ToolSpec> {
         });
     }
     v
+}
+
+const WINDOWS_RULE: &str = "Several ranges in one call cost one tool call: pass windows=[{t0,t1},...] (up to 6, same video) instead of t0/t1 and get one entry per window, in time order.";
+
+fn text_window_params() -> Value {
+    json!({"type":"object","properties":{
+        "video_id":{"type":"string"},"t0":{"type":"number"},"t1":{"type":"number"},
+        "windows":{"type":"array","minItems":1,"maxItems":6,"items":{"type":"object","properties":{"t0":{"type":"number"},"t1":{"type":"number"}},"required":["t0","t1"]},"description":"Up to 6 time ranges of the same video; use instead of t0/t1."}
+    },"required":["video_id"]})
 }
 
 fn arg_str<'a>(args: &'a Value, k: &str) -> Option<&'a str> {
@@ -209,6 +221,41 @@ fn range_args(args: &Value, duration: f64) -> std::result::Result<(f64, f64), St
         return Err(format!("t1 ({t1}) must be greater than t0 ({t0})"));
     }
     Ok((t0.clamp(0.0, duration), t1.min(duration.max(t0 + 0.5))))
+}
+
+/// Time windows of one call: `windows: [{t0, t1}]` (1 to `max`), else the
+/// single `t0`/`t1`. Sorted by start, overlapping or touching windows
+/// merged, each clamped to the video.
+fn windows_arg(
+    args: &Value,
+    duration: f64,
+    max: usize,
+) -> std::result::Result<Vec<(f64, f64)>, String> {
+    let Some(list) = args.get("windows").filter(|w| !w.is_null()) else {
+        return Ok(vec![range_args(args, duration)?]);
+    };
+    let list = list
+        .as_array()
+        .ok_or("windows must be a list of {t0, t1} objects")?;
+    if list.is_empty() {
+        return Err("windows must hold at least one {t0, t1}".into());
+    }
+    if list.len() > max {
+        return Err(format!("at most {max} windows per call (got {})", list.len()));
+    }
+    let mut wins = Vec::with_capacity(list.len());
+    for (i, w) in list.iter().enumerate() {
+        wins.push(range_args(w, duration).map_err(|e| format!("windows[{i}]: {e}"))?);
+    }
+    wins.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut merged: Vec<(f64, f64)> = Vec::with_capacity(wins.len());
+    for (t0, t1) in wins {
+        match merged.last_mut() {
+            Some(last) if t0 <= last.1 => last.1 = last.1.max(t1),
+            _ => merged.push((t0, t1)),
+        }
+    }
+    Ok(merged)
 }
 
 fn hms(secs: f64) -> String {
@@ -746,16 +793,20 @@ async fn tool_timeline(ctx: &ToolContext, args: &Value) -> ToolResult {
     })
 }
 
-async fn tool_window(ctx: &ToolContext, args: &Value, kind: Kind) -> ToolResult {
-    let id = video_arg(ctx, args)?;
-    let v = video(ctx, id).await?;
-    let (t0, t1) = range_args(args, v.duration.as_secs_f64())?;
+/// Lines of one kind in one window, timestamped, in time order.
+async fn window_lines(
+    ctx: &ToolContext,
+    id: VideoId,
+    t0: f64,
+    t1: f64,
+    kind: Kind,
+) -> std::result::Result<(Vec<String>, &'static str), String> {
     let w = ctx
         .storage
         .time_window(id, ts(t0), ts(t1), &[kind])
         .await
         .map_err(|e| e.to_string())?;
-    let (lines, label): (Vec<String>, &str) = match kind {
+    Ok(match kind {
         Kind::Transcript => (
             w.transcript
                 .iter()
@@ -778,17 +829,58 @@ async fn tool_window(ctx: &ToolContext, args: &Value, kind: Kind) -> ToolResult 
             w.descriptions.iter().map(|d| d.text.clone()).collect(),
             "descriptions",
         ),
-    };
-    let n = lines.len();
-    let text = truncate(lines.join("\n"), MAX_TEXT_CHARS);
+    })
+}
+
+/// `get_transcript`, `get_ocr`, `get_descriptions`. A single `t0`/`t1` keeps
+/// the flat `{video_id, t0, t1, kind, count, text}` shape; `windows` returns
+/// `{video_id, kind, windows: [{t0, t1, count, text}]}` with the text cap
+/// shared across windows. Either way it is one tool call.
+async fn tool_window(ctx: &ToolContext, args: &Value, kind: Kind) -> ToolResult {
+    let id = video_arg(ctx, args)?;
+    let v = video(ctx, id).await?;
+    let wins = windows_arg(args, v.duration.as_secs_f64(), MAX_TEXT_WINDOWS)?;
+    let multi = args.get("windows").is_some_and(|w| !w.is_null());
+    let cap = MAX_TEXT_CHARS / wins.len();
+    let mut rows = Vec::with_capacity(wins.len());
+    let mut total = 0usize;
+    let mut label = "transcript";
+    for &(t0, t1) in &wins {
+        let (lines, l) = window_lines(ctx, id, t0, t1, kind).await?;
+        label = l;
+        let n = lines.len();
+        total += n;
+        let text = truncate(lines.join("\n"), cap);
+        rows.push(json!({
+            "t0": t0, "t1": t1, "count": n,
+            "text": if text.is_empty() { format!("(no {label} in this range)") } else { text },
+        }));
+    }
+    if !multi {
+        let mut row = rows.pop().unwrap_or_default();
+        row["video_id"] = Value::String(id.to_string());
+        row["kind"] = Value::String(label.into());
+        let (t0, t1) = wins[0];
+        return Ok(ToolOutput {
+            content: row.to_string(),
+            summary: format!("{total} {label} lines in [{}, {}]", hms(t0), hms(t1)),
+            ..ToolOutput::default()
+        });
+    }
     Ok(ToolOutput {
         content: json!({
-            "video_id": id.to_string(), "t0": t0, "t1": t1, "kind": label,
-            "count": n,
-            "text": if text.is_empty() { format!("(no {label} in this range)") } else { text },
+            "video_id": id.to_string(), "kind": label,
+            "windows": rows,
         })
         .to_string(),
-        summary: format!("{n} {label} lines in [{}, {}]", hms(t0), hms(t1)),
+        summary: format!(
+            "{} windows, {total} {label} lines ({})",
+            wins.len(),
+            wins.iter()
+                .map(|(a, b)| format!("[{}, {}]", hms(*a), hms(*b)))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
         ..ToolOutput::default()
     })
 }
@@ -799,6 +891,7 @@ async fn grid_for(
     t0: f64,
     t1: f64,
     fps: f64,
+    max_frames: usize,
 ) -> std::result::Result<(crate::view::ViewResult, BlobKey), String> {
     let cols = ctx
         .config
@@ -812,6 +905,7 @@ async fn grid_for(
         t1,
         fps,
         cols,
+        max_frames,
         ..ViewRequest::default()
     };
     let view = render_view(&ctx.config.media.worker, v, req)
@@ -825,7 +919,7 @@ async fn grid_for(
     Ok((view, key))
 }
 
-async fn transcript_text(ctx: &ToolContext, id: VideoId, t0: f64, t1: f64) -> String {
+async fn transcript_text(ctx: &ToolContext, id: VideoId, t0: f64, t1: f64, cap: usize) -> String {
     match ctx
         .storage
         .time_window(id, ts(t0), ts(t1), &[Kind::Transcript])
@@ -837,7 +931,7 @@ async fn transcript_text(ctx: &ToolContext, id: VideoId, t0: f64, t1: f64) -> St
                 .map(|s| format!("[{}] {}", hms(s.t0.as_secs_f64()), s.text))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            3000,
+            cap,
         ),
         Err(_) => String::new(),
     }
@@ -849,25 +943,70 @@ async fn tool_view(ctx: &ToolContext, args: &Value) -> ToolResult {
     if media_path(&v).filter(|p| p.is_file()).is_none() {
         return Err("the media file for this video is not on this machine; use get_transcript, get_ocr and search instead".into());
     }
-    let (t0, t1) = range_args(args, v.duration.as_secs_f64())?;
+    let wins = windows_arg(args, v.duration.as_secs_f64(), MAX_VIEW_WINDOWS)?;
+    let multi = args.get("windows").is_some_and(|w| !w.is_null());
     let fps = arg_f64(args, "fps").unwrap_or(1.0);
-    let (view, key) = grid_for(ctx, &v, t0, t1, fps).await?;
-    let transcript = transcript_text(ctx, id, t0, t1).await;
-    Ok(ToolOutput {
-        content: json!({
-            "video_id": id.to_string(), "t0": t0, "t1": t1,
+    let max_frames = if wins.len() > 1 {
+        MULTI_VIEW_FRAMES
+    } else {
+        crate::view::MAX_FRAMES
+    };
+    // Decode the windows together (each is its own worker call), then keep
+    // window order for the text, the images and the summary.
+    let grids = futures::future::join_all(
+        wins.iter()
+            .map(|&(t0, t1)| grid_for(ctx, &v, t0, t1, fps, max_frames)),
+    )
+    .await;
+    let mut rows = Vec::with_capacity(wins.len());
+    let mut images = Vec::with_capacity(wins.len());
+    let mut frames = 0usize;
+    let mut distinct = 0usize;
+    for (&(t0, t1), grid) in wins.iter().zip(grids) {
+        let (view, key) = grid?;
+        let transcript = transcript_text(ctx, id, t0, t1, 3000 / wins.len()).await;
+        frames += view.timestamps.len();
+        distinct += view.distinct;
+        rows.push(json!({
+            "t0": t0, "t1": t1,
             "frames": view.timestamps.len(), "distinct_frames": view.distinct,
             "timestamps": view.timestamps.iter().map(|t| (t * 10.0).round() / 10.0).collect::<Vec<_>>(),
             "grid_blob": key.uri(),
             "transcript": transcript,
-            "note": "The frame grid follows as an image; tiles are labelled HH:MM:SS.",
-        })
-        .to_string(),
-        summary: format!("{} frames ({} distinct) in [{}, {}]", view.timestamps.len(), view.distinct, hms(t0), hms(t1)),
-        image: Some(ImageData::Encoded {
+        }));
+        images.push(ImageData::Encoded {
             mime: "image/png",
             bytes: bytes::Bytes::from(view.png),
-        }),
+        });
+    }
+    let content = if multi {
+        json!({
+            "video_id": id.to_string(),
+            "windows": rows,
+            "note": format!("{} frame grids follow as images, one per window in this order; tiles are labelled HH:MM:SS.", wins.len()),
+        })
+    } else {
+        let mut row = rows.pop().unwrap_or_default();
+        row["video_id"] = Value::String(id.to_string());
+        row["note"] = Value::String("The frame grid follows as an image; tiles are labelled HH:MM:SS.".into());
+        row
+    };
+    let summary = if multi {
+        format!(
+            "{} windows, {frames} frames ({distinct} distinct): {}",
+            wins.len(),
+            wins.iter()
+                .map(|(a, b)| format!("[{}, {}]", hms(*a), hms(*b)))
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
+    } else {
+        format!("{frames} frames ({distinct} distinct) in [{}, {}]", hms(wins[0].0), hms(wins[0].1))
+    };
+    Ok(ToolOutput {
+        content: content.to_string(),
+        summary,
+        images,
         decoded: true,
         ..ToolOutput::default()
     })
@@ -884,8 +1023,8 @@ async fn tool_describe(ctx: &ToolContext, args: &Value) -> ToolResult {
         .providers
         .vlm(roles::VLM_DESCRIBE)
         .map_err(|e| e.to_string())?;
-    let (view, key) = grid_for(ctx, &v, t0, t1, 1.0).await?;
-    let transcript = transcript_text(ctx, id, t0, t1).await;
+    let (view, key) = grid_for(ctx, &v, t0, t1, 1.0, crate::view::MAX_FRAMES).await?;
+    let transcript = transcript_text(ctx, id, t0, t1, 3000).await;
     let prompt = vi_providers::prompts::get("vlm_describe").ok_or("prompt missing")?;
     let mut user_text = format!(
         "Segment {}–{} of \"{}\".\n\nTranscript (data):\n{}",
@@ -1033,7 +1172,7 @@ async fn tool_describe(ctx: &ToolContext, args: &Value) -> ToolResult {
             vlm.model(),
             stats.usage.tokens_in + stats.usage.tokens_out
         ),
-        image: None,
+        images: Vec::new(),
         cost_usd: stats.cost_usd,
         tokens_in: stats.usage.tokens_in,
         tokens_out: stats.usage.tokens_out,

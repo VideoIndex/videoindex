@@ -406,7 +406,7 @@ impl AskStream {
                         AskEvent::Citation {
                             video_id, t0, t1, ..
                         } => c.citations.push((video_id, t0, t1)),
-                        AskEvent::ToolCall { tool, args } => c.tool_calls.push((tool, args)),
+                        AskEvent::ToolCall { tool, args, .. } => c.tool_calls.push((tool, args)),
                         AskEvent::Done { partial, usage, .. } => {
                             c.partial = partial;
                             c.usage = usage;

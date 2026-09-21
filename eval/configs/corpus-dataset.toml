@@ -15,6 +15,10 @@ runs_dir = "/data/videoindex/eval/runs/corpus"
 #   (no suffix)  2026-09-16: search / get_transcript / view agent
 #   -v2          2026-09-17: find_mentions, count_mentions, library_stats,
 #                search per_video_k (EVAL-IMPROVEMENTS workstreams A and B)
+#   -v3          2026-09-21: multi-window get_transcript/get_ocr/get_descriptions
+#                and view, a turn's tool calls run concurrently, prompt rule
+#                asking for independent calls together, exhausted-turn nudge
+#                that names the calls used (EVAL-IMPROVEMENTS workstream J)
 [[runs]]
 name = "vi-agent-sonnet-v2"
 system = "videoindex"
@@ -27,6 +31,19 @@ system = "videoindex"
 policy = "agent"
 model = "gemini-3.8-flash"
 label = "VideoIndex agent with library tools (gemini-3.8-flash)"
+
+[[runs]]
+name = "vi-agent-sonnet-v3"
+system = "videoindex"
+policy = "agent"
+label = "VideoIndex agent, multi-window and parallel tools (claude-sonnet-5)"
+
+[[runs]]
+name = "vi-agent-gemini-v3"
+system = "videoindex"
+policy = "agent"
+model = "gemini-3.8-flash"
+label = "VideoIndex agent, multi-window and parallel tools (gemini-3.8-flash)"
 
 [[runs]]
 name = "vi-retrieval-only-v2"

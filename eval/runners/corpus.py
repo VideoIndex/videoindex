@@ -36,7 +36,7 @@ def ask(vi: str, config: str | None, index: str, q: CorpusQuestion, a, key_of: d
     ms = int((time.time() - t) * 1000)
     if proc.returncode != 0:
         return {"id": q.id, "kind": q.kind, "status": "ask-failed", "error": proc.stderr[-600:], "ms": ms}
-    text, cites, tools, usage, partial, reason = "", [], [], {}, False, None
+    text, cites, tools, calls, usage, partial, reason = "", [], [], [], {}, False, None
     for line in proc.stdout.splitlines():
         try:
             ev = json.loads(line)
@@ -48,10 +48,18 @@ def ask(vi: str, config: str | None, index: str, q: CorpusQuestion, a, key_of: d
             cites.append({"video_key": key_of.get(ev.get("video_id"), ev.get("video_id")), "t0": ev["t0"], "t1": ev["t1"], "kind": ev.get("kind")})
         elif ev["type"] == "tool_call":
             tools.append(ev["tool"])
+            # One record per call: the loop turn that issued it (calls sharing
+            # a turn ran concurrently) and, once the result arrives, its wall time.
+            calls.append({"tool": ev["tool"], "turn": ev.get("turn"), "ms": None})
+        elif ev["type"] == "tool_result":
+            for c in calls:
+                if c["tool"] == ev["tool"] and c["ms"] is None and c["turn"] == ev.get("turn"):
+                    c["ms"] = ev.get("ms")
+                    break
         elif ev["type"] == "done":
             usage, partial, reason = ev["usage"], ev["partial"], ev.get("reason")
     return {"id": q.id, "kind": q.kind, "status": "ok", "text": text.strip(), "citations": cites,
-            "cited_keys": sorted({c["video_key"] for c in cites}), "tools": tools, "usage": usage, "partial": partial,
+            "cited_keys": sorted({c["video_key"] for c in cites}), "tools": tools, "calls": calls, "usage": usage, "partial": partial,
             "stop_reason": reason, "ms": ms}
 
 

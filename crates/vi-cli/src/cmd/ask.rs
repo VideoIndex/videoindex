@@ -113,8 +113,10 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
         }
         match &ev {
             AskEvent::Status { text } => eprintln!("· {text}"),
-            AskEvent::ToolCall { tool, args } => eprintln!("→ {tool} {args}"),
-            AskEvent::ToolResult { tool, summary } => eprintln!("← {tool}: {summary}"),
+            AskEvent::ToolCall { tool, args, turn } => eprintln!("→ [{turn}] {tool} {args}"),
+            AskEvent::ToolResult {
+                tool, summary, ms, ..
+            } => eprintln!("← {tool}: {summary} ({ms} ms)"),
             AskEvent::Token { text } => {
                 write!(lock, "{text}")?;
                 lock.flush()?;

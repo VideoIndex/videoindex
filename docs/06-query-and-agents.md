@@ -79,19 +79,21 @@ Every tool is read-only against the index and the media. Tools are exposed ident
 
 | Tool | Arguments | Returns | Cost class |
 |---|---|---|---|
-| `search` | query, filters, k, per_video_k | ranked hits with evidence, at most `per_video_k` per video (default 3 when more than one video is in scope) | cheap, cached |
+| `search` | query, filters, k, per_video_k | ranked hits with evidence, at most `per_video_k` per video (default 3 when more than one video is in scope) | cheap |
 | `find_mentions` | terms[], prefix?, kinds?, video_ids?, per_video | exhaustive FTS scan: per video, hit counts per kind and the earliest hits with timestamps and snippets; the tool for "which videos mention X" | cheap, deterministic |
 | `count_mentions` | terms[], group_by (library, video, channel), prefix?, kinds?, video_ids? | rows containing each term per kind, videos with a hit, optional per-video or per-channel breakdown; the tool for "discussed most", rankings, totals | cheap, deterministic |
 | `library_stats` | — | video count, total duration, channels with counts, every video's title, channel, duration and date | cheap |
 | `list_videos` | — | ids, titles, durations | cheap |
 | `timeline` | video_id, level | segments with titles and summaries | cheap |
-| `get_transcript` | video_id, t0, t1 | transcript text with timestamps and speakers | cheap |
-| `get_ocr` | video_id, t0, t1 | on-screen text with timestamps | cheap |
-| `get_descriptions` | video_id, t0, t1 | existing VLM descriptions | cheap |
-| `view` | video_id, t0, t1, fps, resolution, layout | frame grid image(s) with timestamp labels, plus transcript for the window | decode + VLM tokens |
+| `get_transcript` | video_id, t0, t1 or windows[] (up to 6) | transcript text with timestamps; one entry per window, in time order, overlaps merged | cheap |
+| `get_ocr` | video_id, t0, t1 or windows[] (up to 6) | on-screen text with timestamps, per window | cheap |
+| `get_descriptions` | video_id, t0, t1 or windows[] (up to 6) | existing VLM descriptions, per window | cheap |
+| `view` | video_id, t0, t1 or windows[] (up to 3), fps | one labelled frame grid per window (at most 16 frames, 12 when several) plus the transcript of each window; images follow in window order | decode + image tokens |
 | `describe` | video_id, t0, t1, question? | runs the VLM on the window, stores the Description, returns text | decode + VLM call, improves index |
-| `listen` | video_id, t0, t1 | audio clip for audio-capable providers, else transcript | decode, maybe provider |
-| `find_similar_frames` | frame_sample_id or image | frames visually similar across the index | cheap |
+
+Planned, not built: `listen` (audio clip for audio-capable providers) and `find_similar_frames` (frames visually similar across the index).
+
+Several windows in one call cost one tool call. That is the point: the agent's call budget is the scarce resource on single-video questions (about half of the LVBench and MINERVA questions reached the cap of 6 in the 2026-09-17 runs), and `search` followed by three transcript reads used to be four calls. The loop also runs every call the model issues in one message concurrently (SQL tools still serialise on the index connection; the gain is overlapping `view` decodes, `describe` calls and query encoding) and records the results in call order, and the system prompt asks the model to issue independent steps together. When the calls run out, the last-turn instruction names the count ("You have used 6 of 6 tool calls") and, for multiple choice, asks for the option best supported by the evidence plus what could not be checked.
 
 `search` samples: it ranks and truncates, so it cannot prove that no other video mentions a term. `find_mentions` and `count_mentions` are one FTS5 phrase query per term and kind over the whole index (no embedding call, sub-second on a 30-video library), grouped by video in SQL. Counts are rows containing the term: transcript segments, distinct on-screen lines per minute, descriptions. They inherit ASR spelling, so the agent is told to pass variants as separate terms (`LoRA`, `Laura`) and to quote counts as approximate. The system prompt routes "which videos", "find all", "how many" and "most discussed" questions to these tools before `search`; see `vi_internal/docs/planning/EVAL-IMPROVEMENTS.md` (workstreams A and B) for the evaluation that motivated them.
 
@@ -113,13 +115,15 @@ Streaming events over the SDK and over SSE:
 
 ```
 {"type":"status","text":"searching"}
-{"type":"tool_call","tool":"view","args":{"t0":1834,"t1":1860,"fps":1}}
-{"type":"tool_result","tool":"view","summary":"9 frames, 3 distinct"}
+{"type":"tool_call","tool":"view","args":{"t0":1834,"t1":1860,"fps":1},"turn":2}
+{"type":"tool_result","tool":"view","summary":"9 frames (3 distinct) in [00:30:34, 00:31:00]","turn":2,"ms":1310}
 {"type":"token","text":"The speaker introduces "}
 {"type":"citation","video_id":"01J...","t0":1840.0,"t1":1852.5,"kind":"transcript"}
 {"type":"token","text":"hybrid retrieval at "}
 {"type":"done","partial":false,"usage":{"tokens_in":8123,"tokens_out":412,"cost_usd":0.021,"tool_calls":2,"wallclock_ms":4310}}
 ```
+
+`turn` is the loop turn (1-based) that issued the call: calls sharing a turn were requested in one model message and ran concurrently. `ms` is the tool's own wall time. The eval runner stores both per call (`calls: [{tool, turn, ms}]` in the run files), so calls per turn and tool time against model time can be read from a run.
 
 Citations are emitted inline as the answer streams and are always backed by a stored row (span, description, or the frames a `view` returned, which are persisted as a blob so the citation can be rendered later). The chat app renders citations as clickable timestamps that seek the player.
 

@@ -32,6 +32,28 @@ max_tool_calls = 6
 budget_usd = 0.5
 budget_tokens = 120000
 
+# Tool-budget experiment (KICKOFF-tool-budget-2026-09-18): the same 2026-09-17
+# agent and chat model with the call cap raised from 6 to 12, no code change.
+[[runs]]
+name = "agent-gemini-tc12"
+policy = "agent"
+model = "gemini-3.8-flash"
+label = "agent 2026-09-17 (gemini-3.8-flash, 12 tool calls)"
+max_tool_calls = 12
+budget_usd = 0.5
+budget_tokens = 120000
+
+# The 2026-09-21 agent (multi-window tools, concurrent calls, exhausted-turn
+# nudge; EVAL-IMPROVEMENTS J) at 12 calls: paired with the two rows above.
+[[runs]]
+name = "agent-gemini-v3-tc12"
+policy = "agent"
+model = "gemini-3.8-flash"
+label = "agent 2026-09-21 (gemini-3.8-flash, 12 tool calls)"
+max_tool_calls = 12
+budget_usd = 0.5
+budget_tokens = 120000
+
 [[runs]]
 name = "retrieval-only"
 policy = "retrieval-only"

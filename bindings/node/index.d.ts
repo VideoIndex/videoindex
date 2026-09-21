@@ -38,8 +38,10 @@ export interface AskUsage {
 }
 export type AskEvent =
   | { type: "status"; text: string }
-  | { type: "tool_call"; tool: string; args: unknown }
-  | { type: "tool_result"; tool: string; summary: string }
+  /** `turn`: loop turn (1-based) that issued the call; calls sharing a turn ran concurrently. */
+  | { type: "tool_call"; tool: string; args: unknown; turn: number }
+  /** `ms`: the tool's own wall time. */
+  | { type: "tool_result"; tool: string; summary: string; turn: number; ms: number }
   | { type: "token"; text: string }
   | Citation
   | { type: "done"; partial: boolean; reason: string | null; usage: AskUsage };
