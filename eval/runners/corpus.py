@@ -50,7 +50,9 @@ def ask(vi: str, config: str | None, index: str, q: CorpusQuestion, a, key_of: d
             tools.append(ev["tool"])
             # One record per call: the loop turn that issued it (calls sharing
             # a turn ran concurrently) and, once the result arrives, its wall time.
-            calls.append({"tool": ev["tool"], "turn": ev.get("turn"), "ms": None})
+            args = ev.get("args") or {}
+            calls.append({"tool": ev["tool"], "turn": ev.get("turn"), "ms": None,
+                          "windows": len(args["windows"]) if isinstance(args.get("windows"), list) else (1 if "t0" in args else 0)})
         elif ev["type"] == "tool_result":
             for c in calls:
                 if c["tool"] == ev["tool"] and c["ms"] is None and c["turn"] == ev.get("turn"):
