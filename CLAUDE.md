@@ -17,6 +17,8 @@ order; `docs/10-roadmap.md` is the milestone tracker; `docs/results/` holds gene
 
 Public repos carry no deployment, machine or planning material; that lives in `vi_internal`.
 Every non-obvious technical choice gets a dated entry in `vi_internal/docs/DECISIONS.md`.
+What is deployed where (hosts, services, indexes, commits) is tracked in `vi_internal/deployment_snapshot.md`;
+update it when a `vidx` build ships, an index is published or moved, or `/data/videoindex` changes shape.
 
 ## Layout
 
