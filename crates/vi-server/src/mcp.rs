@@ -218,7 +218,10 @@ async fn call_tool(
                 },
                 session_id: None,
                 policy: "agent".into(),
-                model: args.get("model").and_then(Value::as_str).map(str::to_string),
+                model: args
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             };
             let stream = ask_stream(state, ix, body)?;
             let v = collect(state, &key.bucket(), stream).await;

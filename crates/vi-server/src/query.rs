@@ -164,7 +164,12 @@ pub fn ask_stream(
         }
         other => return Err(ApiError::bad_request(format!("unknown policy '{other}'"))),
     }
-    if let Some(model) = body.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+    if let Some(model) = body
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    {
         let provider = state.providers.find_llm_provider(model).ok_or_else(|| {
             ApiError::bad_request(format!(
                 "unknown model '{model}'; GET /v1/models lists the choices"

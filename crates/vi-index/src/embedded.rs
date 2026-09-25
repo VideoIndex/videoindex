@@ -2437,7 +2437,11 @@ mod tests {
             })
         };
         idx.put_spans(&[
-            span(ta.id, 10, "Anthropic released a model, and Anthropic's team wrote it up"),
+            span(
+                ta.id,
+                10,
+                "Anthropic released a model, and Anthropic's team wrote it up",
+            ),
             span(ta.id, 500, "we compared it with the anthropic api"),
             span(ta.id, 900, "unrelated talk about lunch"),
             span(ta.id, 1200, "back to Anthropic once more"),
@@ -2493,7 +2497,11 @@ mod tests {
         assert_eq!(ra.video_id, a.id);
         assert_eq!(ra.channel.as_deref(), Some("MOOC"));
         let count = |v: &VideoMentions, kind: Kind| -> u64 {
-            v.counts.iter().filter(|c| c.kind == kind).map(|c| c.count).sum()
+            v.counts
+                .iter()
+                .filter(|c| c.kind == kind)
+                .map(|c| c.count)
+                .sum()
         };
         assert_eq!(count(ra, Kind::Transcript), 3, "{ra:#?}");
         assert_eq!(count(ra, Kind::Ocr), 1, "{ra:#?}");
@@ -2501,7 +2509,11 @@ mod tests {
         // Two earliest transcript samples plus the OCR one, in time order.
         assert_eq!(ra.samples.len(), 3, "{ra:#?}");
         assert_eq!(ra.samples[0].t0, Timestamp::from_secs(10));
-        assert!(ra.samples[0].text.contains("[Anthropic]"), "{}", ra.samples[0].text);
+        assert!(
+            ra.samples[0].text.contains("[Anthropic]"),
+            "{}",
+            ra.samples[0].text
+        );
         assert_eq!(ra.samples[1].t0, Timestamp::from_secs(500));
         assert_eq!(ra.samples[2].kind, Kind::Ocr);
         let rb = &r[1];
@@ -2538,11 +2550,23 @@ mod tests {
 
     #[test]
     fn mention_fts_query_phrases() {
-        assert_eq!(mention_fts_query("DeepSeek", false).unwrap(), "\"DeepSeek\"");
-        assert_eq!(mention_fts_query(" deep seek ", true).unwrap(), "\"deep seek\"*");
+        assert_eq!(
+            mention_fts_query("DeepSeek", false).unwrap(),
+            "\"DeepSeek\""
+        );
+        assert_eq!(
+            mention_fts_query(" deep seek ", true).unwrap(),
+            "\"deep seek\"*"
+        );
         // Edge punctuation is trimmed; an inner quote is doubled for FTS5.
-        assert_eq!(mention_fts_query("say \"hi\"", false).unwrap(), "\"say hi\"");
-        assert_eq!(mention_fts_query("o\"reilly", false).unwrap(), "\"o\"\"reilly\"");
+        assert_eq!(
+            mention_fts_query("say \"hi\"", false).unwrap(),
+            "\"say hi\""
+        );
+        assert_eq!(
+            mention_fts_query("o\"reilly", false).unwrap(),
+            "\"o\"\"reilly\""
+        );
         assert!(mention_fts_query("...", false).is_none());
     }
 

@@ -437,7 +437,11 @@ impl ProviderRegistry {
             b.provider == provider
                 && matches!(
                     role.as_str(),
-                    roles::ASR | roles::OCR | roles::IMAGE_EMBED | roles::TEXT_EMBED | roles::RERANKER
+                    roles::ASR
+                        | roles::OCR
+                        | roles::IMAGE_EMBED
+                        | roles::TEXT_EMBED
+                        | roles::RERANKER
                 )
         })
     }

@@ -130,7 +130,9 @@ async fn loop_searches_then_answers_with_a_typed_citation() {
         .filter(|e| matches!(e, AskEvent::ToolCall { .. }))
         .collect();
     assert_eq!(tool_calls.len(), 1, "{events:?}");
-    assert!(matches!(tool_calls[0], AskEvent::ToolCall { tool, turn, .. } if tool == "search" && *turn == 1));
+    assert!(
+        matches!(tool_calls[0], AskEvent::ToolCall { tool, turn, .. } if tool == "search" && *turn == 1)
+    );
     assert!(events.iter().any(|e| matches!(e, AskEvent::ToolResult { tool, summary, turn, .. } if tool == "search" && summary.contains("hits") && *turn == 1)));
     let text: String = events
         .iter()
@@ -654,7 +656,10 @@ async fn view_with_two_windows_returns_two_grids_in_order() {
     assert_eq!(wins[0]["t0"], 5.0, "{v}");
     assert_eq!(wins[1]["t0"], 40.0);
     assert!(wins[0]["frames"].as_u64().unwrap() >= 1);
-    assert!(wins[0]["transcript"].as_str().unwrap().contains("kw1"), "{v}");
+    assert!(
+        wins[0]["transcript"].as_str().unwrap().contains("kw1"),
+        "{v}"
+    );
     assert!(v["note"].as_str().unwrap().starts_with("2 frame grids"));
     assert!(out.summary.starts_with("2 windows,"), "{}", out.summary);
 

@@ -142,7 +142,10 @@ async fn find_mentions_lists_every_video_with_a_hit() {
         .contains("[agents]"));
     assert_eq!(rows[1]["video_id"], b.to_string());
     assert_eq!(rows[1]["total"], 1);
-    assert!(summary.starts_with("2 of 3 videos mention agents / anthropic"), "{summary}");
+    assert!(
+        summary.starts_with("2 of 3 videos mention agents / anthropic"),
+        "{summary}"
+    );
 
     // Scoped to one video, counts only.
     let (v, _) = call(
@@ -239,8 +242,14 @@ async fn search_spreads_hits_across_videos_unless_scoped() {
     // video leaves room for Talk B in a k=8 list.
     let (v, _) = call(&ctx, "search", json!({"query": "agents", "k": 8})).await;
     let hits = v["hits"].as_array().unwrap();
-    let from_a = hits.iter().filter(|h| h["video_id"] == a.to_string()).count();
-    let from_b = hits.iter().filter(|h| h["video_id"] == b.to_string()).count();
+    let from_a = hits
+        .iter()
+        .filter(|h| h["video_id"] == a.to_string())
+        .count();
+    let from_b = hits
+        .iter()
+        .filter(|h| h["video_id"] == b.to_string())
+        .count();
     assert_eq!(from_a, 3, "{v}");
     assert_eq!(from_b, 1);
 
@@ -279,7 +288,10 @@ async fn get_transcript_reads_several_windows_in_one_call() {
     .await;
     assert_eq!(v["video_id"], a.to_string(), "{v}");
     assert_eq!(v["kind"], "transcript");
-    assert!(v.get("t0").is_none(), "multi-window output has no top-level range: {v}");
+    assert!(
+        v.get("t0").is_none(),
+        "multi-window output has no top-level range: {v}"
+    );
     let wins = v["windows"].as_array().unwrap();
     assert_eq!(wins.len(), 3, "{v}");
     assert_eq!(wins[0]["t0"], 0.0);
@@ -289,10 +301,16 @@ async fn get_transcript_reads_several_windows_in_one_call() {
     for w in wins {
         assert_eq!(w["count"], 1, "{w}");
     }
-    assert!(wins[0]["text"].as_str().unwrap().contains("theme of this talk"));
+    assert!(wins[0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("theme of this talk"));
     assert!(wins[1]["text"].as_str().unwrap().contains("call tools"));
     assert!(wins[2]["text"].as_str().unwrap().contains("evaluation"));
-    assert!(summary.starts_with("3 windows, 3 transcript lines"), "{summary}");
+    assert!(
+        summary.starts_with("3 windows, 3 transcript lines"),
+        "{summary}"
+    );
 
     // The single form keeps its flat shape.
     let (v, summary) = call(
@@ -307,9 +325,19 @@ async fn get_transcript_reads_several_windows_in_one_call() {
     assert!(summary.starts_with("1 transcript lines"), "{summary}");
 
     // Limits and bad windows come back as content.
-    let many: Vec<Value> = (0..7).map(|i| json!({"t0": i * 100, "t1": i * 100 + 10})).collect();
-    let (v, _) = call(&ctx, "get_ocr", json!({"video_id": a.to_string(), "windows": many})).await;
-    assert!(v["error"].as_str().unwrap().contains("at most 6 windows"), "{v}");
+    let many: Vec<Value> = (0..7)
+        .map(|i| json!({"t0": i * 100, "t1": i * 100 + 10}))
+        .collect();
+    let (v, _) = call(
+        &ctx,
+        "get_ocr",
+        json!({"video_id": a.to_string(), "windows": many}),
+    )
+    .await;
+    assert!(
+        v["error"].as_str().unwrap().contains("at most 6 windows"),
+        "{v}"
+    );
     let (v, _) = call(
         &ctx,
         "get_ocr",
@@ -317,6 +345,11 @@ async fn get_transcript_reads_several_windows_in_one_call() {
     )
     .await;
     assert!(v["error"].as_str().unwrap().contains("windows[0]"), "{v}");
-    let (v, _) = call(&ctx, "get_ocr", json!({"video_id": a.to_string(), "windows": []})).await;
+    let (v, _) = call(
+        &ctx,
+        "get_ocr",
+        json!({"video_id": a.to_string(), "windows": []}),
+    )
+    .await;
     assert!(v["error"].as_str().unwrap().contains("at least one"), "{v}");
 }

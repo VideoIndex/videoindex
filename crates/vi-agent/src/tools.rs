@@ -241,7 +241,10 @@ fn windows_arg(
         return Err("windows must hold at least one {t0, t1}".into());
     }
     if list.len() > max {
-        return Err(format!("at most {max} windows per call (got {})", list.len()));
+        return Err(format!(
+            "at most {max} windows per call (got {})",
+            list.len()
+        ));
     }
     let mut wins = Vec::with_capacity(list.len());
     for (i, w) in list.iter().enumerate() {
@@ -374,7 +377,6 @@ async fn tool_search(ctx: &ToolContext, args: &Value) -> ToolResult {
     })
 }
 
-
 fn terms_arg(args: &Value) -> std::result::Result<Vec<String>, String> {
     let terms: Vec<String> = match args.get("terms") {
         Some(Value::Array(a)) => a
@@ -499,9 +501,7 @@ async fn tool_find_mentions(ctx: &ToolContext, args: &Value) -> ToolResult {
             .map(|v| {
                 let mut counts = serde_json::Map::new();
                 for c in &v.counts {
-                    let e = counts
-                        .entry(kind_name(c.kind))
-                        .or_insert(Value::from(0u64));
+                    let e = counts.entry(kind_name(c.kind)).or_insert(Value::from(0u64));
                     *e = Value::from(e.as_u64().unwrap_or(0) + c.count);
                 }
                 let first: Vec<Value> = v
@@ -614,9 +614,7 @@ async fn tool_count_mentions(ctx: &ToolContext, args: &Value) -> ToolResult {
                 .map(|v| {
                     let mut by_term = serde_json::Map::new();
                     for c in &v.counts {
-                        let e = by_term
-                            .entry(c.term.clone())
-                            .or_insert(Value::from(0u64));
+                        let e = by_term.entry(c.term.clone()).or_insert(Value::from(0u64));
                         *e = Value::from(e.as_u64().unwrap_or(0) + c.count);
                     }
                     json!({
@@ -630,8 +628,10 @@ async fn tool_count_mentions(ctx: &ToolContext, args: &Value) -> ToolResult {
                 .collect(),
         ),
         "channel" => {
-            let mut chans: std::collections::BTreeMap<String, (usize, usize, u64, serde_json::Map<String, Value>)> =
-                std::collections::BTreeMap::new();
+            let mut chans: std::collections::BTreeMap<
+                String,
+                (usize, usize, u64, serde_json::Map<String, Value>),
+            > = std::collections::BTreeMap::new();
             for v in &videos {
                 chans.entry(channel_of(&v.channel)).or_default().0 += 1;
             }
@@ -988,7 +988,9 @@ async fn tool_view(ctx: &ToolContext, args: &Value) -> ToolResult {
     } else {
         let mut row = rows.pop().unwrap_or_default();
         row["video_id"] = Value::String(id.to_string());
-        row["note"] = Value::String("The frame grid follows as an image; tiles are labelled HH:MM:SS.".into());
+        row["note"] = Value::String(
+            "The frame grid follows as an image; tiles are labelled HH:MM:SS.".into(),
+        );
         row
     };
     let summary = if multi {
@@ -1001,7 +1003,11 @@ async fn tool_view(ctx: &ToolContext, args: &Value) -> ToolResult {
                 .join(" ")
         )
     } else {
-        format!("{frames} frames ({distinct} distinct) in [{}, {}]", hms(wins[0].0), hms(wins[0].1))
+        format!(
+            "{frames} frames ({distinct} distinct) in [{}, {}]",
+            hms(wins[0].0),
+            hms(wins[0].1)
+        )
     };
     Ok(ToolOutput {
         content: content.to_string(),
