@@ -617,7 +617,8 @@ async fn two_calls_in_one_turn_run_together_and_land_in_call_order() {
 }
 
 /// `view` with two windows is one tool call that returns two grids, in
-/// window order, with the window list in the text result.
+/// window order, with the window list in the text result; every grid keeps
+/// 16 frames and each window is capped at 60 s (the single form at 120 s).
 #[tokio::test]
 async fn view_with_two_windows_returns_two_grids_in_order() {
     use vi_agent::tools::{self, ToolCall, ToolContext};
@@ -662,6 +663,81 @@ async fn view_with_two_windows_returns_two_grids_in_order() {
     );
     assert!(v["note"].as_str().unwrap().starts_with("2 frame grids"));
     assert!(out.summary.starts_with("2 windows,"), "{}", out.summary);
+    assert!(wins[0].get("clamped_to_secs").is_none(), "{v}");
+
+    // Each grid of a multi-window view keeps the full 16 frames: two 20 s
+    // windows at 1 fps render 16 frames each, not the 12 of the 2026-09-21
+    // agent.
+    let out = tools::execute(
+        &ctx,
+        &ToolCall {
+            id: "v".into(),
+            name: "view".into(),
+            args: serde_json::json!({"windows": [{"t0": 10, "t1": 30}, {"t0": 70, "t1": 90}], "fps": 1}),
+            signature: None,
+        },
+    )
+    .await
+    .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+    assert!(v.get("error").is_none(), "{v}");
+    let wins = v["windows"].as_array().unwrap();
+    assert_eq!(wins.len(), 2);
+    for w in wins {
+        assert_eq!(w["frames"], 16, "{v}");
+        assert!(w.get("clamped_to_secs").is_none(), "{v}");
+    }
+    assert!(
+        out.summary.starts_with("2 windows, 32 frames"),
+        "{}",
+        out.summary
+    );
+
+    // A window of a multi-window view is at most 60 s from its start, and the
+    // result says so; the other window is untouched.
+    let out = tools::execute(
+        &ctx,
+        &ToolCall {
+            id: "v".into(),
+            name: "view".into(),
+            args: serde_json::json!({"windows": [{"t0": 0, "t1": 100}, {"t0": 110, "t1": 120}], "fps": 1}),
+            signature: None,
+        },
+    )
+    .await
+    .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+    assert!(v.get("error").is_none(), "{v}");
+    let wins = v["windows"].as_array().unwrap();
+    assert_eq!(wins[0]["t0"], 0.0, "{v}");
+    assert_eq!(wins[0]["t1"], 60.0, "{v}");
+    assert_eq!(wins[0]["clamped_to_secs"], 60.0, "{v}");
+    assert_eq!(wins[0]["frames"], 16, "{v}");
+    assert!(wins[1].get("clamped_to_secs").is_none(), "{v}");
+    assert_eq!(wins[1]["t0"], 110.0, "{v}");
+    assert!(
+        out.summary.contains("[00:00:00, 00:01:00]"),
+        "{}",
+        out.summary
+    );
+
+    // The single form keeps its 120 s window (no clamp marker).
+    let out = tools::execute(
+        &ctx,
+        &ToolCall {
+            id: "v".into(),
+            name: "view".into(),
+            args: serde_json::json!({"t0": 0, "t1": 100, "fps": 1}),
+            signature: None,
+        },
+    )
+    .await
+    .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+    assert!(v.get("error").is_none(), "{v}");
+    assert_eq!(v["t1"], 100.0, "{v}");
+    assert!(v.get("clamped_to_secs").is_none(), "{v}");
+    assert_eq!(v["frames"], 16, "{v}");
 
     // Four windows is too many for one view.
     let out = tools::execute(
@@ -745,6 +821,186 @@ async fn calls_past_the_budget_in_one_turn_are_not_run() {
     assert!(text.starts_with("ordered c1,c2"), "{text}");
     match events.last().unwrap() {
         AskEvent::Done { usage, .. } => assert_eq!(usage.tool_calls, 1),
+        other => panic!("last event {other:?}"),
+    }
+}
+
+/// Turn 1 answers `first` and stops with `finish_reason: length`; turn 2
+/// reads the request back and answers with what it saw: " and the rest."
+/// when the history holds the cut text as an assistant message followed by
+/// the continue instruction, "Recovered." when it holds the empty-answer
+/// retry instead, otherwise a description of the tail of the history.
+async fn length_server(first: &'static str) -> std::net::SocketAddr {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut turn = 0;
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
+            let req = read_request(&mut sock).await;
+            let body_json: serde_json::Value = req
+                .split("\r\n\r\n")
+                .nth(1)
+                .and_then(|b| serde_json::from_str(b).ok())
+                .unwrap_or_default();
+            let chunks: Vec<String> = if turn == 0 {
+                vec![
+                    format!(
+                        r#"{{"choices":[{{"delta":{{"content":"{first}"}},"finish_reason":"length"}}]}}"#
+                    ),
+                    r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20}}"#.into(),
+                ]
+            } else {
+                let msgs = body_json["messages"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                let n = msgs.len();
+                let last = &msgs[n - 1];
+                let before = &msgs[n - 2];
+                let word = if last["role"] == "user"
+                    && last["content"]
+                        .as_str()
+                        .unwrap_or("")
+                        .starts_with("Your answer was cut off")
+                    && before["role"] == "assistant"
+                    && before["content"] == first
+                {
+                    " and the rest.".to_string()
+                } else if last["role"] == "user"
+                    && last["content"]
+                        .as_str()
+                        .unwrap_or("")
+                        .starts_with("Write the answer now")
+                    && before["role"] == "user"
+                {
+                    "Recovered.".to_string()
+                } else {
+                    format!("unexpected {before} {last}").replace('"', "'")
+                };
+                vec![
+                    format!(
+                        r#"{{"choices":[{{"delta":{{"content":"{word}"}},"finish_reason":"stop"}}]}}"#
+                    ),
+                    r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":5}}"#.into(),
+                ]
+            };
+            turn += 1;
+            let mut body = String::new();
+            for c in chunks {
+                body.push_str(&format!("data: {c}\n\n"));
+            }
+            body.push_str("data: [DONE]\n\n");
+            let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let _ = sock.write_all(resp.as_bytes()).await;
+            let _ = sock.shutdown().await;
+        }
+    });
+    addr
+}
+
+async fn ask_fake(
+    dir: &std::path::Path,
+    addr: std::net::SocketAddr,
+    question: &str,
+) -> Vec<AskEvent> {
+    let (idx, config) = build_index(dir).await;
+    let video_id = {
+        use vi_index::Storage;
+        idx.list_videos().await.unwrap()[0].id
+    };
+    let mut c = (*config).clone();
+    c.providers.insert(
+        "fake".into(),
+        ProviderConfig {
+            adapter: "openai_compat".into(),
+            base_url: Some(format!("http://{addr}/v1")),
+            model: Some("fake".into()),
+            ..Default::default()
+        },
+    );
+    c.roles.insert(
+        "agent_llm".into(),
+        RoleBinding {
+            provider: "fake".into(),
+            ..Default::default()
+        },
+    );
+    let config = Arc::new(c);
+    let providers = Arc::new(ProviderRegistry::new(
+        config.clone(),
+        CancellationToken::new(),
+    ));
+    let agent = Agent::new(idx, providers, config);
+    let mut events = Vec::new();
+    let mut stream = Box::pin(agent.ask(AskRequest {
+        videos: vec![video_id],
+        ..AskRequest::new(question)
+    }));
+    while let Some(ev) = stream.next().await {
+        events.push(ev);
+    }
+    events
+}
+
+fn answer_text(events: &[AskEvent]) -> String {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            AskEvent::Token { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// An answer cut by the output limit is continued once: the cut text goes
+/// back as the assistant's turn, the model is asked to finish, and the two
+/// halves are one answer that is not partial.
+#[tokio::test]
+async fn length_stop_continues_once_and_joins_the_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let addr = length_server("The talk covers three things").await;
+    let events = ask_fake(dir.path(), addr, "what does the talk cover?").await;
+    assert_eq!(
+        answer_text(&events),
+        "The talk covers three things and the rest."
+    );
+    match events.last().unwrap() {
+        AskEvent::Done {
+            partial,
+            usage,
+            reason,
+            ..
+        } => {
+            assert!(!partial, "{reason:?}");
+            assert_eq!(usage.provider_calls, 2);
+            assert_eq!(usage.tool_calls, 0);
+        }
+        other => panic!("last event {other:?}"),
+    }
+}
+
+/// A `length` stop that carried no text has nothing to continue from: it
+/// takes the empty-answer retry (one explicit re-ask), not the continuation.
+#[tokio::test]
+async fn empty_length_stop_falls_to_the_empty_answer_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let addr = length_server("").await;
+    let events = ask_fake(dir.path(), addr, "what does the talk cover?").await;
+    assert_eq!(answer_text(&events), "Recovered.");
+    match events.last().unwrap() {
+        AskEvent::Done {
+            partial,
+            usage,
+            reason,
+            ..
+        } => {
+            assert!(!partial, "{reason:?}");
+            assert_eq!(usage.provider_calls, 2);
+        }
         other => panic!("last event {other:?}"),
     }
 }

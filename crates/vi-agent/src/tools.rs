@@ -25,8 +25,15 @@ pub const MAX_TEXT_CHARS: usize = 8000;
 pub const MAX_TEXT_WINDOWS: usize = 6;
 /// Most windows one `view` call renders (one grid each).
 pub const MAX_VIEW_WINDOWS: usize = 3;
-/// Frames per grid when a `view` covers several windows.
-pub const MULTI_VIEW_FRAMES: usize = 12;
+/// Longest window, seconds, when one `view` covers several: each grid keeps
+/// [`crate::view::MAX_FRAMES`] frames, so density stays at or above one frame
+/// per 4 s (a single view may cover [`crate::view::MAX_WINDOW_SECS`]).
+pub const MULTI_VIEW_WINDOW_SECS: f64 = 60.0;
+/// Transcript characters per `view` call, shared by the windows of a
+/// multi-window call but never below [`MIN_VIEW_TRANSCRIPT_CHARS`] each.
+pub const VIEW_TRANSCRIPT_CHARS: usize = 3000;
+/// Least transcript per window of a multi-window `view`.
+pub const MIN_VIEW_TRANSCRIPT_CHARS: usize = 1200;
 /// Longest `find_mentions` result, characters; samples are dropped until the
 /// per-video table fits.
 pub const MAX_MENTION_CHARS: usize = 24_000;
@@ -161,11 +168,11 @@ pub fn specs(with_describe: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "view".into(),
-            description: "Look at the pixels: decodes a time range (at most 120 s) at the given frame rate and returns a labelled frame grid image plus the transcript of the window. Several candidate moments in one call cost one tool call: pass windows=[{t0,t1},...] (up to 3, same video) instead of t0/t1 and get one grid per window (at most 12 frames each), images in window order. Costs decoding and image tokens; use after search has narrowed the range.".into(),
+            description: "Look at the pixels: decodes a time range (at most 120 s) at the given frame rate and returns a labelled frame grid image plus the transcript of the window. `windows` (up to 3, same video, each at most 60 s) is for comparing two or three candidate moments you have already found, and costs one tool call: pass windows=[{t0,t1},...] instead of t0/t1 and get one grid per window, images in window order. When the next window depends on what you see, view one window at a time: a single view gives the densest frames. Costs decoding and image tokens; use after search has narrowed the range.".into(),
             parameters: json!({"type":"object","properties":{
                 "video_id":{"type":"string"},"t0":{"type":"number"},"t1":{"type":"number"},
-                "windows":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"t0":{"type":"number"},"t1":{"type":"number"}},"required":["t0","t1"]},"description":"Up to 3 time ranges of the same video, one grid each; use instead of t0/t1."},
-                "fps":{"type":"number","default":1,"description":"Frames per second; at most 16 frames per view (12 per window when several)."}
+                "windows":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"t0":{"type":"number"},"t1":{"type":"number"}},"required":["t0","t1"]},"description":"Up to 3 time ranges of the same video (each at most 60 s), one grid each, for comparing moments already found; use instead of t0/t1."},
+                "fps":{"type":"number","default":1,"description":"Frames per second; at most 16 frames per grid."}
             },"required":["video_id"]}),
         },
     ];
@@ -943,37 +950,50 @@ async fn tool_view(ctx: &ToolContext, args: &Value) -> ToolResult {
     if media_path(&v).filter(|p| p.is_file()).is_none() {
         return Err("the media file for this video is not on this machine; use get_transcript, get_ocr and search instead".into());
     }
-    let wins = windows_arg(args, v.duration.as_secs_f64(), MAX_VIEW_WINDOWS)?;
+    let mut wins = windows_arg(args, v.duration.as_secs_f64(), MAX_VIEW_WINDOWS)?;
     let multi = args.get("windows").is_some_and(|w| !w.is_null());
     let fps = arg_f64(args, "fps").unwrap_or(1.0);
-    let max_frames = if wins.len() > 1 {
-        MULTI_VIEW_FRAMES
-    } else {
-        crate::view::MAX_FRAMES
-    };
+    // Every grid gets the full frame count. Several windows (after merging)
+    // are a comparison of moments already found, so each is capped at
+    // `MULTI_VIEW_WINDOW_SECS` from its start to keep the frames dense; the
+    // single form keeps the 120 s of `ViewRequest::clamped`.
+    let mut clamped = vec![false; wins.len()];
+    if wins.len() > 1 {
+        for ((t0, t1), c) in wins.iter_mut().zip(clamped.iter_mut()) {
+            if *t1 - *t0 > MULTI_VIEW_WINDOW_SECS {
+                *t1 = *t0 + MULTI_VIEW_WINDOW_SECS;
+                *c = true;
+            }
+        }
+    }
+    let transcript_cap = (VIEW_TRANSCRIPT_CHARS / wins.len()).max(MIN_VIEW_TRANSCRIPT_CHARS);
     // Decode the windows together (each is its own worker call), then keep
     // window order for the text, the images and the summary.
     let grids = futures::future::join_all(
         wins.iter()
-            .map(|&(t0, t1)| grid_for(ctx, &v, t0, t1, fps, max_frames)),
+            .map(|&(t0, t1)| grid_for(ctx, &v, t0, t1, fps, crate::view::MAX_FRAMES)),
     )
     .await;
     let mut rows = Vec::with_capacity(wins.len());
     let mut images = Vec::with_capacity(wins.len());
     let mut frames = 0usize;
     let mut distinct = 0usize;
-    for (&(t0, t1), grid) in wins.iter().zip(grids) {
+    for ((&(t0, t1), grid), was_clamped) in wins.iter().zip(grids).zip(clamped) {
         let (view, key) = grid?;
-        let transcript = transcript_text(ctx, id, t0, t1, 3000 / wins.len()).await;
+        let transcript = transcript_text(ctx, id, t0, t1, transcript_cap).await;
         frames += view.timestamps.len();
         distinct += view.distinct;
-        rows.push(json!({
+        let mut row = json!({
             "t0": t0, "t1": t1,
             "frames": view.timestamps.len(), "distinct_frames": view.distinct,
             "timestamps": view.timestamps.iter().map(|t| (t * 10.0).round() / 10.0).collect::<Vec<_>>(),
             "grid_blob": key.uri(),
             "transcript": transcript,
-        }));
+        });
+        if was_clamped {
+            row["clamped_to_secs"] = json!(MULTI_VIEW_WINDOW_SECS);
+        }
+        rows.push(row);
         images.push(ImageData::Encoded {
             mime: "image/png",
             bytes: bytes::Bytes::from(view.png),
@@ -1030,7 +1050,7 @@ async fn tool_describe(ctx: &ToolContext, args: &Value) -> ToolResult {
         .vlm(roles::VLM_DESCRIBE)
         .map_err(|e| e.to_string())?;
     let (view, key) = grid_for(ctx, &v, t0, t1, 1.0, crate::view::MAX_FRAMES).await?;
-    let transcript = transcript_text(ctx, id, t0, t1, 3000).await;
+    let transcript = transcript_text(ctx, id, t0, t1, VIEW_TRANSCRIPT_CHARS).await;
     let prompt = vi_providers::prompts::get("vlm_describe").ok_or("prompt missing")?;
     let mut user_text = format!(
         "Segment {}–{} of \"{}\".\n\nTranscript (data):\n{}",

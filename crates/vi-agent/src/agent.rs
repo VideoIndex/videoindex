@@ -385,6 +385,10 @@ async fn run(
     let mut answer = String::new();
     let mut partial = false;
     let mut retried_empty = false;
+    // One continuation after an answer cut by the output limit.
+    let mut retried_length = false;
+    // The next generation turn must be text (set by the continuation).
+    let mut force_text = false;
     let mut reason: Option<String> = None;
     let mut steps: Vec<(ToolCall, String)> = Vec::new();
     let mut evidence: Vec<(VideoId, f64, f64, String)> = Vec::new();
@@ -434,7 +438,8 @@ async fn run(
             continue;
         }
         // Generation turn: tools only when the LLM chooses and budget allows.
-        let allow_tools = policy.is_none() && over.is_none() && tools_left > 0;
+        let allow_tools = policy.is_none() && over.is_none() && tools_left > 0 && !force_text;
+        force_text = false;
         let mut greq = GenerateRequest::new(messages.clone());
         // Tools stay defined whenever the history holds tool calls (some APIs
         // require that and a model shown call syntax with no tools tends to
@@ -502,13 +507,34 @@ async fn run(
             break;
         }
         if turn.calls.is_empty() {
-            if turn.finish == "length" {
+            let empty = turn.text.trim().is_empty() && answer.trim().is_empty();
+            if turn.finish == "length" && !empty {
+                // The answer ran into the output limit. Once, keep what was
+                // written as the assistant's turn and ask for the rest as
+                // text (tools withheld); a second cut ends with a partial.
+                if !retried_length {
+                    retried_length = true;
+                    force_text = true;
+                    tracing::debug!(
+                        chars = turn.text.len(),
+                        "answer cut by the output limit; asking to continue once"
+                    );
+                    messages.push(Message::text(Role::Assistant, turn.text.clone()));
+                    messages.push(Message::text(Role::User, LENGTH_CONTINUE_RULE));
+                    continue;
+                }
                 partial = true;
-                reason.get_or_insert_with(|| "answer hit the output token limit".into());
-            } else if turn.text.trim().is_empty() && answer.trim().is_empty() {
+                reason.get_or_insert_with(|| "answer hit the output token limit twice".into());
+            } else if empty {
                 // Seen after several tool turns with tools withheld: the
                 // model ends its turn with no content. Ask once more,
-                // explicitly, before giving up.
+                // explicitly, before giving up. A `length` stop with no text
+                // at all (seen with Sonnet 5 on a whole-library summary,
+                // 2026-09-21) lands here too: there is nothing to continue
+                // from, and the adapter has logged what it received.
+                if turn.finish == "length" {
+                    tracing::warn!(steps = steps.len(), "output limit reached with no text and no tool calls; asking for the answer again");
+                }
                 if !retried_empty {
                     retried_empty = true;
                     tracing::debug!(finish = %turn.finish, "empty answer turn; asking again");
@@ -692,6 +718,8 @@ fn budget_exceeded(b: &AskBudget, u: &AskUsage, started: Instant) -> Option<Stri
 /// The instruction appended when the model must answer without more tools.
 /// Eight MINERVA answers at the cap were unparseable before it asked for a
 /// choice; naming the count stops the model from planning further calls.
+const LENGTH_CONTINUE_RULE: &str = "Your answer was cut off by the output limit. Continue exactly from where it stopped, without repeating anything, and finish the answer. Do not write tool calls.";
+
 const LAST_TURN_RULE: &str = "Write the answer now from the observations above, citing the timestamps you used. If the question is multiple choice, pick the option best supported by the evidence and say what you could not check. Do not write tool calls.";
 
 /// Announce, execute and record one call (the fixed-policy path; the model

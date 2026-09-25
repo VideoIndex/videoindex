@@ -54,6 +54,20 @@ max_tool_calls = 12
 budget_usd = 0.5
 budget_tokens = 120000
 
+# The 2026-09-25 agent (KICKOFF-view-fix-2026-09-25): multi-window `view` as a
+# comparison tool (16 frames per grid, each window at most 60 s, description
+# reserved for moments already found), a continue-once after an output-length
+# stop, and a "two to four calls per turn" prompt line. Paired with the two
+# 12-call rows above.
+[[runs]]
+name = "agent-gemini-v4-tc12"
+policy = "agent"
+model = "gemini-3.8-flash"
+label = "agent 2026-09-25 (gemini-3.8-flash, 12 tool calls)"
+max_tool_calls = 12
+budget_usd = 0.5
+budget_tokens = 120000
+
 [[runs]]
 name = "retrieval-only"
 policy = "retrieval-only"

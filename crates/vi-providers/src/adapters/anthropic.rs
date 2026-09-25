@@ -222,6 +222,12 @@ impl Anthropic {
             stop: Option<String>,
             done: bool,
             queue: std::collections::VecDeque<GenerateEvent>,
+            /// Content blocks seen, by type (`text`, `tool_use`, `thinking`,
+            /// ...), and text characters streamed: the diagnostic for a
+            /// `max_tokens` stop that carried neither text nor a call.
+            block_kinds: std::collections::BTreeMap<String, usize>,
+            text_chars: usize,
+            tool_blocks_closed: usize,
         }
         let st = St {
             blocks: Default::default(),
@@ -232,6 +238,9 @@ impl Anthropic {
             stop: None,
             done: false,
             queue: Default::default(),
+            block_kinds: Default::default(),
+            text_chars: 0,
+            tool_blocks_closed: 0,
         };
         let stream =
             futures::stream::unfold((events, st, permit), move |(mut events, mut st, permit)| {
@@ -270,6 +279,9 @@ impl Anthropic {
                                     "content_block_start" => {
                                         let idx = v["index"].as_u64().unwrap_or(0);
                                         let cb = &v["content_block"];
+                                        *st.block_kinds
+                                            .entry(cb["type"].as_str().unwrap_or("?").to_string())
+                                            .or_default() += 1;
                                         if cb["type"] == "tool_use" {
                                             st.blocks.insert(
                                                 idx,
@@ -284,6 +296,7 @@ impl Anthropic {
                                             );
                                         } else if let Some(t) = cb["text"].as_str() {
                                             if !t.is_empty() {
+                                                st.text_chars += t.chars().count();
                                                 st.queue.push_back(GenerateEvent::Token {
                                                     text: t.to_string(),
                                                 });
@@ -294,6 +307,7 @@ impl Anthropic {
                                         let idx = v["index"].as_u64().unwrap_or(0);
                                         let d = &v["delta"];
                                         if let Some(t) = d["text"].as_str() {
+                                            st.text_chars += t.chars().count();
                                             st.queue.push_back(GenerateEvent::Token {
                                                 text: t.to_string(),
                                             });
@@ -305,6 +319,7 @@ impl Anthropic {
                                     "content_block_stop" => {
                                         let idx = v["index"].as_u64().unwrap_or(0);
                                         if let Some(b) = st.blocks.remove(&idx) {
+                                            st.tool_blocks_closed += 1;
                                             st.queue.push_back(b.finish());
                                         }
                                     }
@@ -337,6 +352,11 @@ impl Anthropic {
                             }
                             None => {
                                 st.done = true;
+                                let open: Vec<(String, usize)> = st
+                                    .blocks
+                                    .values()
+                                    .map(|b| (b.name.clone(), b.arguments.len()))
+                                    .collect();
                                 for (_, b) in std::mem::take(&mut st.blocks) {
                                     st.queue.push_back(b.finish());
                                 }
@@ -346,6 +366,24 @@ impl Anthropic {
                                     _ => "stop",
                                 }
                                 .to_string();
+                                if finish == "length"
+                                    && st.text_chars == 0
+                                    && st.tool_blocks_closed == 0
+                                {
+                                    // What did the output tokens go to? Seen
+                                    // once (Sonnet 5, 4,000 tokens, corpus-26,
+                                    // 2026-09-21) without a record of the
+                                    // stream; this names the block types and
+                                    // any tool call left open at the cut.
+                                    tracing::warn!(
+                                        provider = %provider,
+                                        model = %model,
+                                        output_tokens = st.usage.tokens_out,
+                                        blocks = ?st.block_kinds,
+                                        open_tool_blocks = ?open,
+                                        "max_tokens stop with no text and no finished tool call"
+                                    );
+                                }
                                 st.queue.push_back(GenerateEvent::Usage(st.usage));
                                 st.queue.push_back(GenerateEvent::Done {
                                     finish_reason: finish,

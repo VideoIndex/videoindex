@@ -31,7 +31,7 @@ pub struct ViewRequest {
     /// Tile width in the grid.
     pub tile_width: u32,
     /// Most frames in this grid (at most [`MAX_FRAMES`]); fps is lowered to
-    /// fit. Multi-window views use fewer frames per grid.
+    /// fit. Every grid of a multi-window `view` gets the full count too.
     pub max_frames: usize,
 }
 
