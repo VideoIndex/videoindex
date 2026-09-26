@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::ids::{JobId, VideoId};
+use crate::time::Timestamp;
 
 /// Default capacity of the broadcast channel. Slow subscribers lose the
 /// oldest events rather than stalling producers.
@@ -92,6 +93,17 @@ pub enum Event {
         level: String,
         /// Message.
         message: String,
+    },
+    /// A live video advanced: emitted every tick by a live indexer.
+    LiveProgress {
+        /// The live video.
+        video: VideoId,
+        /// Latest media time the demuxer has delivered.
+        head: Timestamp,
+        /// Media time up to which every coarse stage has committed its rows.
+        watermark: Timestamp,
+        /// `(stage, head - last_t)` in seconds per coarse stage.
+        lag_by_stage: Vec<(String, f64)>,
     },
 }
 

@@ -23,6 +23,8 @@ async fn seed(idx: &EmbeddedIndex) -> (VideoId, TrackId) {
         probe: serde_json::json!({}),
         index_state: IndexState::Coarse,
         created_at: Utc::now(),
+        watermark: None,
+        live_ended_at: None,
     })
     .await
     .unwrap();

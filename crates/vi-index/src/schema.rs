@@ -1,4 +1,4 @@
-//! SQLite schema v1 and migrations. Every timestamp column comes as a
+//! SQLite schema v1 and migrations (v2: embedding rows; v3: live videos). Every timestamp column comes as a
 //! `(num, den, secs)` triple: the rational is the truth, `secs` is for
 //! indexing and display.
 
@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Migration functions in order; index `i` brings the schema to version `i + 1`.
-pub const MIGRATIONS: &[fn(&Connection) -> Result<()>] = &[v1, v2];
+pub const MIGRATIONS: &[fn(&Connection) -> Result<()>] = &[v1, v2, v3];
 
 /// Schema version recorded in `schema_meta`.
 pub fn current_version(conn: &Connection) -> Result<u32> {
@@ -31,8 +31,15 @@ pub fn current_version(conn: &Connection) -> Result<u32> {
 
 /// Apply pending migrations.
 pub fn migrate(conn: &Connection) -> Result<u32> {
+    migrate_to(conn, MIGRATIONS.len() as u32)
+}
+
+/// Apply migrations up to `target` only. Tests use this to build an index
+/// at an older schema version and check the migration from it.
+pub fn migrate_to(conn: &Connection, target: u32) -> Result<u32> {
     let mut v = current_version(conn)?;
-    while (v as usize) < MIGRATIONS.len() {
+    let target = target.min(MIGRATIONS.len() as u32);
+    while v < target {
         let tx = conn.unchecked_transaction()?;
         MIGRATIONS[v as usize](&tx)?;
         v += 1;
@@ -297,6 +304,21 @@ CREATE INDEX IF NOT EXISTS embeddings_model_row ON embeddings(model, row);
     Ok(())
 }
 
+/// v3: live videos carry a watermark (the time up to which coarse rows are
+/// committed) and the time the stream ended. Both nullable; batch videos
+/// leave them `NULL`. `index_state` may now be `live`.
+fn v3(c: &Connection) -> Result<()> {
+    c.execute_batch(
+        r#"
+ALTER TABLE videos ADD COLUMN watermark_num INTEGER;
+ALTER TABLE videos ADD COLUMN watermark_den INTEGER;
+ALTER TABLE videos ADD COLUMN watermark_secs REAL;
+ALTER TABLE videos ADD COLUMN live_ended_at TEXT;
+"#,
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,5 +339,30 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 3, "three FTS5 tables");
+    }
+
+    #[test]
+    fn migrate_to_stops_at_the_requested_version() {
+        let conn = Connection::open_in_memory().unwrap();
+        assert_eq!(migrate_to(&conn, 2).unwrap(), 2);
+        assert_eq!(current_version(&conn).unwrap(), 2);
+        let has_watermark: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('videos') WHERE name = 'watermark_num'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_watermark, 0);
+        assert_eq!(migrate(&conn).unwrap(), crate::SCHEMA_VERSION);
+        let has_watermark: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('videos') WHERE name IN ('watermark_num', 'watermark_den', 'watermark_secs', 'live_ended_at')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_watermark, 4);
+        assert_eq!(migrate_to(&conn, 99).unwrap(), crate::SCHEMA_VERSION);
     }
 }

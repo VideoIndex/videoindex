@@ -90,6 +90,65 @@ fn init_index_status_roundtrip() {
 }
 
 #[test]
+fn status_shows_head_and_watermark_of_a_live_video() {
+    use vi_core::model::{IndexState, Video};
+    use vi_core::{Timestamp, VideoId};
+    use vi_index::{EmbeddedIndex, Storage};
+
+    let dir = tempfile::tempdir().unwrap();
+    let idx = dir.path().join("live.vidx");
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let video_id = VideoId::new();
+    rt.block_on(async {
+        let store = EmbeddedIndex::create(&idx).unwrap();
+        store
+            .put_video(&Video {
+                id: video_id,
+                source_uri: "https://www.youtube.com/watch?v=live".into(),
+                content_hash: vi_core::model::live_identity_hash(
+                    "youtube:live",
+                    chrono::Utc::now(),
+                ),
+                title: Some("A stream".into()),
+                description: None,
+                channel: None,
+                published_at: None,
+                duration: Timestamp::from_secs(4360),
+                start_wallclock: Some(chrono::Utc::now()),
+                probe: serde_json::json!({"live": {"source": "youtube:live"}}),
+                index_state: IndexState::Live,
+                created_at: chrono::Utc::now(),
+                watermark: Some(Timestamp::from_secs(4356)),
+                live_ended_at: None,
+            })
+            .await
+            .unwrap();
+    });
+    drop(rt);
+    let idx_s = idx.to_str().unwrap();
+
+    let (ok, out, err) = run(&["status", idx_s]);
+    assert!(ok, "{err}");
+    assert!(
+        out.contains("live (head 01:12:40, watermark 01:12:36)"),
+        "{out}"
+    );
+
+    let (ok, out, err) = run(&["--json", "status", idx_s]);
+    assert!(ok, "{err}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let vs = &v["videos"][0];
+    assert_eq!(vs["video"]["index_state"], "live");
+    assert_eq!(vs["video"]["id"], video_id.to_string());
+    assert_eq!(vs["head"]["num"].as_i64().unwrap(), 4360);
+    assert_eq!(vs["head"]["den"].as_u64().unwrap(), 1);
+    assert_eq!(vs["watermark"]["num"].as_i64().unwrap(), 4356);
+    assert_eq!(vs["video"]["watermark"]["num"].as_i64().unwrap(), 4356);
+    assert!(vs["video"]["live_ended_at"].is_null());
+    assert_eq!(v["manifest"]["schema_version"], 3);
+}
+
+#[test]
 fn search_over_sidecar_subtitles() {
     let dir = tempfile::tempdir().unwrap();
     let media_dir = dir.path().join("in");

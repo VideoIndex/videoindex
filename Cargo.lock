@@ -3622,6 +3622,7 @@ name = "vi-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "futures",
  "humansize",
@@ -3650,6 +3651,7 @@ dependencies = [
 name = "vi-core"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "chrono",
  "figment",
  "rayon",

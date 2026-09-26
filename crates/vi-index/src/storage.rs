@@ -197,6 +197,12 @@ pub struct VideoStats {
     pub descriptions: u64,
     /// Cost in USD from provenance rows tied to this video (M0: 0).
     pub cost_usd: f64,
+    /// For a live video, the head (latest decoded time); `None` otherwise.
+    #[serde(default)]
+    pub head: Option<Timestamp>,
+    /// For a live video, the watermark; `None` otherwise.
+    #[serde(default)]
+    pub watermark: Option<Timestamp>,
 }
 
 /// Index-wide numbers for `vidx status`.

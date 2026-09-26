@@ -32,6 +32,8 @@ async fn seed(idx: &EmbeddedIndex) -> (VideoId, VideoId) {
         probe: json!({}),
         index_state: IndexState::Coarse,
         created_at: Utc::now(),
+        watermark: None,
+        live_ended_at: None,
     };
     let a = mk_video("Talk A", "MOOC", 3600);
     let b = mk_video("Talk B", "Workshop", 1800);

@@ -34,10 +34,18 @@ pub async fn run(args: Args, _config: &Config, out: &Output) -> Result<()> {
             stats.videos.len()
         ));
         for v in &stats.videos {
+            let state = match (v.head, v.watermark) {
+                (Some(head), watermark) => format!(
+                    "live (head {}, watermark {})",
+                    hms(head),
+                    watermark.map(hms).unwrap_or_else(|| "none".to_string())
+                ),
+                _ => format!("{:<9}", v.video.index_state.as_str()),
+            };
             s.push_str(&format!(
-                "\n  {}  {:<9} {}\n    {}\n    duration {}  tracks {}  samples {} (hashed {}, thumbnails {})",
+                "\n  {}  {} {}\n    {}\n    duration {}  tracks {}  samples {} (hashed {}, thumbnails {})",
                 v.video.id,
-                v.video.index_state.as_str(),
+                state,
                 v.video.title.as_deref().unwrap_or("(untitled)"),
                 v.video.source_uri,
                 v.video.duration,
@@ -79,4 +87,15 @@ pub async fn run(args: Args, _config: &Config, out: &Output) -> Result<()> {
         s.trim_end().to_string()
     });
     Ok(())
+}
+
+/// `HH:MM:SS` of a timestamp, whole seconds.
+fn hms(t: vi_core::Timestamp) -> String {
+    let secs = t.as_secs_f64().max(0.0).floor() as u64;
+    format!(
+        "{:02}:{:02}:{:02}",
+        secs / 3600,
+        (secs / 60) % 60,
+        secs % 60
+    )
 }

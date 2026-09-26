@@ -379,6 +379,8 @@ impl Scheduler {
                     probe: serde_json::to_value(&probe)?,
                     index_state: IndexState::Acquired,
                     created_at: Utc::now(),
+                    watermark: None,
+                    live_ended_at: None,
                 };
                 let tracks = probe.tracks(id);
                 self.storage.put_video(&v).await?;

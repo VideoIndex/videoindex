@@ -321,10 +321,18 @@ fn video_from_row(r: &Row<'_>) -> Result<Video> {
         index_state: IndexState::parse(&state)
             .ok_or_else(|| IndexError::Corrupt(format!("bad index_state '{state}'")))?,
         created_at: parse_dt(r.get("created_at")?)?.unwrap_or_else(Utc::now),
+        watermark: match (
+            r.get::<_, Option<i64>>("watermark_num")?,
+            r.get::<_, Option<i64>>("watermark_den")?,
+        ) {
+            (Some(num), Some(den)) => Some(ts(num, den)),
+            _ => None,
+        },
+        live_ended_at: parse_dt(r.get("live_ended_at")?)?,
     })
 }
 
-const VIDEO_COLS: &str = "id, source_uri, content_hash, title, description, channel, published_at, duration_num, duration_den, start_wallclock, probe, index_state, created_at";
+const VIDEO_COLS: &str = "id, source_uri, content_hash, title, description, channel, published_at, duration_num, duration_den, start_wallclock, probe, index_state, created_at, watermark_num, watermark_den, live_ended_at";
 
 fn track_from_row(r: &Row<'_>) -> Result<Track> {
     let kind: String = r.get("kind")?;
@@ -532,14 +540,16 @@ impl Storage for EmbeddedIndex {
         let v = v.clone();
         self.with_conn(move |c| {
             c.execute(
-                &format!("INSERT INTO videos({VIDEO_COLS}, duration_secs) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+                &format!("INSERT INTO videos({VIDEO_COLS}, duration_secs, watermark_secs) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
                      ON CONFLICT(id) DO UPDATE SET
                        source_uri = excluded.source_uri, content_hash = excluded.content_hash,
                        title = excluded.title, description = excluded.description, channel = excluded.channel,
                        published_at = excluded.published_at, duration_num = excluded.duration_num,
                        duration_den = excluded.duration_den, duration_secs = excluded.duration_secs,
                        start_wallclock = excluded.start_wallclock, probe = excluded.probe,
-                       index_state = excluded.index_state"),
+                       index_state = excluded.index_state,
+                       watermark_num = excluded.watermark_num, watermark_den = excluded.watermark_den,
+                       watermark_secs = excluded.watermark_secs, live_ended_at = excluded.live_ended_at"),
                 params![
                     v.id.to_string(),
                     v.source_uri,
@@ -554,7 +564,11 @@ impl Storage for EmbeddedIndex {
                     serde_json::to_string(&v.probe)?,
                     v.index_state.as_str(),
                     v.created_at.to_rfc3339(),
+                    v.watermark.map(|w| w.num),
+                    v.watermark.map(|w| w.den),
+                    v.live_ended_at.map(|d| d.to_rfc3339()),
                     v.duration.as_secs_f64(),
+                    v.watermark.map(|w| w.as_secs_f64()),
                 ],
             )?;
             Ok(())
@@ -1793,6 +1807,8 @@ impl Storage for EmbeddedIndex {
                     let transcript_spans = count("SELECT COUNT(*) FROM transcript_spans s JOIN tracks t ON t.id = s.track_id WHERE t.video_id = ?1")?;
                     let ocr_spans = count("SELECT COUNT(*) FROM ocr_spans o JOIN frame_samples f ON f.id = o.frame_sample_id JOIN tracks t ON t.id = f.track_id WHERE t.video_id = ?1")?;
                     let descriptions = count("SELECT COUNT(*) FROM descriptions d WHERE (d.target_kind = 'segment' AND d.target_id IN (SELECT id FROM segments WHERE video_id = ?1)) OR (d.target_kind = 'frame' AND d.target_id IN (SELECT f.id FROM frame_samples f JOIN tracks t ON t.id = f.track_id WHERE t.video_id = ?1))")?;
+                    let head = v.index_state.is_live().then_some(v.duration);
+                    let watermark = v.index_state.is_live().then_some(v.watermark).flatten();
                     out.push(VideoStats {
                         video: v,
                         tracks,
@@ -1804,6 +1820,8 @@ impl Storage for EmbeddedIndex {
                         ocr_spans,
                         descriptions,
                         cost_usd: 0.0,
+                        head,
+                        watermark,
                     });
                 }
                 Ok(out)
@@ -1874,7 +1892,45 @@ mod tests {
             probe: serde_json::json!({"format": "mp4"}),
             index_state: IndexState::Acquired,
             created_at: Utc::now(),
+            watermark: None,
+            live_ended_at: None,
         }
+    }
+
+    /// The v2 `videos` row shape, frozen: what a build before schema v3
+    /// wrote. Used to seed a v2 index for the migration test.
+    const V2_INSERT_VIDEO: &str = "INSERT INTO videos(id, source_uri, content_hash, title, description, channel, published_at, duration_num, duration_den, duration_secs, start_wallclock, probe, index_state, created_at) VALUES (?1, 'file:///tmp/old.mp4', 'oldhash', 'Old talk', NULL, NULL, NULL, 120, 1, 120.0, NULL, '{}', 'coarse', ?2)";
+
+    /// Build an index directory at schema v2 with one video, one track and
+    /// one transcript span, the way a `videoindex` build before v3 would
+    /// have left it.
+    fn make_v2_index(dir: &Path) -> VideoId {
+        std::fs::create_dir_all(dir).unwrap();
+        for sub in ["blobs", "vectors", "cache/operators", "jobs"] {
+            std::fs::create_dir_all(dir.join(sub)).unwrap();
+        }
+        let conn = open_conn(&dir.join(SQLITE_FILE)).unwrap();
+        assert_eq!(schema::migrate_to(&conn, 2).unwrap(), 2);
+        let vid = VideoId::new();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(V2_INSERT_VIDEO, params![vid.to_string(), now])
+            .unwrap();
+        let tid = TrackId::new();
+        conn.execute(
+            "INSERT INTO tracks(id, video_id, kind, stream_index, codec, timebase_num, timebase_den) VALUES (?1, ?2, 'audio', 1, 'aac', 1, 48000)",
+            params![tid.to_string(), vid.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO transcript_spans(id, track_id, t0_num, t0_den, t0_secs, t1_num, t1_den, t1_secs, text, provenance_id) VALUES (?1, ?2, 0, 1, 0.0, 4, 1, 4.0, 'hello from v2', 'p1')",
+            params![SpanId::new().to_string(), tid.to_string()],
+        )
+        .unwrap();
+        drop(conn);
+        let mut manifest = Manifest::new();
+        manifest.schema_version = 2;
+        manifest.write(dir).unwrap();
+        vid
     }
 
     fn track(video_id: VideoId) -> Track {
@@ -1908,6 +1964,125 @@ mod tests {
         let idx = EmbeddedIndex::open(&p).unwrap();
         assert_eq!(idx.list_videos().await.unwrap().len(), 0);
         assert!(EmbeddedIndex::open(dir.path()).is_err());
+    }
+
+    #[tokio::test]
+    async fn live_video_roundtrips_watermark_and_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let idx = EmbeddedIndex::create(&dir.path().join("x.vidx")).unwrap();
+        let mut v = video("live1");
+        v.index_state = IndexState::Live;
+        v.duration = Timestamp::new(90 * 90_000, 90_000);
+        v.watermark = Some(Timestamp::new(84 * 90_000, 90_000));
+        idx.put_video(&v).await.unwrap();
+        let back = idx.get_video(v.id).await.unwrap().unwrap();
+        assert_eq!(back.index_state, IndexState::Live);
+        assert_eq!(back.watermark, Some(Timestamp::from_secs(84)));
+        assert_eq!(
+            back.watermark.unwrap().den,
+            90_000,
+            "rational kept as written"
+        );
+        assert_eq!(back.live_ended_at, None);
+        assert_eq!(back, v);
+        let listed = idx.list_videos().await.unwrap();
+        assert_eq!(listed, vec![v.clone()]);
+        assert_eq!(
+            idx.find_video_by_hash("live1").await.unwrap(),
+            Some(v.clone())
+        );
+        let secs: f64 = idx
+            .with_conn(|c| Ok(c.query_row("SELECT watermark_secs FROM videos", [], |r| r.get(0))?))
+            .await
+            .unwrap();
+        assert!((secs - 84.0).abs() < 1e-9);
+        let stats = idx.stats().await.unwrap();
+        assert_eq!(stats.videos[0].head, Some(Timestamp::from_secs(90)));
+        assert_eq!(stats.videos[0].watermark, Some(Timestamp::from_secs(84)));
+
+        // Upsert moves the watermark and, at the end, the state and end time.
+        let ended = Utc::now();
+        v.watermark = Some(Timestamp::from_secs(88));
+        v.live_ended_at = Some(ended);
+        idx.put_video(&v).await.unwrap();
+        let back = idx.get_video(v.id).await.unwrap().unwrap();
+        assert_eq!(back.watermark, Some(Timestamp::from_secs(88)));
+        assert_eq!(
+            back.live_ended_at.map(|d| d.timestamp_millis()),
+            Some(ended.timestamp_millis())
+        );
+        idx.set_index_state(v.id, IndexState::Coarse).await.unwrap();
+        let back = idx.get_video(v.id).await.unwrap().unwrap();
+        assert_eq!(back.index_state, IndexState::Coarse);
+        let stats = idx.stats().await.unwrap();
+        assert_eq!(stats.videos[0].head, None, "head only reported while live");
+        idx.set_index_state(v.id, IndexState::Live).await.unwrap();
+        assert_eq!(
+            idx.get_video(v.id).await.unwrap().unwrap().index_state,
+            IndexState::Live
+        );
+        // A batch video has neither.
+        let b = video("batch");
+        idx.put_video(&b).await.unwrap();
+        let back = idx.get_video(b.id).await.unwrap().unwrap();
+        assert_eq!((back.watermark, back.live_ended_at), (None, None));
+    }
+
+    #[tokio::test]
+    async fn v2_index_migrates_to_v3_with_backup_and_rows_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("old.vidx");
+        let vid = make_v2_index(&p);
+        assert_eq!(Manifest::read(&p).unwrap().schema_version, 2);
+        let idx = EmbeddedIndex::open(&p).unwrap();
+        let backup = p.join(format!("{SQLITE_FILE}.v2.bak"));
+        assert!(backup.is_file(), "backup of the v2 database");
+        assert_eq!(Manifest::read(&p).unwrap().schema_version, 3);
+        assert_eq!(
+            idx.manifest().await.unwrap().schema_version,
+            crate::SCHEMA_VERSION
+        );
+        let videos = idx.list_videos().await.unwrap();
+        assert_eq!(videos.len(), 1);
+        let v = &videos[0];
+        assert_eq!(v.id, vid);
+        assert_eq!(v.content_hash, "oldhash");
+        assert_eq!(v.index_state, IndexState::Coarse);
+        assert_eq!(v.duration, Timestamp::from_secs(120));
+        assert_eq!(v.watermark, None, "watermark = NULL after migration");
+        assert_eq!(v.live_ended_at, None);
+        let tracks = idx.tracks(vid).await.unwrap();
+        assert_eq!(tracks.len(), 1);
+        let spans = idx.spans_by_operator(vid, "asr").await;
+        // Whatever the operator filter does with a bare 'p1' provenance, the
+        // row itself must survive: count it directly.
+        let _ = spans;
+        let (n_spans, n_null): (i64, i64) = idx
+            .with_conn(|c| {
+                Ok((
+                    c.query_row("SELECT COUNT(*) FROM transcript_spans", [], |r| r.get(0))?,
+                    c.query_row(
+                        "SELECT COUNT(*) FROM videos WHERE watermark_num IS NULL AND watermark_den IS NULL AND watermark_secs IS NULL AND live_ended_at IS NULL",
+                        [],
+                        |r| r.get(0),
+                    )?,
+                ))
+            })
+            .await
+            .unwrap();
+        assert_eq!((n_spans, n_null), (1, 1));
+        // The migrated index accepts live rows; the backup is still v2.
+        let mut live = video("live-after-migration");
+        live.index_state = IndexState::Live;
+        live.watermark = Some(Timestamp::from_secs(5));
+        idx.put_video(&live).await.unwrap();
+        assert_eq!(idx.list_videos().await.unwrap().len(), 2);
+        let old = Connection::open(&backup).unwrap();
+        assert_eq!(schema::current_version(&old).unwrap(), 2);
+        // Reopening does not migrate or back up again.
+        drop(idx);
+        let _ = EmbeddedIndex::open(&p).unwrap();
+        assert!(!p.join(format!("{SQLITE_FILE}.v3.bak")).exists());
     }
 
     #[tokio::test]
