@@ -123,6 +123,7 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--limit", type=int)
+    ap.add_argument("--ids", help="JSON file with question ids: keep only these (after sampling), e.g. the questions one run got wrong")
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--redo-unparsed", action="store_true", help="with --resume, also re-ask questions whose stored answer had no option letter")
     ap.add_argument("--out", required=True)
@@ -142,6 +143,9 @@ def main():
         print(f"{len(missing)} sampled questions skipped: their videos are not indexed", file=sys.stderr)
     if a.limit:
         qs = qs[: a.limit]
+    if a.ids:
+        keep = set(json.loads(Path(a.ids).read_text()))
+        qs = [q for q in qs if q.id in keep]
     out_path = Path(a.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     results: dict[str, dict] = {}
@@ -154,7 +158,7 @@ def main():
     config_record = {
         "benchmark": a.benchmark, "policy": a.policy, "model": a.model, "label": a.label, "budget_usd": a.budget_usd, "budget_tokens": a.budget_tokens,
         "max_tool_calls": a.max_tool_calls, "sample": n, "fraction": a.fraction, "seed": a.seed, "config": a.config, "index": a.index,
-        "skipped_not_indexed": len(missing),
+        "skipped_not_indexed": len(missing), "ids": a.ids,
         "vi_version": subprocess.run([a.vi, "--version"], capture_output=True, text=True).stdout.strip(),
         "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
