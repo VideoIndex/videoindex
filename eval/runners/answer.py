@@ -59,10 +59,11 @@ def parse_letter(text: str, letters: list[str], options: list[str] | None = None
 
 
 def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question, policy: str, budget_usd: float, max_tool_calls: int, budget_tokens: int,
-            model: str | None = None) -> dict:
+            model: str | None = None, budget_secs: float = 120.0) -> dict:
     cmd = [vi] + (["--config", config] if config else []) + [
         "ask", index, q.prompt(tools=policy == "agent"), "--json", "--video", video_id, "--policy", policy,
         "--budget-usd", str(budget_usd), "--max-tool-calls", str(max_tool_calls), "--budget-tokens", str(budget_tokens),
+        "--budget-secs", str(budget_secs),
     ] + (["--model", model] if model else [])
     t = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -116,6 +117,7 @@ def main():
     ap.add_argument("--label", help="row label for the report (default: policy + model)")
     ap.add_argument("--budget-usd", type=float, default=0.5)
     ap.add_argument("--budget-tokens", type=int, default=120000)
+    ap.add_argument("--budget-secs", type=float, default=120.0, help="wall-clock budget per question, seconds (vidx ask --budget-secs; the CLI default is 120)")
     ap.add_argument("--retry-empty", type=int, default=1, help="re-ask when the answer text is empty (model ended a forced turn with no content)")
     ap.add_argument("--max-tool-calls", type=int, default=6)
     ap.add_argument("--sample", type=int, help="number of questions (stratified by task type)")
@@ -157,7 +159,7 @@ def main():
     todo = [q for q in qs if q.id not in results]
     config_record = {
         "benchmark": a.benchmark, "policy": a.policy, "model": a.model, "label": a.label, "budget_usd": a.budget_usd, "budget_tokens": a.budget_tokens,
-        "max_tool_calls": a.max_tool_calls, "sample": n, "fraction": a.fraction, "seed": a.seed, "config": a.config, "index": a.index,
+        "budget_secs": a.budget_secs, "max_tool_calls": a.max_tool_calls, "sample": n, "fraction": a.fraction, "seed": a.seed, "config": a.config, "index": a.index,
         "skipped_not_indexed": len(missing), "ids": a.ids,
         "vi_version": subprocess.run([a.vi, "--version"], capture_output=True, text=True).stdout.strip(),
         "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -170,11 +172,11 @@ def main():
     done = 0
     with ThreadPoolExecutor(max_workers=a.jobs) as ex:
         def ask_with_retry(q: Question) -> dict:
-            r = ask_one(a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens, a.model)
+            r = ask_one(a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens, a.model, a.budget_secs)
             tries = 0
             while r.get("status") == "ok" and not r.get("text") and tries < a.retry_empty:
                 tries += 1
-                again = ask_one(a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens, a.model)
+                again = ask_one(a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens, a.model, a.budget_secs)
                 if again.get("status") != "ok":
                     # Keep the first (scored, empty) attempt rather than losing its spend.
                     r["retry_failed"] = again.get("error", again.get("status"))
