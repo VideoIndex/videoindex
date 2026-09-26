@@ -71,8 +71,8 @@ fn run() -> Result<()> {
                     },
                 )?;
             }
-            Request::Probe { path } => {
-                let resp = match crate::probe::probe_file(&path) {
+            Request::Probe { input } => {
+                let resp = match crate::probe::probe_input(&input) {
                     Ok(p) => Response::Probe(p),
                     Err(e) => Response::Error {
                         message: e.to_string(),

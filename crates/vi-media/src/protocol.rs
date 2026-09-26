@@ -13,10 +13,11 @@ use vi_core::Timestamp;
 use crate::error::{MediaError, Result};
 use crate::frame::PixelFormat;
 use crate::probe::Probe;
+use crate::segments::MediaInput;
 use crate::shm::ShmSpec;
 
 /// Protocol version; both sides must agree.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Largest message either side will accept.
 pub const MAX_MESSAGE_BYTES: u32 = 64 * 1024 * 1024;
@@ -156,10 +157,10 @@ pub enum Request {
         /// Protocol version of the parent.
         version: u32,
     },
-    /// Probe a file.
+    /// Probe a file or a segment feed.
     Probe {
-        /// Media file.
-        path: PathBuf,
+        /// What to probe.
+        input: MediaInput,
     },
     /// Decode video frames into shared memory.
     DecodeVideo {

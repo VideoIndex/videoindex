@@ -7,19 +7,23 @@ use serde::{Deserialize, Serialize};
 use vi_core::model::{Track, TrackKind};
 use vi_core::{Timestamp, TrackId, VideoId};
 
-/// ffprobe-equivalent output for one file.
+use crate::segments::{MediaInput, SegmentFeed};
+
+/// ffprobe-equivalent output for one file or one segment feed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Probe {
-    /// Path probed.
+    /// Path probed: the file, or the store directory of a segment feed.
     pub path: String,
-    /// File size in bytes.
+    /// File size in bytes; for a feed, the bytes of every segment listed.
     pub size_bytes: u64,
     /// Short container name, e.g. `mov,mp4,m4a,3gp,3g2,mj2`.
     pub format_name: String,
     /// Long container name.
     pub format_long_name: String,
-    /// Duration of the container.
-    pub duration: Timestamp,
+    /// Duration of the container; `None` when it is not known: a segment
+    /// feed that is still being written (`follow`), or a container without
+    /// a duration. Batch callers treat `None` as zero.
+    pub duration: Option<Timestamp>,
     /// Container start time.
     pub start_time: Timestamp,
     /// Overall bit rate.
@@ -144,6 +148,49 @@ impl Probe {
 /// Probe a file with libav. Blocking; call inside the worker.
 pub(crate) fn probe_file(path: &Path) -> crate::Result<Probe> {
     crate::decode::probe_impl(path)
+}
+
+/// Probe a file or a segment feed. Blocking; call inside the worker.
+pub(crate) fn probe_input(input: &MediaInput) -> crate::Result<Probe> {
+    match input {
+        MediaInput::File { path } => probe_file(path),
+        MediaInput::Segments(feed) => probe_segments(feed),
+    }
+}
+
+/// Probe a segment feed: read `index.json` and the first segment. No
+/// single file is `stat`ed; the size is the sum of the listed segments and
+/// the duration comes from the index, or is `None` while the feed is
+/// followed.
+fn probe_segments(feed: &SegmentFeed) -> crate::Result<Probe> {
+    let index = feed.load_index()?;
+    let first = index
+        .segments
+        .first()
+        .ok_or_else(|| crate::MediaError::NoStream("segment", feed.dir.display().to_string()))?;
+    let mut probe = probe_file(&feed.segment_path(first))?;
+    probe.path = feed.dir.display().to_string();
+    probe.size_bytes = index.segments.iter().map(|s| s.bytes).sum();
+    probe.start_time = first.t0;
+    probe.duration = if feed.follow {
+        None
+    } else {
+        Some(index.duration())
+    };
+    // One segment says nothing about the whole recording's length.
+    for s in &mut probe.streams {
+        s.duration = None;
+        s.frames = None;
+    }
+    probe.chapters.clear();
+    probe
+        .metadata
+        .insert("live_store".to_string(), feed.dir.display().to_string());
+    probe.metadata.insert(
+        "live_ended".to_string(),
+        if index.ended { "true" } else { "false" }.to_string(),
+    );
+    Ok(probe)
 }
 
 impl StreamInfo {

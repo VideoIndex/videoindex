@@ -80,11 +80,7 @@ pub(crate) fn probe_impl(path: &Path) -> Result<Probe> {
     let mut ictx = format::input(path)?;
 
     let duration_us = ictx.duration();
-    let duration = if duration_us > 0 {
-        Timestamp::from_micros(duration_us)
-    } else {
-        Timestamp::ZERO
-    };
+    let duration = (duration_us > 0).then(|| Timestamp::from_micros(duration_us));
 
     let mut streams = Vec::new();
     let mut earliest_start = None::<Timestamp>;

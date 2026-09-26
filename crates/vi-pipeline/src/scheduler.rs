@@ -326,7 +326,9 @@ impl Scheduler {
         let vstream = probe.video_stream().ok_or_else(|| {
             Error::media(format!("{} has no video stream", acquired.path.display()))
         })?;
-        let expected_samples = (probe.duration.as_secs_f64() * policy.sample_fps).ceil() as u64;
+        // A file has a duration; a feed under `follow` does not (live C2).
+        let duration = probe.duration.unwrap_or_default();
+        let expected_samples = (duration.as_secs_f64() * policy.sample_fps).ceil() as u64;
         let _ = vstream;
 
         // Stable video id across re-indexing of the same content.
@@ -338,7 +340,7 @@ impl Scheduler {
             Some(mut v) => {
                 v.source_uri = acquired.source_uri.clone();
                 v.probe = serde_json::to_value(&probe)?;
-                v.duration = probe.duration;
+                v.duration = duration;
                 if acquired.title.is_some() {
                     v.title = acquired.title.clone();
                 } else if v.title.is_none() {
@@ -374,7 +376,7 @@ impl Scheduler {
                     description: acquired.description.clone(),
                     channel: acquired.channel.clone(),
                     published_at: acquired.published_at,
-                    duration: probe.duration,
+                    duration,
                     start_wallclock: None,
                     probe: serde_json::to_value(&probe)?,
                     index_state: IndexState::Acquired,
@@ -393,7 +395,7 @@ impl Scheduler {
         info!(chapters, "metadata imported");
         info!(
             video = %video.id,
-            duration = %probe.duration,
+            duration = %duration,
             fresh,
             "acquired and probed in {acquire_secs:.2}s"
         );
@@ -413,7 +415,7 @@ impl Scheduler {
             policy_name.clone(),
             stage_names.iter().cloned(),
         );
-        let budget = Arc::new(Budget::for_policy(&policy, probe.duration.as_secs_f64())?);
+        let budget = Arc::new(Budget::for_policy(&policy, duration.as_secs_f64())?);
         let media = Arc::new(MediaItem {
             acquired,
             probe,
