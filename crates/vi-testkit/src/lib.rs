@@ -2,8 +2,8 @@
 //! `build.rs` with ffmpeg at build time, so `cargo test` needs no network.
 //!
 //! Layout of the fixture (see `build.rs`): 120 s, 640x360, 30 fps, twelve
-//! 10-second segments with hard cuts, each a distinct solid colour with a
-//! white box at a per-segment position, timestamp text top-right, 440 Hz tone.
+//! 10-second segments with hard cuts, each a distinct solid colour with
+//! two white boxes at per-segment positions, timestamp text top-right, 440 Hz tone.
 //!
 //! For the live work the build also produces a segmented copy of the fixture
 //! in the live store's layout ([`fixture_segments_dir`]), which
@@ -51,6 +51,16 @@ pub const SEGMENT_COLORS: [[u8; 3]; 12] = [
 /// Path of the generated fixture.
 pub fn fixture_path() -> PathBuf {
     PathBuf::from(env!("VI_FIXTURE_PATH"))
+}
+
+/// Whether the fixture carries the burned-in `HH:MM:SS.mmm` timestamp.
+///
+/// It needs ffmpeg's `drawtext` filter, which some builds lack (Homebrew's
+/// ffmpeg is built without libfreetype). Without it every frame of a segment
+/// is identical, so content-addressed stores hold about one blob per segment
+/// instead of one per sample; tests that count blobs check this first.
+pub fn fixture_has_text() -> bool {
+    env!("VI_FIXTURE_HAS_TEXT") == "true"
 }
 
 /// Duration of each segment in the segmented copy of the fixture.
