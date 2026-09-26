@@ -285,6 +285,12 @@ pub fn worker_path() -> PathBuf {
                 "--bin",
                 "vi-media-worker",
             ]);
+            // Build into the target directory the tests run from, so a test run
+            // with `--target-dir` (a worktree next to the main checkout) finds
+            // the worker where it looks for it instead of in the default `target/`.
+            if let Some(target_dir) = profile_dir.parent() {
+                cmd.arg("--target-dir").arg(target_dir);
+            }
             if profile_dir.file_name().and_then(|n| n.to_str()) == Some("release") {
                 cmd.arg("--release");
             }
