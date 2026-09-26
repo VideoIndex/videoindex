@@ -88,7 +88,8 @@ Every tool is read-only against the index and the media. Tools are exposed ident
 | `get_transcript` | video_id, t0, t1 or windows[] (up to 3) | transcript text with timestamps; one entry per window, in time order, overlaps merged | cheap |
 | `get_ocr` | video_id, t0, t1 or windows[] (up to 3) | on-screen text with timestamps, per window | cheap |
 | `get_descriptions` | video_id, t0, t1 or windows[] (up to 3) | existing VLM descriptions, per window | cheap |
-| `view` | video_id, t0, t1 or windows[] (up to 3), fps | one labelled frame grid per window (at most 16 frames each; a window is at most 120 s alone, 60 s when several) plus the transcript of each window; images follow in window order | decode + image tokens |
+| `view` | video_id, t0, t1 or windows[] (up to 3), fps, detail? | one labelled frame grid per window (at most 16 frames each; a window is at most 120 s alone, 60 s when several) plus the transcript of each window; images follow in window order. `detail: true`: at most 6 frames in 2 columns of 896 px tiles over at most 15 s | decode + image tokens |
+| `zoom` | video_id, t, region? {x, y, w, h} as fractions of the frame | one frame at source resolution, cropped to the region when given and scaled so its longest side is at least 1024 px; the stored thumbnail when the media file is missing | decode + image tokens |
 | `describe` | video_id, t0, t1, question? | runs the VLM on the window, stores the Description, returns text | decode + VLM call, improves index |
 
 Planned, not built: `listen` (audio clip for audio-capable providers) and `find_similar_frames` (frames visually similar across the index).

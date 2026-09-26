@@ -24,6 +24,8 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 bytes = { workspace = true }
 image = { workspace = true, features = ["png"] }
+# Decodes the stored WebP thumbnails, the `zoom` source when the media file is missing.
+webp = { workspace = true }
 chrono = { workspace = true }
 
 [dev-dependencies]

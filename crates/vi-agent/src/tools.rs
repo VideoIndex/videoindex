@@ -7,8 +7,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use vi_core::config::{roles, Config};
-use vi_core::model::{Description, DescriptionKind, SegmentLevel, TargetKind, Video};
-use vi_core::{DescriptionId, Result, VideoId};
+use vi_core::model::{Description, DescriptionKind, SegmentLevel, TargetKind, TrackKind, Video};
+use vi_core::{DescriptionId, Result, TimeRange, VideoId};
 use vi_index::{BlobKey, Kind, MentionQuery, Storage};
 use vi_providers::{
     provenance_for, ContentPart, GenerateRequest, ImageData, Message, ProviderRegistry, Role,
@@ -16,7 +16,9 @@ use vi_providers::{
 };
 use vi_query::SearchRequest;
 
-use crate::view::{media_path, render_view, ts, ViewRequest};
+use crate::view::{
+    decode_frame, frame_to_png, media_path, render_view, ts, Region, ViewRequest, ZOOM_MIN_SIDE,
+};
 
 /// Longest text a tool returns before truncation, characters; a multi-window
 /// call shares it across the windows, each keeping at least
@@ -47,6 +49,17 @@ pub const MAX_MENTION_CHARS: usize = 24_000;
 /// `search` returns at most this many hits from one video unless told
 /// otherwise (or when the search is scoped to a single video).
 pub const DEFAULT_PER_VIDEO_K: usize = 3;
+/// Longest window of a `view` with `detail: true`, seconds.
+pub const VIEW_DETAIL_WINDOW_SECS: f64 = 15.0;
+/// A detail view: six frames in two columns of 896 px tiles, decoded at
+/// 1280 px, so each frame is about four times the area of a normal tile.
+pub const VIEW_DETAIL_FRAMES: usize = 6;
+/// Columns of a detail view.
+pub const VIEW_DETAIL_COLS: u32 = 2;
+/// Tile width of a detail view.
+pub const VIEW_DETAIL_TILE_WIDTH: u32 = 896;
+/// Decode size of a detail view.
+pub const VIEW_DETAIL_MAX_DIM: u32 = 1280;
 
 /// What tools need.
 pub struct ToolContext {
@@ -175,12 +188,22 @@ pub fn specs(with_describe: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "view".into(),
-            description: "Look at the pixels: decodes a time range (at most 120 s) at the given frame rate and returns a labelled frame grid image plus the transcript of the window. `windows` (up to 3, same video, each at most 60 s) is for comparing two or three candidate moments you have already found, and costs one tool call: pass windows=[{t0,t1},...] instead of t0/t1 and get one grid per window, images in window order. When the next window depends on what you see, view one window at a time: a single view gives the densest frames. Costs decoding and image tokens; use after search has narrowed the range.".into(),
+            description: "Look at the pixels: decodes a time range (at most 120 s) at the given frame rate and returns a labelled frame grid image plus the transcript of the window. `windows` (up to 3, same video, each at most 60 s) is for comparing two or three candidate moments you have already found, and costs one tool call: pass windows=[{t0,t1},...] instead of t0/t1 and get one grid per window, images in window order. When the next window depends on what you see, view one window at a time: a single view gives the densest frames. `detail: true` shows at most 6 frames at twice the usual size (2 columns of 896 px tiles, window at most 15 s) for reading small things once the moment is known. Costs decoding and image tokens; use after search has narrowed the range.".into(),
             parameters: json!({"type":"object","properties":{
                 "video_id":{"type":"string"},"t0":{"type":"number"},"t1":{"type":"number"},
                 "windows":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"t0":{"type":"number"},"t1":{"type":"number"}},"required":["t0","t1"]},"description":"Up to 3 time ranges of the same video (each at most 60 s), one grid each, for comparing moments already found; use instead of t0/t1."},
-                "fps":{"type":"number","default":1,"description":"Frames per second; at most 16 frames per grid."}
+                "fps":{"type":"number","default":1,"description":"Frames per second; at most 16 frames per grid."},
+                "detail":{"type":"boolean","default":false,"description":"Six frames at twice the usual size over at most 15 s, for small things at a moment already found."}
             },"required":["video_id"]}),
+        },
+        ToolSpec {
+            name: "zoom".into(),
+            description: "One frame at full resolution at time t (seconds), optionally a region of it enlarged: for small text, digits, scoreboards, counting small objects, left/right and colours that a 16-frame grid cannot show. Use after view has found the frame. Name the region as fractions of the frame from the top-left corner (x, y, w, h in 0–1) when you can say where the detail is; a small region is enlarged so its longest side is at least 1024 px.".into(),
+            parameters: json!({"type":"object","properties":{
+                "video_id":{"type":"string"},
+                "t":{"type":"number","description":"Time of the frame, seconds."},
+                "region":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"}},"required":["x","y","w","h"],"description":"Part of the frame to enlarge, as fractions 0–1 of width and height from the top-left corner."}
+            },"required":["video_id","t"]}),
         },
     ];
     if with_describe {
@@ -309,6 +332,7 @@ pub async fn execute(ctx: &ToolContext, call: &ToolCall) -> Result<ToolOutput> {
         "get_ocr" => tool_window(ctx, &call.args, Kind::Ocr).await,
         "get_descriptions" => tool_window(ctx, &call.args, Kind::Description).await,
         "view" => tool_view(ctx, &call.args).await,
+        "zoom" => tool_zoom(ctx, &call.args).await,
         "describe" => tool_describe(ctx, &call.args).await,
         other => Err(format!("unknown tool '{other}'")),
     };
@@ -899,14 +923,9 @@ async fn tool_window(ctx: &ToolContext, args: &Value, kind: Kind) -> ToolResult 
     })
 }
 
-async fn grid_for(
-    ctx: &ToolContext,
-    v: &Video,
-    t0: f64,
-    t1: f64,
-    fps: f64,
-    max_frames: usize,
-) -> std::result::Result<(crate::view::ViewResult, BlobKey), String> {
+/// The `view` request the configured grid layout gives (columns from the
+/// policy's `vlm_grid`), before per-call options.
+fn base_view(ctx: &ToolContext) -> ViewRequest {
     let cols = ctx
         .config
         .policy
@@ -914,14 +933,17 @@ async fn grid_for(
         .next()
         .and_then(|p| vi_perceive::grid::GridLayout::parse_cols(&p.vlm_grid))
         .unwrap_or(3);
-    let req = ViewRequest {
-        t0,
-        t1,
-        fps,
+    ViewRequest {
         cols,
-        max_frames,
         ..ViewRequest::default()
-    };
+    }
+}
+
+async fn grid_for(
+    ctx: &ToolContext,
+    v: &Video,
+    req: ViewRequest,
+) -> std::result::Result<(crate::view::ViewResult, BlobKey), String> {
     let view = render_view(&ctx.config.media.worker, v, req)
         .await
         .map_err(|e| e.to_string())?;
@@ -957,28 +979,62 @@ async fn tool_view(ctx: &ToolContext, args: &Value) -> ToolResult {
     if media_path(&v).filter(|p| p.is_file()).is_none() {
         return Err("the media file for this video is not on this machine; use get_transcript, get_ocr and search instead".into());
     }
+    let detail = args
+        .get("detail")
+        .and_then(|d| d.as_bool())
+        .unwrap_or(false);
     let mut wins = windows_arg(args, v.duration.as_secs_f64(), MAX_VIEW_WINDOWS)?;
     let multi = args.get("windows").is_some_and(|w| !w.is_null());
     let fps = arg_f64(args, "fps").unwrap_or(1.0);
     // Every grid gets the full frame count. Several windows (after merging)
     // are a comparison of moments already found, so each is capped at
     // `MULTI_VIEW_WINDOW_SECS` from its start to keep the frames dense; the
-    // single form keeps the 120 s of `ViewRequest::clamped`.
+    // single form keeps the 120 s of `ViewRequest::clamped`. A detail view
+    // shows six large frames, so its window is at most 15 s.
+    let cap = if detail {
+        Some(VIEW_DETAIL_WINDOW_SECS)
+    } else if wins.len() > 1 {
+        Some(MULTI_VIEW_WINDOW_SECS)
+    } else {
+        None
+    };
     let mut clamped = vec![false; wins.len()];
-    if wins.len() > 1 {
+    if let Some(cap) = cap {
         for ((t0, t1), c) in wins.iter_mut().zip(clamped.iter_mut()) {
-            if *t1 - *t0 > MULTI_VIEW_WINDOW_SECS {
-                *t1 = *t0 + MULTI_VIEW_WINDOW_SECS;
+            if *t1 - *t0 > cap {
+                *t1 = *t0 + cap;
                 *c = true;
             }
         }
     }
     let transcript_cap = (VIEW_TRANSCRIPT_CHARS / wins.len()).max(MIN_VIEW_TRANSCRIPT_CHARS);
+    let base = base_view(ctx);
+    let request = |t0: f64, t1: f64| {
+        if detail {
+            ViewRequest {
+                t0,
+                t1,
+                fps,
+                max_dim: VIEW_DETAIL_MAX_DIM,
+                cols: VIEW_DETAIL_COLS,
+                tile_width: VIEW_DETAIL_TILE_WIDTH,
+                max_frames: VIEW_DETAIL_FRAMES,
+            }
+        } else {
+            ViewRequest {
+                t0,
+                t1,
+                fps,
+                max_frames: crate::view::MAX_FRAMES,
+                ..base.clone()
+            }
+        }
+    };
     // Decode the windows together (each is its own worker call), then keep
     // window order for the text, the images and the summary.
     let grids = futures::future::join_all(
         wins.iter()
-            .map(|&(t0, t1)| grid_for(ctx, &v, t0, t1, fps, crate::view::MAX_FRAMES)),
+            .map(|&(t0, t1)| grid_for(ctx, &v, request(t0, t1))),
     )
     .await;
     let mut rows = Vec::with_capacity(wins.len());
@@ -998,7 +1054,10 @@ async fn tool_view(ctx: &ToolContext, args: &Value) -> ToolResult {
             "transcript": transcript,
         });
         if was_clamped {
-            row["clamped_to_secs"] = json!(MULTI_VIEW_WINDOW_SECS);
+            row["clamped_to_secs"] = json!(cap);
+        }
+        if detail {
+            row["detail"] = json!(true);
         }
         rows.push(row);
         images.push(ImageData::Encoded {
@@ -1006,23 +1065,29 @@ async fn tool_view(ctx: &ToolContext, args: &Value) -> ToolResult {
             bytes: bytes::Bytes::from(view.png),
         });
     }
+    let size_note = if detail {
+        " Frames are shown at twice the usual size."
+    } else {
+        ""
+    };
     let content = if multi {
         json!({
             "video_id": id.to_string(),
             "windows": rows,
-            "note": format!("{} frame grids follow as images, one per window in this order; tiles are labelled HH:MM:SS.", wins.len()),
+            "note": format!("{} frame grids follow as images, one per window in this order; tiles are labelled HH:MM:SS.{size_note}", wins.len()),
         })
     } else {
         let mut row = rows.pop().unwrap_or_default();
         row["video_id"] = Value::String(id.to_string());
-        row["note"] = Value::String(
-            "The frame grid follows as an image; tiles are labelled HH:MM:SS.".into(),
-        );
+        row["note"] = Value::String(format!(
+            "The frame grid follows as an image; tiles are labelled HH:MM:SS.{size_note}"
+        ));
         row
     };
+    let detail_tag = if detail { ", detail" } else { "" };
     let summary = if multi {
         format!(
-            "{} windows, {frames} frames ({distinct} distinct): {}",
+            "{} windows, {frames} frames ({distinct} distinct{detail_tag}): {}",
             wins.len(),
             wins.iter()
                 .map(|(a, b)| format!("[{}, {}]", hms(*a), hms(*b)))
@@ -1031,7 +1096,7 @@ async fn tool_view(ctx: &ToolContext, args: &Value) -> ToolResult {
         )
     } else {
         format!(
-            "{frames} frames ({distinct} distinct) in [{}, {}]",
+            "{frames} frames ({distinct} distinct{detail_tag}) in [{}, {}]",
             hms(wins[0].0),
             hms(wins[0].1)
         )
@@ -1041,6 +1106,134 @@ async fn tool_view(ctx: &ToolContext, args: &Value) -> ToolResult {
         summary,
         images,
         decoded: true,
+        ..ToolOutput::default()
+    })
+}
+
+/// The stored thumbnail nearest `t` as an RGB image: the `zoom` source when
+/// the media file is not on this machine.
+async fn thumbnail_frame(
+    ctx: &ToolContext,
+    v: &Video,
+    t: f64,
+) -> std::result::Result<(image::RgbImage, f64), String> {
+    const NO_MEDIA: &str = "the media file for this video is not on this machine and no thumbnail is stored near t; use get_transcript, get_ocr and search instead";
+    let tracks = ctx.storage.tracks(v.id).await.map_err(|e| e.to_string())?;
+    let Some(track) = tracks.iter().find(|t| t.kind == TrackKind::Video) else {
+        return Err(NO_MEDIA.into());
+    };
+    let range = TimeRange::new(ts((t - 2.0).max(0.0)), ts(t + 2.0));
+    let sample = ctx
+        .storage
+        .frame_samples(track.id, range)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|s| s.thumbnail_blob.is_some())
+        .min_by(|a, b| {
+            (a.t.as_secs_f64() - t)
+                .abs()
+                .total_cmp(&(b.t.as_secs_f64() - t).abs())
+        })
+        .ok_or(NO_MEDIA)?;
+    let key = BlobKey::parse(sample.thumbnail_blob.as_deref().unwrap_or_default())
+        .map_err(|e| e.to_string())?;
+    let bytes = ctx
+        .storage
+        .get_blob(&key)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("thumbnail blob {key} is missing from the index"))?;
+    let img = webp::Decoder::new(&bytes)
+        .decode()
+        .ok_or("the stored thumbnail is not a WebP image")?;
+    let (w, h) = (img.width(), img.height());
+    let rgb: Vec<u8> = match img.layout() {
+        webp::PixelLayout::Rgb => img.to_vec(),
+        webp::PixelLayout::Rgba => img
+            .chunks_exact(4)
+            .flat_map(|p| [p[0], p[1], p[2]])
+            .collect(),
+    };
+    let img = image::RgbImage::from_raw(w, h, rgb).ok_or("thumbnail buffer size mismatch")?;
+    Ok((img, sample.t.as_secs_f64()))
+}
+
+async fn tool_zoom(ctx: &ToolContext, args: &Value) -> ToolResult {
+    let id = video_arg(ctx, args)?;
+    let v = video(ctx, id).await?;
+    let duration = v.duration.as_secs_f64();
+    let t = arg_f64(args, "t")
+        .or_else(|| arg_f64(args, "t0"))
+        .ok_or("t is required: the time of the frame, seconds")?;
+    if !t.is_finite() || t < 0.0 {
+        return Err(format!("t ({t}) must be a time inside the video"));
+    }
+    let t = t.min((duration - 0.1).max(0.0));
+    let region = match args.get("region").filter(|r| !r.is_null()) {
+        Some(r) => {
+            let f = |k: &str, default: f64| arg_f64(r, k).unwrap_or(default);
+            Some(
+                Region {
+                    x: f("x", 0.0),
+                    y: f("y", 0.0),
+                    w: f("w", 1.0),
+                    h: f("h", 1.0),
+                }
+                .clamped(),
+            )
+        }
+        None => None,
+    };
+    let (img, source, frame_t) = if media_path(&v).filter(|p| p.is_file()).is_some() {
+        let f = decode_frame(&ctx.config.media.worker, &v, t, 0)
+            .await
+            .map_err(|e| e.to_string())?;
+        let img = vi_perceive::thumbnail::frame_to_rgb(&f).map_err(|e| e.to_string())?;
+        (img, "decode", f.t.as_secs_f64())
+    } else {
+        let (img, st) = thumbnail_frame(ctx, &v, t).await?;
+        (img, "thumbnail", st)
+    };
+    let (src_w, src_h) = (img.width(), img.height());
+    let out = vi_core::cpu::run(move || frame_to_png(img, region, ZOOM_MIN_SIDE))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let key = BlobKey::for_bytes(&out.png);
+    ctx.storage
+        .put_blob(&key, bytes::Bytes::from(out.png.clone()))
+        .await
+        .map_err(|e| e.to_string())?;
+    let region_text = match region {
+        Some(r) => format!("region {:.2},{:.2},{:.2},{:.2}", r.x, r.y, r.w, r.h),
+        None => "full frame".to_string(),
+    };
+    Ok(ToolOutput {
+        content: json!({
+            "video_id": id.to_string(),
+            "t": round1(frame_t), "t0": round1(frame_t), "t1": round1(frame_t + 1.0),
+            "kind": "frame",
+            "source": source,
+            "source_size": [src_w, src_h],
+            "region": region.map(|r| json!({"x": r.x, "y": r.y, "w": r.w, "h": r.h})),
+            "crop_px": out.crop.map(|(x, y, w, h)| json!([x, y, w, h])),
+            "width": out.width, "height": out.height,
+            "frame_blob": key.uri(),
+            "note": "The frame follows as an image at full resolution (enlarged when small). Pass a region {x, y, w, h} in fractions of the frame to enlarge one detail.",
+        })
+        .to_string(),
+        summary: format!(
+            "zoomed {} ({region_text} → {}×{})",
+            hms(frame_t),
+            out.width,
+            out.height
+        ),
+        images: vec![ImageData::Encoded {
+            mime: "image/png",
+            bytes: bytes::Bytes::from(out.png),
+        }],
+        decoded: source == "decode",
         ..ToolOutput::default()
     })
 }
@@ -1056,7 +1249,18 @@ async fn tool_describe(ctx: &ToolContext, args: &Value) -> ToolResult {
         .providers
         .vlm(roles::VLM_DESCRIBE)
         .map_err(|e| e.to_string())?;
-    let (view, key) = grid_for(ctx, &v, t0, t1, 1.0, crate::view::MAX_FRAMES).await?;
+    let (view, key) = grid_for(
+        ctx,
+        &v,
+        ViewRequest {
+            t0,
+            t1,
+            fps: 1.0,
+            max_frames: crate::view::MAX_FRAMES,
+            ..base_view(ctx)
+        },
+    )
+    .await?;
     let transcript = transcript_text(ctx, id, t0, t1, VIEW_TRANSCRIPT_CHARS).await;
     let prompt = vi_providers::prompts::get("vlm_describe").ok_or("prompt missing")?;
     let mut user_text = format!(

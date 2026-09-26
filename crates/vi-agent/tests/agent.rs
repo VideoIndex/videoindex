@@ -1004,3 +1004,166 @@ async fn empty_length_stop_falls_to_the_empty_answer_retry() {
         other => panic!("last event {other:?}"),
     }
 }
+
+/// `zoom` returns one frame at source size or larger: the whole fixture frame
+/// (640×360) comes back at least 1024 px wide; the top-right region (the
+/// burned-in timestamp) is enlarged to 1024 px and differs between two times;
+/// a region outside 0–1 is clamped and reported as clamped.
+#[tokio::test]
+async fn zoom_returns_an_enlarged_frame_or_region() {
+    use vi_agent::tools::{self, ToolCall, ToolContext};
+    use vi_providers::ImageData;
+    let dir = tempfile::tempdir().unwrap();
+    let (idx, config) = build_index(dir.path()).await;
+    let video_id = {
+        use vi_index::Storage;
+        idx.list_videos().await.unwrap()[0].id
+    };
+    let providers = Arc::new(ProviderRegistry::new(
+        config.clone(),
+        CancellationToken::new(),
+    ));
+    let ctx = ToolContext {
+        storage: idx,
+        providers,
+        config,
+        videos: vec![video_id],
+    };
+    let zoom = |args: serde_json::Value| {
+        let ctx = &ctx;
+        async move {
+            let out = tools::execute(
+                ctx,
+                &ToolCall {
+                    id: "z".into(),
+                    name: "zoom".into(),
+                    args,
+                    signature: None,
+                },
+            )
+            .await
+            .unwrap();
+            let v: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+            assert!(v.get("error").is_none(), "{v}");
+            assert_eq!(out.images.len(), 1, "{}", out.summary);
+            let png = match &out.images[0] {
+                ImageData::Encoded { bytes, .. } => bytes.clone(),
+                other => panic!("{other:?}"),
+            };
+            let img = image::load_from_memory(&png).unwrap();
+            (v, out.summary, png, img.width(), img.height())
+        }
+    };
+    let (v, summary, _, w, h) = zoom(serde_json::json!({"t": 35})).await;
+    assert!(w >= 1024, "{w}x{h}");
+    assert_eq!(v["source"], "decode", "{v}");
+    assert_eq!(v["width"].as_u64().unwrap(), u64::from(w));
+    assert_eq!(v["kind"], "frame");
+    assert!(summary.starts_with("zoomed 00:00:35"), "{summary}");
+    assert!(out_decoded(&ctx).await);
+    // The same region at two times: enlarged, and different pixels.
+    let region = serde_json::json!({"x": 0.7, "y": 0.0, "w": 0.3, "h": 0.15});
+    let (va, _, pa, wa, ha) = zoom(serde_json::json!({"t": 35, "region": region})).await;
+    let (_, _, pb, _, _) = zoom(serde_json::json!({"t": 75, "region": region})).await;
+    assert!(wa >= 1024 && ha > 100, "{wa}x{ha}");
+    assert_ne!(
+        pa, pb,
+        "the burned-in timestamps differ between 35 s and 75 s"
+    );
+    let crop = va["crop_px"].as_array().unwrap();
+    assert_eq!(crop[0].as_u64().unwrap(), 448, "{va}");
+    // A region past the frame edge is clamped inside it.
+    let (vc, _, _, wc, _) =
+        zoom(serde_json::json!({"t": 35, "region": {"x": 0.9, "y": 0.9, "w": 0.5, "h": 0.5}}))
+            .await;
+    let r = &vc["region"];
+    assert!(
+        r["x"].as_f64().unwrap() + r["w"].as_f64().unwrap() <= 1.0 + 1e-9
+            && r["y"].as_f64().unwrap() + r["h"].as_f64().unwrap() <= 1.0 + 1e-9,
+        "{vc}"
+    );
+    assert!(wc >= 1024, "{wc}");
+}
+
+/// The `decoded` flag of a `zoom` on a video whose media file is present.
+async fn out_decoded(ctx: &vi_agent::tools::ToolContext) -> bool {
+    use vi_agent::tools::{self, ToolCall};
+    tools::execute(
+        ctx,
+        &ToolCall {
+            id: "z2".into(),
+            name: "zoom".into(),
+            args: serde_json::json!({"t": 5}),
+            signature: None,
+        },
+    )
+    .await
+    .unwrap()
+    .decoded
+}
+
+/// `view` with `detail: true` shows at most six frames in two columns of
+/// 896 px tiles and cuts the window to 15 s, saying so.
+#[tokio::test]
+async fn view_detail_shows_six_large_frames_over_at_most_15_s() {
+    use vi_agent::tools::{self, ToolCall, ToolContext};
+    use vi_providers::ImageData;
+    let dir = tempfile::tempdir().unwrap();
+    let (idx, config) = build_index(dir.path()).await;
+    let video_id = {
+        use vi_index::Storage;
+        idx.list_videos().await.unwrap()[0].id
+    };
+    let providers = Arc::new(ProviderRegistry::new(
+        config.clone(),
+        CancellationToken::new(),
+    ));
+    let ctx = ToolContext {
+        storage: idx,
+        providers,
+        config,
+        videos: vec![video_id],
+    };
+    let out = tools::execute(
+        &ctx,
+        &ToolCall {
+            id: "v".into(),
+            name: "view".into(),
+            args: serde_json::json!({"t0": 10, "t1": 70, "detail": true}),
+            signature: None,
+        },
+    )
+    .await
+    .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+    assert!(v.get("error").is_none(), "{v}");
+    assert_eq!(v["t1"], 25.0, "{v}");
+    assert_eq!(v["clamped_to_secs"], 15.0, "{v}");
+    assert_eq!(v["detail"], true);
+    let frames = v["frames"].as_u64().unwrap();
+    assert!((2..=6).contains(&frames), "{v}");
+    assert_eq!(out.images.len(), 1);
+    let png = match &out.images[0] {
+        ImageData::Encoded { bytes, .. } => bytes.clone(),
+        other => panic!("{other:?}"),
+    };
+    let img = image::load_from_memory(&png).unwrap();
+    assert_eq!(img.width(), 2 * 896 + 3 * 4, "{}", out.summary);
+    assert!(out.summary.contains("detail"), "{}", out.summary);
+    // Without `detail` the same window keeps 16 frames and 60 s.
+    let plain = tools::execute(
+        &ctx,
+        &ToolCall {
+            id: "v2".into(),
+            name: "view".into(),
+            args: serde_json::json!({"t0": 10, "t1": 70}),
+            signature: None,
+        },
+    )
+    .await
+    .unwrap();
+    let pv: serde_json::Value = serde_json::from_str(&plain.content).unwrap();
+    assert_eq!(pv["t1"], 70.0, "{pv}");
+    assert!(pv.get("clamped_to_secs").is_none(), "{pv}");
+    assert!(pv["frames"].as_u64().unwrap() > 6, "{pv}");
+}

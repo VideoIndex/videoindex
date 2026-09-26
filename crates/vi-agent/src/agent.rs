@@ -360,7 +360,7 @@ async fn run(
         ));
     }
     if caps.max_images_per_request == 0 {
-        system.push_str("\nYou cannot see images: do not call view.\n");
+        system.push_str("\nYou cannot see images: do not call view or zoom.\n");
     }
     let session: Session = match &req.session_id {
         Some(id) => storage
@@ -379,7 +379,7 @@ async fn run(
 
     let mut specs = tools::specs(with_describe);
     if caps.max_images_per_request == 0 {
-        specs.retain(|t| t.name != "view");
+        specs.retain(|t| t.name != "view" && t.name != "zoom");
     }
     let mut scanner = Scanner::default();
     let mut answer = String::new();

@@ -14,6 +14,101 @@ use vi_perceive::grid::{compose, hms, GridLayout, Tile};
 pub const MAX_WINDOW_SECS: f64 = 120.0;
 /// Most frames in one grid.
 pub const MAX_FRAMES: usize = 16;
+/// Least longest side of a `zoom` frame after scaling, pixels: a small crop
+/// is enlarged to this so the model reads it at full size.
+pub const ZOOM_MIN_SIDE: u32 = 1024;
+/// Most, so a source-size frame of a 4K video stays inside image limits.
+pub const ZOOM_MAX_SIDE: u32 = 1600;
+/// Least side of a `zoom` crop in source pixels; a smaller region is widened
+/// around its centre.
+pub const ZOOM_MIN_CROP_PX: u32 = 64;
+
+/// A region of a frame in fractions of its width and height (0–1), from the
+/// top-left corner.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Region {
+    /// Left edge.
+    pub x: f64,
+    /// Top edge.
+    pub y: f64,
+    /// Width.
+    pub w: f64,
+    /// Height.
+    pub h: f64,
+}
+
+impl Region {
+    /// Inside the unit square with a positive size.
+    pub fn clamped(self) -> Self {
+        let coord = |v: f64| {
+            if v.is_finite() {
+                v.clamp(0.0, 0.999)
+            } else {
+                0.0
+            }
+        };
+        let x = coord(self.x);
+        let y = coord(self.y);
+        let size = |v: f64, from: f64| {
+            if v.is_finite() && v > 0.0 {
+                v.min(1.0 - from)
+            } else {
+                1.0 - from
+            }
+        };
+        Self {
+            x,
+            y,
+            w: size(self.w, x),
+            h: size(self.h, y),
+        }
+    }
+
+    /// Pixel rectangle `(x, y, w, h)` inside a `width × height` frame, at
+    /// least [`ZOOM_MIN_CROP_PX`] a side where the frame allows.
+    pub fn pixels(self, width: u32, height: u32) -> (u32, u32, u32, u32) {
+        let r = self.clamped();
+        let (fw, fh) = (f64::from(width.max(1)), f64::from(height.max(1)));
+        let min = f64::from(ZOOM_MIN_CROP_PX);
+        let axis = |from: f64, size: f64, full: f64| -> (u32, u32) {
+            let mut a = from * full;
+            let mut b = (from + size) * full;
+            if b - a < min {
+                let c = (a + b) / 2.0;
+                a = c - min / 2.0;
+                b = c + min / 2.0;
+            }
+            if a < 0.0 {
+                b -= a;
+                a = 0.0;
+            }
+            if b > full {
+                a -= b - full;
+                b = full;
+            }
+            let a = a.max(0.0);
+            let start = a.floor() as u32;
+            let end = (b.ceil() as u32).min(full as u32);
+            (start, end.saturating_sub(start).max(1))
+        };
+        let (x, w) = axis(r.x, r.w, fw);
+        let (y, h) = axis(r.y, r.h, fh);
+        (x, y, w, h)
+    }
+}
+
+/// One frame as PNG, after an optional crop and the scaling `zoom` applies.
+#[derive(Debug, Clone)]
+pub struct FramePng {
+    /// PNG bytes.
+    pub png: Vec<u8>,
+    /// Width.
+    pub width: u32,
+    /// Height.
+    pub height: u32,
+    /// The crop taken from the source frame, pixels `(x, y, w, h)`.
+    pub crop: Option<(u32, u32, u32, u32)>,
+}
 
 /// What to look at.
 #[derive(Debug, Clone, PartialEq)]
@@ -165,6 +260,78 @@ pub async fn render_view(
     })
 }
 
+/// Decode the frame nearest `t` at source size (`max_dim` 0) or scaled to
+/// `max_dim`.
+pub async fn decode_frame(
+    worker: &WorkerConfig,
+    video: &Video,
+    t: f64,
+    max_dim: u32,
+) -> Result<Arc<FrameBuffer>> {
+    let path = media_path(video).filter(|p| p.is_file()).ok_or_else(|| {
+        Error::NotFound(format!(
+            "media file for video {} is not on this machine",
+            video.id
+        ))
+    })?;
+    let duration = video.duration.as_secs_f64();
+    let t = if t.is_finite() {
+        t.clamp(0.0, (duration - 0.1).max(0.0))
+    } else {
+        0.0
+    };
+    let decode = VideoDecodeRequest::new(&path, 2.0, max_dim).range(t, Some(t + 0.6));
+    let mut stream = vi_media::decode_video(worker, decode).await?;
+    match stream.next().await? {
+        Some(f) => Ok(f.to_owned_frame()),
+        None => Err(Error::media(format!(
+            "no frame decoded at {t:.1} s of {}",
+            path.display()
+        ))),
+    }
+}
+
+/// Crop `region` out of the frame (when given), scale so the longest side is
+/// at least `min_side` and at most [`ZOOM_MAX_SIDE`] (bilinear), encode PNG.
+pub fn frame_to_png(
+    img: image::RgbImage,
+    region: Option<Region>,
+    min_side: u32,
+) -> Result<FramePng> {
+    let (fw, fh) = (img.width(), img.height());
+    let (img, crop) = match region {
+        Some(r) => {
+            let (x, y, w, h) = r.pixels(fw, fh);
+            (
+                image::imageops::crop_imm(&img, x, y, w, h).to_image(),
+                Some((x, y, w, h)),
+            )
+        }
+        None => (img, None),
+    };
+    let (w, h) = (img.width().max(1), img.height().max(1));
+    let longest = w.max(h);
+    let target = longest.clamp(min_side.min(ZOOM_MAX_SIDE), ZOOM_MAX_SIDE);
+    let img = if target != longest {
+        let scale = f64::from(target) / f64::from(longest);
+        let nw = ((f64::from(w) * scale).round() as u32).max(1);
+        let nh = ((f64::from(h) * scale).round() as u32).max(1);
+        image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
+    let (width, height) = (img.width(), img.height());
+    let mut png = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|e| Error::Other(format!("png encode: {e}")))?;
+    Ok(FramePng {
+        png: png.into_inner(),
+        width,
+        height,
+        crop,
+    })
+}
+
 /// Seconds as a `Timestamp` at millisecond precision.
 pub fn ts(secs: f64) -> Timestamp {
     Timestamp::from_secs_f64(secs, 1000)
@@ -216,5 +383,64 @@ mod tests {
         }
         .clamped(3600.0);
         assert_eq!(r.max_frames, MAX_FRAMES);
+    }
+
+    #[test]
+    fn regions_clamp_into_the_frame_and_keep_a_least_size() {
+        let r = Region {
+            x: 0.9,
+            y: -0.2,
+            w: 0.5,
+            h: 0.5,
+        }
+        .clamped();
+        assert!(r.x + r.w <= 1.0 + 1e-9 && r.y == 0.0 && r.h <= 0.5, "{r:?}");
+        // A tiny region is widened to 64 px a side inside the frame.
+        let (x, y, w, h) = Region {
+            x: 0.99,
+            y: 0.99,
+            w: 0.005,
+            h: 0.005,
+        }
+        .pixels(1280, 720);
+        assert!(w >= 64 && h >= 64, "{w}x{h}");
+        assert!(x + w <= 1280 && y + h <= 720, "{x},{y},{w},{h}");
+        // The whole frame maps to the whole frame.
+        assert_eq!(
+            Region {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0
+            }
+            .pixels(640, 360),
+            (0, 0, 640, 360)
+        );
+    }
+
+    #[test]
+    fn small_frames_and_crops_are_enlarged_to_the_least_side() {
+        let img = image::RgbImage::from_fn(640, 360, |x, _| image::Rgb([(x % 256) as u8, 0, 0]));
+        let full = frame_to_png(img.clone(), None, ZOOM_MIN_SIDE).unwrap();
+        assert_eq!((full.width, full.height), (1024, 576));
+        assert!(full.crop.is_none());
+        let crop = frame_to_png(
+            img,
+            Some(Region {
+                x: 0.7,
+                y: 0.0,
+                w: 0.3,
+                h: 0.15,
+            }),
+            ZOOM_MIN_SIDE,
+        )
+        .unwrap();
+        assert_eq!(crop.width, 1024, "{crop:?}");
+        assert!(crop.height > 100 && crop.height < 400, "{crop:?}");
+        assert_eq!(crop.crop.map(|c| c.0), Some(448));
+        // A huge frame is brought down to the ceiling.
+        let big = image::RgbImage::new(3840, 2160);
+        let out = frame_to_png(big, None, ZOOM_MIN_SIDE).unwrap();
+        assert_eq!(out.width, ZOOM_MAX_SIDE);
     }
 }
