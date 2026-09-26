@@ -3615,6 +3615,7 @@ dependencies = [
  "vi-providers",
  "vi-query",
  "vi-testkit",
+ "webp",
 ]
 
 [[package]]
