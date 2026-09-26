@@ -84,7 +84,7 @@ impl Operator for Vad {
             ..AudioDecodeRequest::new(&media.acquired.path)
         };
         let mut stream = vi_media::decode_audio(&ctx.worker, req).await?;
-        let total_secs = media.probe.duration.as_secs_f64();
+        let total_secs = media.probe.duration.unwrap_or_default().as_secs_f64();
         let mut pcm: Vec<i16> =
             Vec::with_capacity((total_secs * f64::from(SAMPLE_RATE)) as usize + 1024);
         let mut start: Option<Timestamp> = None;

@@ -30,7 +30,7 @@ pub fn item_to_json(item: &Item) -> Value {
             "video": m.video,
             "tracks": m.tracks,
             "path": m.acquired.path,
-            "duration_secs": m.probe.duration.as_secs_f64(),
+            "duration_secs": m.probe.duration.unwrap_or_default().as_secs_f64(),
             "expected_samples": m.expected_samples,
             "video_track_id": m.video_track().map(|t| t.id),
             "audio_track_id": m.audio_track().map(|t| t.id),

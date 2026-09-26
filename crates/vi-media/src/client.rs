@@ -2,7 +2,7 @@
 //! simple, crash-isolated per request, and cheap (a few milliseconds).
 //! Pooling can come later without changing this API.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +22,7 @@ use crate::protocol::{
     PROTOCOL_VERSION,
 };
 use crate::sandbox;
+use crate::segments::MediaInput;
 use crate::shm::{SharedRegion, SlotGuard};
 use crate::WORKER_ARG;
 
@@ -168,13 +169,13 @@ pub async fn worker_info(cfg: &WorkerConfig) -> Result<WorkerInfo> {
     Ok(WorkerInfo { executable, libav })
 }
 
-/// Probe a file in a worker process.
-pub async fn probe(cfg: &WorkerConfig, path: &Path) -> Result<Probe> {
+/// Probe a file or a segment feed in a worker process. Takes anything that
+/// converts into a [`MediaInput`]: a path, or a
+/// [`SegmentFeed`](crate::segments::SegmentFeed).
+pub async fn probe(cfg: &WorkerConfig, input: impl Into<MediaInput>) -> Result<Probe> {
+    let input = input.into();
     let mut w = Worker::spawn(cfg).await?;
-    w.send(&Request::Probe {
-        path: path.to_path_buf(),
-    })
-    .await?;
+    w.send(&Request::Probe { input }).await?;
     let result = loop {
         match w.recv().await {
             Ok(Response::Probe(p)) => break Ok(p),

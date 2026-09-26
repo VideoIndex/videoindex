@@ -176,6 +176,7 @@ A stream is recorded, while it runs, into a segmented local store next to the in
 - `segments` are in `seq` order and contiguous unless a range appears in `gaps`; `t0`/`t1` are `Timestamp` rationals on the stream's media timeline (in-segment PTS keep that timeline, `-reset_timestamps 0` style), `wallclock` is the source's programme date-time for `t0` when it has one, `ended` is set once the writer has closed the recording.
 - Writers append a segment by writing `seg/NNNNNN.ts.tmp`, renaming it, then rewriting `index.json` through a temporary file and rename, so a reader never lists a partial segment. `SegmentIndex::covering(t0, t1)` names the segments a window decode must open.
 - A truncated or unreadable `index.json` is a `protocol` error naming the file; a newer `schema` is refused like a newer index schema.
+- Probes and decodes name their source through `vi_media::MediaInput`: `File { path }` or `Segments(SegmentFeed { dir, follow })`. A probe over a feed reads `index.json` and the first segment, never `stat`s a single file, and reports `duration: None` while `follow` is set (`Probe.duration` is optional for that reason; batch callers treat `None` as zero).
 - The test fixture exists in this layout too: `vi_testkit::fixture_segments_dir()` is the 2-minute fixture cut into 60 segments, and `vi_testkit::PacedWriter` replays it into a fresh directory at any speed.
 
 Properties:

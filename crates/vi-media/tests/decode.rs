@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use vi_core::config::WorkerConfig;
-use vi_media::{AudioDecodeRequest, PixelFormat, VideoDecodeRequest};
+use vi_media::{AudioDecodeRequest, MediaInput, PixelFormat, SegmentFeed, VideoDecodeRequest};
 use vi_testkit as fx;
 
 fn cfg() -> WorkerConfig {
@@ -29,7 +29,7 @@ fn probe_color(frame: &vi_media::FrameBuffer) -> [u8; 3] {
 async fn probe_reports_streams_and_duration() {
     let p = vi_media::probe(&cfg(), &fx::fixture_path()).await.unwrap();
     assert!(
-        (p.duration.as_secs_f64() - fx::DURATION_SECS).abs() < 0.6,
+        (p.duration.unwrap().as_secs_f64() - fx::DURATION_SECS).abs() < 0.6,
         "{p:?}"
     );
     let v = p.video_stream().unwrap();
@@ -42,6 +42,83 @@ async fn probe_reports_streams_and_duration() {
     assert!((0.5..=10.0).contains(&kf), "keyframe interval {kf}");
     assert!(p.libav.starts_with("avformat"));
     assert!(p.size_bytes > 0);
+}
+
+#[tokio::test]
+async fn probe_over_a_segment_feed_reads_index_and_first_segment() {
+    let dir = fx::fixture_segments_dir();
+    let p = vi_media::probe(&cfg(), SegmentFeed::new(&dir))
+        .await
+        .unwrap();
+    assert_eq!(p.path, dir.display().to_string());
+    assert!(
+        (p.duration.unwrap().as_secs_f64() - fx::DURATION_SECS).abs() < 0.1,
+        "{:?}",
+        p.duration
+    );
+    assert_eq!(p.start_time, vi_core::Timestamp::ZERO);
+    assert!(p.format_name.contains("mpegts"), "{}", p.format_name);
+    let v = p.video_stream().unwrap();
+    assert_eq!(v.codec, "h264");
+    assert_eq!((v.width, v.height), (Some(fx::WIDTH), Some(fx::HEIGHT)));
+    assert!((v.fps.unwrap() - fx::FPS).abs() < 0.01);
+    assert_eq!(v.duration, None, "one segment says nothing about the whole");
+    assert_eq!(v.frames, None);
+    let a = p.audio_stream().unwrap();
+    assert_eq!(a.sample_rate, Some(fx::AUDIO_RATE));
+    let seg_bytes: u64 = std::fs::read_dir(dir.join("seg"))
+        .unwrap()
+        .map(|e| e.unwrap().metadata().unwrap().len())
+        .sum();
+    assert_eq!(p.size_bytes, seg_bytes, "size is the sum of the segments");
+    assert_eq!(
+        p.metadata.get("live_ended").map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(p.tracks(vi_core::VideoId::new()).len(), 2);
+
+    // Following: the recording may still grow, so no duration.
+    let p = vi_media::probe(&cfg(), SegmentFeed::following(&dir))
+        .await
+        .unwrap();
+    assert_eq!(p.duration, None);
+    assert_eq!(p.video_stream().unwrap().codec, "h264");
+
+    // The same through MediaInput, and a file still probes as before.
+    let p = vi_media::probe(&cfg(), MediaInput::from(SegmentFeed::new(&dir)))
+        .await
+        .unwrap();
+    assert!(p.duration.is_some());
+    let p = vi_media::probe(&cfg(), MediaInput::from(fx::fixture_path()))
+        .await
+        .unwrap();
+    assert!(p.format_name.contains("mp4"));
+}
+
+#[tokio::test]
+async fn probe_over_a_bad_feed_is_an_error_not_a_crash() {
+    let tmp = tempfile::tempdir().unwrap();
+    // No index at all.
+    let r = vi_media::probe(&cfg(), SegmentFeed::new(tmp.path())).await;
+    assert!(r.is_err(), "{r:?}");
+    // An index that lists no segments.
+    std::fs::write(
+        tmp.path().join("index.json"),
+        r#"{"schema":1,"timebase":{"num":1,"den":90000},"segments":[]}"#,
+    )
+    .unwrap();
+    let r = vi_media::probe(&cfg(), SegmentFeed::new(tmp.path())).await;
+    assert!(r.is_err(), "{r:?}");
+    // An index whose segment is missing.
+    std::fs::write(
+        tmp.path().join("index.json"),
+        r#"{"schema":1,"timebase":{"num":1,"den":90000},"segments":[{"seq":1,"file":"seg/000001.ts","t0":{"num":0,"den":1},"t1":{"num":2,"den":1},"bytes":1}]}"#,
+    )
+    .unwrap();
+    let r = vi_media::probe(&cfg(), SegmentFeed::new(tmp.path())).await;
+    assert!(r.is_err(), "{r:?}");
+    // The worker is still usable.
+    vi_media::probe(&cfg(), &fx::fixture_path()).await.unwrap();
 }
 
 #[tokio::test]

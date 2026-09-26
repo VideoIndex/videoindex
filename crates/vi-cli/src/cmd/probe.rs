@@ -23,7 +23,10 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
             probe.path,
             probe.format_name,
             probe.format_long_name,
-            probe.duration,
+            probe
+                .duration
+                .map(|d| d.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
             bytes(probe.size_bytes),
             probe.bit_rate / 1000
         ));
