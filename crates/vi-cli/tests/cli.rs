@@ -62,7 +62,14 @@ fn init_index_status_roundtrip() {
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["videos"][0]["frame_samples"].as_u64().unwrap(), samples);
     assert_eq!(v["videos"][0]["thumbnails"].as_u64().unwrap(), samples);
-    assert_eq!(v["blob_count"].as_u64().unwrap(), samples);
+    let blobs = v["blob_count"].as_u64().unwrap();
+    if fx::fixture_has_text() {
+        assert_eq!(blobs, samples);
+    } else {
+        // Without the timestamp overlay the frames of a segment are identical
+        // and the content-addressed blob store deduplicates them.
+        assert!((12..=samples).contains(&blobs), "{blobs} blobs");
+    }
     assert!(v["dir_bytes"].as_u64().unwrap() > 0);
 
     // Second run is skipped; force re-runs.
