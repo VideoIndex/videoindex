@@ -2,12 +2,20 @@
 //! `build.rs` with ffmpeg at build time, so `cargo test` needs no network.
 //!
 //! Layout of the fixture (see `build.rs`): 120 s, 640x360, 30 fps, twelve
-//! 10-second segments with hard cuts, each a distinct solid colour with a
+//! 10-second segments with hard cuts, each a distinct solid colour with
 //! two white boxes at per-segment positions, timestamp text top-right, 440 Hz tone.
+//!
+//! For the live work the build also produces a segmented copy of the fixture
+//! in the live store's layout ([`fixture_segments_dir`]), which
+//! [`PacedWriter`] replays into a fresh directory at a chosen speed, and a
+//! tone-and-silence audio variant ([`tone_silence_path`]).
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Total duration in seconds.
 pub const DURATION_SECS: f64 = 120.0;
@@ -53,6 +61,161 @@ pub fn fixture_path() -> PathBuf {
 /// instead of one per sample; tests that count blobs check this first.
 pub fn fixture_has_text() -> bool {
     env!("VI_FIXTURE_HAS_TEXT") == "true"
+}
+
+/// Duration of each segment in the segmented copy of the fixture.
+pub const LIVE_SEGMENT_SECS: f64 = 2.0;
+
+/// The fixture cut into 2 s MPEG-TS segments in the live store's layout:
+/// `seg/000001.ts` … `seg/000060.ts` and `index.json` in the
+/// `vi_media::segments::SegmentIndex` format (`schema: 1`, `ended: true`,
+/// no wall clock). Read-only; copy it with [`PacedWriter`] to simulate a
+/// stream.
+pub fn fixture_segments_dir() -> PathBuf {
+    PathBuf::from(env!("VI_FIXTURE_SEGMENTS_DIR"))
+}
+
+/// 120 s of 16 kHz mono PCM (`.wav`): in every 8 s period, 3 s of silence
+/// followed by 5 s of a 440 Hz tone. Meant for chunking and endpointing
+/// logic driven by a scripted VAD (speech ranges are known in advance:
+/// `[8k + 3, 8k + 8)` seconds), not for Silero, which does not treat a pure
+/// tone as speech.
+pub fn tone_silence_path() -> PathBuf {
+    PathBuf::from(env!("VI_FIXTURE_TONE_SILENCE_PATH"))
+}
+
+/// Period of the tone-and-silence fixture in seconds.
+pub const TONE_SILENCE_PERIOD_SECS: f64 = 8.0;
+/// Seconds of silence at the start of each period of the tone-and-silence
+/// fixture; the tone fills the rest.
+pub const TONE_SILENCE_SILENCE_SECS: f64 = 3.0;
+/// Sample rate of the tone-and-silence fixture.
+pub const TONE_SILENCE_RATE: u32 = 16_000;
+
+/// Copies the segmented fixture into a fresh directory at a chosen speed,
+/// the way a live ingest adapter fills a live store.
+///
+/// Segment `n` appears at `t1(n) / rate` seconds after `new` returned, first
+/// as `seg/NNNNNN.ts.tmp`, then renamed to its final name; `index.json` is
+/// rewritten (temporary file, rename) after each segment so a reader never
+/// lists a segment that is not complete. `rate == 0.0` copies as fast as
+/// possible. The copy runs on a background thread; [`PacedWriter::finish`]
+/// waits for it and marks the index `ended`.
+#[derive(Debug)]
+pub struct PacedWriter {
+    dst: PathBuf,
+    done: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<std::io::Result<()>>>,
+}
+
+impl PacedWriter {
+    /// Start copying [`fixture_segments_dir`] into `dst` at `rate` times
+    /// real time. `dst` and `dst/seg` are created; an existing `index.json`
+    /// there is overwritten.
+    pub fn new(dst: &Path, rate: f64) -> std::io::Result<Self> {
+        Self::from_source(&fixture_segments_dir(), dst, rate)
+    }
+
+    /// Like [`PacedWriter::new`] from any directory in the live store layout.
+    pub fn from_source(src: &Path, dst: &Path, rate: f64) -> std::io::Result<Self> {
+        if rate.is_nan() || rate < 0.0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("rate must be >= 0, got {rate}"),
+            ));
+        }
+        std::fs::create_dir_all(dst.join("seg"))?;
+        let index: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(src.join("index.json"))?)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        let mut empty = index.clone();
+        empty["segments"] = serde_json::Value::Array(Vec::new());
+        empty["ended"] = serde_json::Value::Bool(false);
+        write_index(dst, &empty)?;
+        let done = Arc::new(AtomicBool::new(false));
+        let flag = done.clone();
+        let (src, dst_thread) = (src.to_path_buf(), dst.to_path_buf());
+        let thread = std::thread::Builder::new()
+            .name("paced-writer".into())
+            .spawn(move || {
+                let r = copy_paced(&src, &dst_thread, index, rate);
+                flag.store(true, Ordering::SeqCst);
+                r
+            })?;
+        Ok(Self {
+            dst: dst.to_path_buf(),
+            done,
+            thread: Some(thread),
+        })
+    }
+
+    /// Destination directory.
+    pub fn dst(&self) -> &Path {
+        &self.dst
+    }
+
+    /// True once every segment has been copied.
+    pub fn is_done(&self) -> bool {
+        self.done.load(Ordering::SeqCst)
+    }
+
+    /// Wait for the copy to finish, then mark the index `ended`.
+    pub fn finish(mut self) -> std::io::Result<()> {
+        if let Some(t) = self.thread.take() {
+            t.join()
+                .map_err(|_| std::io::Error::other("paced writer thread panicked"))??;
+        }
+        let mut index: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(self.dst.join("index.json"))?)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        index["ended"] = serde_json::Value::Bool(true);
+        write_index(&self.dst, &index)
+    }
+}
+
+fn write_index(dir: &Path, index: &serde_json::Value) -> std::io::Result<()> {
+    let tmp = dir.join("index.json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(index)?)?;
+    std::fs::rename(tmp, dir.join("index.json"))
+}
+
+fn secs_of(v: &serde_json::Value) -> f64 {
+    let num = v["num"].as_i64().unwrap_or(0) as f64;
+    let den = v["den"].as_u64().unwrap_or(1).max(1) as f64;
+    num / den
+}
+
+fn copy_paced(
+    src: &Path,
+    dst: &Path,
+    mut index: serde_json::Value,
+    rate: f64,
+) -> std::io::Result<()> {
+    let entries = index["segments"].as_array().cloned().unwrap_or_default();
+    let origin = entries.first().map(|e| secs_of(&e["t0"])).unwrap_or(0.0);
+    index["ended"] = serde_json::Value::Bool(false);
+    let start = Instant::now();
+    let mut written = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if rate > 0.0 {
+            let due = (secs_of(&entry["t1"]) - origin) / rate;
+            let elapsed = start.elapsed().as_secs_f64();
+            if due > elapsed {
+                std::thread::sleep(Duration::from_secs_f64(due - elapsed));
+            }
+        }
+        let rel = entry["file"].as_str().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "segment without file")
+        })?;
+        let target = dst.join(rel);
+        let tmp = target.with_extension("ts.tmp");
+        std::fs::copy(src.join(rel), &tmp)?;
+        std::fs::rename(&tmp, &target)?;
+        written.push(entry);
+        index["segments"] = serde_json::Value::Array(written.clone());
+        write_index(dst, &index)?;
+    }
+    Ok(())
 }
 
 /// Segment index for a time.
@@ -144,6 +307,205 @@ pub fn worker_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
+
+    fn ffmpeg() -> String {
+        std::env::var("FFMPEG").unwrap_or_else(|_| "ffmpeg".to_string())
+    }
+
+    fn ffprobe() -> String {
+        if let Ok(p) = std::env::var("FFPROBE") {
+            return p;
+        }
+        let f = ffmpeg();
+        match f.rfind('/') {
+            Some(i) => format!("{}/ffprobe", &f[..i]),
+            None => "ffprobe".to_string(),
+        }
+    }
+
+    fn probe_value(path: &Path, args: &[&str]) -> String {
+        let out = Command::new(ffprobe())
+            .args(["-v", "error"])
+            .args(args)
+            .args(["-of", "csv=p=0"])
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // MPEG-TS input makes ffprobe repeat the entry; the first line is it.
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    fn count_video_frames(path: &Path) -> u64 {
+        probe_value(
+            path,
+            &[
+                "-select_streams",
+                "v:0",
+                "-count_frames",
+                "-show_entries",
+                "stream=nb_read_frames",
+            ],
+        )
+        .trim_matches(',')
+        .parse()
+        .unwrap()
+    }
+
+    fn read_index(dir: &Path) -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(dir.join("index.json")).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn segments_concatenate_to_the_fixture() {
+        let dir = fixture_segments_dir();
+        let index = read_index(&dir);
+        let entries = index["segments"].as_array().unwrap();
+        assert_eq!(index["schema"], 1);
+        assert_eq!(index["ended"], true);
+        assert_eq!(entries.len(), 60, "{}", entries.len());
+        let frame = 1.0 / FPS;
+        for (i, e) in entries.iter().enumerate() {
+            assert_eq!(e["seq"].as_u64().unwrap(), i as u64 + 1);
+            assert_eq!(e["file"], format!("seg/{:06}.ts", i + 1));
+            assert!(dir.join(e["file"].as_str().unwrap()).is_file());
+            assert!(e["bytes"].as_u64().unwrap() > 0);
+            assert!(e["wallclock"].is_null());
+            let d = secs_of(&e["t1"]) - secs_of(&e["t0"]);
+            if i + 1 < entries.len() {
+                assert!(
+                    (d - LIVE_SEGMENT_SECS).abs() <= frame,
+                    "segment {} lasts {d} s",
+                    i + 1
+                );
+            }
+            if i > 0 {
+                assert_eq!(e["t0"], entries[i - 1]["t1"], "segments are contiguous");
+            }
+        }
+        let total = secs_of(&entries[entries.len() - 1]["t1"]) - secs_of(&entries[0]["t0"]);
+        assert!((total - DURATION_SECS).abs() < 0.5, "{total}");
+
+        let tmp = tempfile::tempdir().unwrap();
+        let list = tmp.path().join("concat.txt");
+        let mut text = String::new();
+        for e in entries {
+            text.push_str(&format!(
+                "file '{}'\n",
+                dir.join(e["file"].as_str().unwrap()).display()
+            ));
+        }
+        std::fs::write(&list, text).unwrap();
+        let joined = tmp.path().join("joined.ts");
+        let st = Command::new(ffmpeg())
+            .args([
+                "-y", "-v", "error", "-nostdin", "-f", "concat", "-safe", "0", "-i",
+            ])
+            .arg(&list)
+            .args(["-c", "copy"])
+            .arg(&joined)
+            .status()
+            .unwrap();
+        assert!(st.success());
+        let frames = count_video_frames(&joined) as f64;
+        let expected = DURATION_SECS * FPS;
+        assert!(
+            (frames - expected).abs() <= 30.0,
+            "{frames} frames after concatenation, fixture has {expected}"
+        );
+    }
+
+    #[test]
+    fn paced_writer_at_20x_never_lists_a_partial_segment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dst = tmp.path().join("store");
+        let start = Instant::now();
+        let w = PacedWriter::new(&dst, 20.0).unwrap();
+        assert_eq!(w.dst(), dst.as_path());
+        let mut samples = 0u32;
+        let mut max_listed = 0usize;
+        while !w.is_done() {
+            let index = read_index(&dst);
+            assert_eq!(index["ended"], false);
+            let listed = index["segments"].as_array().unwrap();
+            max_listed = max_listed.max(listed.len());
+            for e in listed {
+                let f = dst.join(e["file"].as_str().unwrap());
+                assert!(f.is_file(), "listed segment {} is missing", f.display());
+                assert!(
+                    !f.with_extension("ts.tmp").exists(),
+                    "listed segment {} still has a .tmp",
+                    f.display()
+                );
+            }
+            samples += 1;
+            std::thread::sleep(Duration::from_millis(50));
+            assert!(start.elapsed() < Duration::from_secs(30), "writer stuck");
+        }
+        w.finish().unwrap();
+        let elapsed = start.elapsed();
+        assert!(elapsed < Duration::from_secs(10), "took {elapsed:?}");
+        assert!(
+            elapsed >= Duration::from_secs(5),
+            "too fast for 20x: {elapsed:?}"
+        );
+        assert!(samples > 20, "{samples} samples");
+        let index = read_index(&dst);
+        assert_eq!(index["ended"], true);
+        assert_eq!(index["segments"].as_array().unwrap().len(), 60);
+        assert!(max_listed < 60, "sampling saw the store grow");
+        assert!(!dst.join("index.json.tmp").exists());
+        let n = std::fs::read_dir(dst.join("seg")).unwrap().count();
+        assert_eq!(n, 60, "no stray files in seg/");
+        let fixture_index = read_index(&fixture_segments_dir());
+        assert_eq!(index["segments"], fixture_index["segments"]);
+    }
+
+    #[test]
+    fn paced_writer_unpaced_and_bad_rate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dst = tmp.path().join("fast");
+        let start = Instant::now();
+        PacedWriter::new(&dst, 0.0).unwrap().finish().unwrap();
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert_eq!(read_index(&dst)["segments"].as_array().unwrap().len(), 60);
+        assert!(PacedWriter::new(&tmp.path().join("bad"), -1.0).is_err());
+        assert!(PacedWriter::new(&tmp.path().join("nan"), f64::NAN).is_err());
+    }
+
+    #[test]
+    fn tone_silence_fixture_is_120s_of_16k_mono() {
+        let p = tone_silence_path();
+        assert!(p.is_file(), "missing {}", p.display());
+        let dur: f64 = probe_value(&p, &["-show_entries", "format=duration"])
+            .parse()
+            .unwrap();
+        assert!((dur - DURATION_SECS).abs() < 0.05, "{dur}");
+        let fmt = probe_value(
+            &p,
+            &[
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=sample_rate,channels",
+            ],
+        );
+        assert_eq!(fmt.trim_matches(','), "16000,1", "{fmt}");
+        // 16-bit mono at 16 kHz: 32 kB per second of audio plus a small header.
+        let bytes = std::fs::metadata(&p).unwrap().len() as f64;
+        let pcm = DURATION_SECS * f64::from(TONE_SILENCE_RATE) * 2.0;
+        assert!(bytes >= pcm && bytes < pcm + 4096.0, "{bytes}");
+    }
 
     #[test]
     fn fixture_exists() {

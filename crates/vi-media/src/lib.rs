@@ -13,6 +13,8 @@
 //!   [`client::decode_video`], [`client::decode_audio`].
 //! - [`protocol`] and [`shm`]: the length-prefixed pipe protocol and the
 //!   shared-memory slots frames travel through.
+//! - [`segments`]: the segment index of a live store, shared by the writer
+//!   in `videoindex-realtime-core` and the decoder here.
 //! - [`sandbox`]: resource limits applied to the worker.
 //!
 //! libav is reached through the `ffmpeg-next` crate. It was chosen over
@@ -32,6 +34,7 @@ pub mod probe;
 pub mod protocol;
 pub mod remote;
 pub mod sandbox;
+pub mod segments;
 pub mod shm;
 pub mod sidecar;
 pub mod worker;
@@ -48,6 +51,7 @@ pub use frame::{FrameBuffer, PixelFormat};
 pub use probe::{ChapterInfo, Probe, StreamInfo};
 pub use protocol::{AudioDecodeRequest, VideoDecodeRequest};
 pub use remote::{Http, ObjectStore};
+pub use segments::{SegmentEntry, SegmentIndex};
 
 /// Argument that makes the `vidx` binary (or any host binary) act as the decode
 /// worker. Hosts check `std::env::args().nth(1) == Some(WORKER_ARG)` before

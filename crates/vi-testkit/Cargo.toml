@@ -1,6 +1,6 @@
 [package]
 name = "vi-testkit"
-description = "Test fixtures for VideoIndex: a synthetic 2-minute video generated with ffmpeg at build time"
+description = "Test fixtures for VideoIndex: a synthetic 2-minute video generated with ffmpeg at build time, its segmented copy, and a paced writer"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,15 @@ build = "build.rs"
 publish = false
 
 [dependencies]
+# Only for writing `index.json` in the live store's format; the fixture
+# constants and paths need nothing.
+serde_json = { workspace = true }
+
+[build-dependencies]
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
