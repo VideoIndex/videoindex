@@ -185,6 +185,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("runs", nargs="+")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--date", default=dt.date.today().isoformat(), help="the date the page is labelled with (default: today)")
     ap.add_argument("--pdf", help="also build a PDF technical report at this path")
     ap.add_argument("--title", default="Corpus QA: questions that span the whole library")
     a = ap.parse_args()
@@ -236,7 +237,7 @@ def main():
     # ---- markdown
     n_videos = len(runs[0][1].get("catalog", []))
     md = [f"# {a.title}", "",
-          f"Generated {dt.date.today().isoformat()} by `eval/corpus_report.py` from {len(runs)} run file(s) over the "
+          f"Generated {a.date} by `eval/corpus_report.py` from {len(runs)} run file(s) over the "
           f"{len(qs)}-question corpus set (`eval/data/corpus/questions.json`) on the {n_videos}-video `dataset` index.", "",
           "Every system answered the same questions with the same answer format. A judge model (Claude Opus 5) turned each free-text "
           "answer into structure: the catalog videos it names, the timestamps it gives, and which key facts it states. Scoring after "
@@ -358,7 +359,7 @@ def main():
             "title": "VideoIndex corpus evaluation",
             "subtitle": f"{len(qs)} questions that span a {n_videos}-video library: VideoIndex against Gemini agentic video on quality, cost and latency",
             "org": "VideoIndex", "authors": ["Generated from the run files by eval/corpus_report.py"],
-            "date": dt.date.today().isoformat(),
+            "date": a.date,
             "version": subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=ROOT).stdout.strip(),
             "abstract": ("Public long-video benchmarks ask about one video at a time. This report evaluates the question the product exists for: "
                          "asking a whole library. A hand-written set of questions (which talks mention X, the moments where speakers discuss Y, "

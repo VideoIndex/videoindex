@@ -45,6 +45,7 @@ def main():
     ap.add_argument("--title")
     ap.add_argument("--root", help="benchmark root (default: read from the first run's config or /data/videoindex/eval/<benchmark>)")
     ap.add_argument("--submission", help="also write a Kaggle-style CSV of predictions (row,answer) for benchmarks without public answers")
+    ap.add_argument("--date", default=dt.date.today().isoformat(), help="the date the page is labelled with (default: today); eval.run names the page by it")
     a = ap.parse_args()
     rows = []
     questions = {}
@@ -89,7 +90,7 @@ def main():
         print(f"warning: no plot ({e})", file=sys.stderr)
         plot_rel = None
     n_q = max((r[2]["n"] for r in rows), default=0)
-    md = [f"# {a.title or a.benchmark + ' results'}", "", f"Generated {dt.date.today().isoformat()} by `eval/report.py` from {len(rows)} run file(s). "
+    md = [f"# {a.title or a.benchmark + ' results'}", "", f"Generated {a.date} by `eval/report.py` from {len(rows)} run file(s). "
           f"Accuracy is exact match on the option letter; intervals are 95% Wilson. Costs are provider list prices per question; "
           f"indexing cost is not included for the index-based configurations.", ""]
     if plot_rel:

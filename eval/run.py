@@ -34,6 +34,7 @@ def main():
     ap.add_argument("--run-reference", action="store_true", help="also execute runs marked reference = true (external systems such as Gemini; otherwise their cached run file is only reported)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--pdf", help="corpus matrices: also build the PDF report at this path")
+    ap.add_argument("--date", default=dt.date.today().isoformat(), help="the date in the page's name and its 'Generated' line (default: today)")
     a = ap.parse_args()
     cfg = tomllib.loads(Path(a.config).read_text())
     bench = cfg["benchmark"]
@@ -71,11 +72,11 @@ def main():
         print("$", " ".join(cmd), file=sys.stderr, flush=True)
         if not a.dry_run:
             subprocess.run(cmd, check=False)
-    report = a.out or f"docs/results/{bench}-{tag}-{dt.date.today().isoformat()}.md"
+    report = a.out or f"docs/results/{bench}-{tag}-{a.date}.md"
     subset = f"{a.fraction:.0%} stratified sample, seed {a.seed}" if a.fraction else (f"{a.sample}-question stratified sample, seed {a.seed}" if a.sample else "all questions")
     title = a.title or f"{bench}: {subset}"
     outs = [o for o in dict.fromkeys(outs) if Path(o).is_file()]
-    cmd = [sys.executable, "-m", "eval.report", bench, *outs, "--out", report, "--title", title]
+    cmd = [sys.executable, "-m", "eval.report", bench, *outs, "--out", report, "--title", title, "--date", a.date]
     print("$", " ".join(cmd), file=sys.stderr, flush=True)
     if not a.dry_run:
         subprocess.run(cmd, check=False)
@@ -111,7 +112,7 @@ def run_corpus(cfg: dict, a) -> None:
             subprocess.run(cmd, check=False)
     outs = [o for o in dict.fromkeys(outs) if Path(o).is_file()]
     for cmd in ([sys.executable, "-m", "eval.judge", *outs],
-                [sys.executable, "-m", "eval.corpus_report", *outs, "--out", a.out or f"docs/results/corpus-{dt.date.today().isoformat()}.md"]
+                [sys.executable, "-m", "eval.corpus_report", *outs, "--out", a.out or f"docs/results/corpus-{a.date}.md", "--date", a.date]
                 + (["--pdf", a.pdf] if a.pdf else []) + (["--title", a.title] if a.title else [])):
         print("$", " ".join(cmd), file=sys.stderr, flush=True)
         if not a.dry_run and outs:
