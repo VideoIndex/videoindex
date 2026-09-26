@@ -71,6 +71,19 @@ max_tool_calls = 12
 budget_usd = 0.5
 budget_tokens = 120000
 
+# The 2026-09-26 agent: the text tools take at most 3 windows with at least
+# 4,000 characters each and are described for ranges already located (the
+# six-window sweep was the remaining cause of the 09-21 regression; branch
+# exp/text-tools-ablation, DECISIONS 2026-09-26).
+[[runs]]
+name = "agent-gemini-v5-tc12"
+policy = "agent"
+model = "gemini-3.8-flash"
+label = "agent 2026-09-26 (gemini-3.8-flash, 12 tool calls)"
+max_tool_calls = 12
+budget_usd = 0.5
+budget_tokens = 120000
+
 [[runs]]
 name = "retrieval-only"
 policy = "retrieval-only"

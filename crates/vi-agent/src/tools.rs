@@ -19,10 +19,17 @@ use vi_query::SearchRequest;
 use crate::view::{media_path, render_view, ts, ViewRequest};
 
 /// Longest text a tool returns before truncation, characters; a multi-window
-/// call shares it across the windows.
+/// call shares it across the windows, each keeping at least
+/// [`MIN_TEXT_WINDOW_CHARS`].
 pub const MAX_TEXT_CHARS: usize = 8000;
-/// Most windows one `get_transcript` / `get_ocr` / `get_descriptions` call reads.
-pub const MAX_TEXT_WINDOWS: usize = 6;
+/// Least text per window of a multi-window text call. With the window cap
+/// below, three windows of 4,000 characters is the widest such call.
+pub const MIN_TEXT_WINDOW_CHARS: usize = MAX_TEXT_CHARS / 2;
+/// Most windows one `get_transcript` / `get_ocr` / `get_descriptions` call
+/// reads. Six until 2026-09-26: the model swept videos with four to six
+/// windows of cut text where the 2026-09-17 agent read one range at a time
+/// (MINERVA 70.3% → 72.6% at 12 calls with the cap at three).
+pub const MAX_TEXT_WINDOWS: usize = 3;
 /// Most windows one `view` call renders (one grid each).
 pub const MAX_VIEW_WINDOWS: usize = 3;
 /// Longest window, seconds, when one `view` covers several: each grid keeps
@@ -189,12 +196,12 @@ pub fn specs(with_describe: bool) -> Vec<ToolSpec> {
     v
 }
 
-const WINDOWS_RULE: &str = "Several ranges in one call cost one tool call: pass windows=[{t0,t1},...] (up to 6, same video) instead of t0/t1 and get one entry per window, in time order.";
+const WINDOWS_RULE: &str = "`windows` (up to 3, same video) reads two or three ranges you have already located in one call, and costs one tool call: pass windows=[{t0,t1},...] instead of t0/t1 and get one entry per window, in time order. It is not for sweeping a video, which cuts each range's text. When the next range depends on what you read, read one range at a time.";
 
 fn text_window_params() -> Value {
     json!({"type":"object","properties":{
         "video_id":{"type":"string"},"t0":{"type":"number"},"t1":{"type":"number"},
-        "windows":{"type":"array","minItems":1,"maxItems":6,"items":{"type":"object","properties":{"t0":{"type":"number"},"t1":{"type":"number"}},"required":["t0","t1"]},"description":"Up to 6 time ranges of the same video; use instead of t0/t1."}
+        "windows":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"t0":{"type":"number"},"t1":{"type":"number"}},"required":["t0","t1"]},"description":"Up to 3 time ranges of the same video you have already located; use instead of t0/t1."}
     },"required":["video_id"]})
 }
 
@@ -230,9 +237,9 @@ fn range_args(args: &Value, duration: f64) -> std::result::Result<(f64, f64), St
     Ok((t0.clamp(0.0, duration), t1.min(duration.max(t0 + 0.5))))
 }
 
-/// Time windows of one call: `windows: [{t0, t1}]` (1 to `max`), else the
-/// single `t0`/`t1`. Sorted by start, overlapping or touching windows
-/// merged, each clamped to the video.
+/// Time windows of one call: `windows: [{t0, t1}]` (1 to `max` after
+/// merging), else the single `t0`/`t1`. Sorted by start, overlapping or
+/// touching windows merged, each clamped to the video.
 fn windows_arg(
     args: &Value,
     duration: f64,
@@ -247,12 +254,6 @@ fn windows_arg(
     if list.is_empty() {
         return Err("windows must hold at least one {t0, t1}".into());
     }
-    if list.len() > max {
-        return Err(format!(
-            "at most {max} windows per call (got {})",
-            list.len()
-        ));
-    }
     let mut wins = Vec::with_capacity(list.len());
     for (i, w) in list.iter().enumerate() {
         wins.push(range_args(w, duration).map_err(|e| format!("windows[{i}]: {e}"))?);
@@ -264,6 +265,12 @@ fn windows_arg(
             Some(last) if t0 <= last.1 => last.1 = last.1.max(t1),
             _ => merged.push((t0, t1)),
         }
+    }
+    if merged.len() > max {
+        return Err(format!(
+            "at most {max} windows per call (got {} distinct ranges); read the ranges you have located, not the whole video",
+            merged.len()
+        ));
     }
     Ok(merged)
 }
@@ -848,7 +855,7 @@ async fn tool_window(ctx: &ToolContext, args: &Value, kind: Kind) -> ToolResult 
     let v = video(ctx, id).await?;
     let wins = windows_arg(args, v.duration.as_secs_f64(), MAX_TEXT_WINDOWS)?;
     let multi = args.get("windows").is_some_and(|w| !w.is_null());
-    let cap = MAX_TEXT_CHARS / wins.len();
+    let cap = (MAX_TEXT_CHARS / wins.len()).max(MIN_TEXT_WINDOW_CHARS);
     let mut rows = Vec::with_capacity(wins.len());
     let mut total = 0usize;
     let mut label = "transcript";

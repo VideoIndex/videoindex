@@ -325,7 +325,7 @@ async fn get_transcript_reads_several_windows_in_one_call() {
     assert!(summary.starts_with("1 transcript lines"), "{summary}");
 
     // Limits and bad windows come back as content.
-    let many: Vec<Value> = (0..7)
+    let many: Vec<Value> = (0..4)
         .map(|i| json!({"t0": i * 100, "t1": i * 100 + 10}))
         .collect();
     let (v, _) = call(
@@ -335,7 +335,7 @@ async fn get_transcript_reads_several_windows_in_one_call() {
     )
     .await;
     assert!(
-        v["error"].as_str().unwrap().contains("at most 6 windows"),
+        v["error"].as_str().unwrap().contains("at most 3 windows"),
         "{v}"
     );
     let (v, _) = call(
