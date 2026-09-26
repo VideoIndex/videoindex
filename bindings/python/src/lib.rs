@@ -209,7 +209,7 @@ struct Budget {
 #[pymethods]
 impl Budget {
     #[new]
-    #[pyo3(signature = (max_tokens = 50_000, max_cost_usd = 0.5, max_wallclock_secs = 120.0, max_tool_calls = 8))]
+    #[pyo3(signature = (max_tokens = 120_000, max_cost_usd = 0.5, max_wallclock_secs = 300.0, max_tool_calls = 8))]
     fn new(
         max_tokens: u64,
         max_cost_usd: f64,

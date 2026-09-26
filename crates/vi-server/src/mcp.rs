@@ -119,7 +119,7 @@ pub fn tool_list(state: &AppState) -> Vec<Value> {
         "inputSchema": {"type": "object", "properties": {
             "question": {"type": "string"},
             "video_id": {"type": "string", "description": "Restrict to one video."},
-            "max_tool_calls": {"type": "integer", "default": 6},
+            "max_tool_calls": {"type": "integer", "default": 12},
             "max_cost_usd": {"type": "number", "default": 0.3},
             "model": {"type": "string", "description": "Chat model: a provider name or model id from GET /v1/models; default is the agent_llm role."}
         }, "required": ["question"]}
@@ -208,12 +208,22 @@ async fn call_tool(
             let body = AskBody {
                 question,
                 videos,
+                // The schema's defaults apply when the caller leaves them out
+                // (the P1 call cap and the demo's cost cap); tokens and wall
+                // clock take `AskBudget::default()`, and `into_budget` clamps
+                // every field to the server's ceiling.
                 budget: BudgetBody {
-                    max_tool_calls: args
-                        .get("max_tool_calls")
-                        .and_then(Value::as_u64)
-                        .map(|n| n as u32),
-                    max_cost_usd: args.get("max_cost_usd").and_then(Value::as_f64),
+                    max_tool_calls: Some(
+                        args.get("max_tool_calls")
+                            .and_then(Value::as_u64)
+                            .map(|n| n as u32)
+                            .unwrap_or(12),
+                    ),
+                    max_cost_usd: Some(
+                        args.get("max_cost_usd")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(0.3),
+                    ),
                     ..BudgetBody::default()
                 },
                 session_id: None,

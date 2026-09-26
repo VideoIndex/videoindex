@@ -23,13 +23,13 @@ pub struct Args {
     #[arg(long = "video")]
     pub videos: Vec<VideoId>,
     /// Token budget (input plus output across all calls).
-    #[arg(long, default_value_t = 50_000)]
+    #[arg(long, default_value_t = 120_000)]
     pub budget_tokens: u64,
     /// Cost budget in USD.
     #[arg(long, default_value_t = 0.5)]
     pub budget_usd: f64,
     /// Wall-clock budget in seconds.
-    #[arg(long, default_value_t = 120.0)]
+    #[arg(long, default_value_t = 300.0)]
     pub budget_secs: f64,
     /// Max tool calls.
     #[arg(long, default_value_t = 8)]

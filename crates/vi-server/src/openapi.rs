@@ -74,7 +74,7 @@ pub fn spec() -> Value {
     paths.insert("/v1/indexes/{index}/ask".into(), json!({"post": {"summary": "Agentic answer; SSE with Accept: text/event-stream (events: status, tool_call, tool_result, token, citation, done), else JSON", "tags": ["query"], "parameters": [index_param],
         "requestBody": json_body(json!({"type": "object", "required": ["question"], "properties": {
             "question": {"type": "string"}, "videos": {"type": "array", "items": {"type": "string"}},
-            "budget": {"type": "object", "properties": {"max_tokens": {"type": "integer"}, "max_cost_usd": {"type": "number"}, "max_wallclock_secs": {"type": "number"}, "max_tool_calls": {"type": "integer"}, "max_answer_tokens": {"type": "integer"}}},
+            "budget": {"type": "object", "description": "Limits for this answer. A missing field takes the default (120000 tokens, $0.50, 300 s, 8 tool calls, 4000 answer tokens); a value above the ceiling (1000000 tokens, $2.00, 900 s, 50 tool calls) is clamped to it, and a zero cost or wall-clock value, which would mean no limit, becomes the ceiling.", "properties": {"max_tokens": {"type": "integer"}, "max_cost_usd": {"type": "number"}, "max_wallclock_secs": {"type": "number"}, "max_tool_calls": {"type": "integer"}, "max_answer_tokens": {"type": "integer"}}},
             "session_id": {"type": "string"}, "policy": {"type": "string", "enum": ["agent", "retrieval-only"], "default": "agent"},
             "model": {"type": "string", "description": "provider name or model id from GET /v1/models; default: the agent_llm role"}}})),
         "responses": {"200": {"description": "answer"}, "429": {"description": "daily spend cap reached"}}}}));

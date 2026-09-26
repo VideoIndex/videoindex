@@ -102,6 +102,19 @@ produced.
   two-point accuracy change is not.
 - Every experiment gets a new run name (the runner resumes an existing file), and results pages
   are generated, never edited.
+- The protocol ladder. Every agent row names its budget. P1 (12 tool calls, $0.50, 120k tokens,
+  120 s) is the protocol of the pages up to 2026-09-26 and the like-for-like comparison with them.
+  P2 (20 calls, a $0.30 cost cap, 400k tokens, 300 s) is the headline protocol from 2026-09-29 and
+  the demo's cap. The levels are built so that the cost cap, not the token budget, is what ends a
+  hard question: under P1 the 120k token budget ended 15% of the MINERVA questions before the call
+  cap (the history with its frame grids is re-sent every turn), so a tool that adds looks (a frame
+  at source resolution) shows its effect only at a level where the looks fit; at P2 the $0.30 cap
+  ended 13 of 310 questions and the token budget 4. The budget alone buys nothing: the unchanged
+  2026-09-26 agent scores 72.6 / 72.9 / 73.2 / 72.9% at P1, P2, P3 (30 calls, $0.75, 1M tokens,
+  600 s) and P4 (50 calls, $2.00, 1M, 900 s) for $0.067 / $0.096 / $0.127 / $0.126 a question, every
+  step inside the noise, and past P3 the loop stops on its own. Read a P2 row against a P2 row, and
+  read the cost per question as part of the result. The cost–accuracy curve behind this is in the
+  engineering document.
 
 ## Regression gates
 

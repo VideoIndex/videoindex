@@ -39,12 +39,18 @@ fn default_answer_tokens() -> u64 {
     4_000
 }
 
+/// The defaults a caller gets for the fields it leaves unset (the SDKs, the
+/// HTTP body, MCP). Since 2026-09-29: 120,000 tokens and 300 s, the token
+/// budget of the benchmarks' P1 protocol and the wall clock of P2, so an
+/// `ask` that sets only calls and cost is not ended by a token budget a fifth
+/// of the size the agent was measured with (a 12-call answer with frame
+/// grids is about 65k tokens in; the old 50,000 stopped it after 6–8 calls).
 impl Default for AskBudget {
     fn default() -> Self {
         Self {
-            max_tokens: 50_000,
+            max_tokens: 120_000,
             max_cost_usd: 0.50,
-            max_wallclock_secs: 120.0,
+            max_wallclock_secs: 300.0,
             max_tool_calls: 8,
             max_answer_tokens: default_answer_tokens(),
         }

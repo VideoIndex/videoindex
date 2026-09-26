@@ -582,3 +582,57 @@ async fn ask_streams_events_and_returns_json_and_enforces_the_daily_cap() {
         .unwrap();
     assert_eq!(r.status(), 429, "{}", r.text().await.unwrap());
 }
+
+/// The server's per-request ceiling (the P4 level): values above it are clamped,
+/// a zero cost or wall clock (no limit to the loop) becomes the ceiling, a
+/// missing field takes the agent's default, and the P2 protocol passes untouched.
+#[test]
+fn a_request_budget_is_clamped_to_the_server_ceiling() {
+    use vi_server::query::{
+        BudgetBody, MAX_COST_USD, MAX_TOKENS, MAX_TOOL_CALLS, MAX_WALLCLOCK_SECS,
+    };
+    let over = BudgetBody {
+        max_tokens: Some(5_000_000),
+        max_cost_usd: Some(50.0),
+        max_wallclock_secs: Some(3600.0),
+        max_tool_calls: Some(1000),
+        max_answer_tokens: None,
+    }
+    .into_budget();
+    assert_eq!(over.max_tool_calls, MAX_TOOL_CALLS);
+    assert_eq!(over.max_cost_usd, MAX_COST_USD);
+    assert_eq!(over.max_tokens, MAX_TOKENS);
+    assert_eq!(over.max_wallclock_secs, MAX_WALLCLOCK_SECS);
+    let zero = BudgetBody {
+        max_cost_usd: Some(0.0),
+        max_wallclock_secs: Some(-1.0),
+        ..Default::default()
+    }
+    .into_budget();
+    assert_eq!(zero.max_cost_usd, MAX_COST_USD);
+    assert_eq!(zero.max_wallclock_secs, MAX_WALLCLOCK_SECS);
+    let missing = BudgetBody::default().into_budget();
+    assert_eq!(missing, vi_agent::AskBudget::default());
+    assert_eq!(
+        (missing.max_tokens, missing.max_wallclock_secs),
+        (120_000, 300.0)
+    );
+    let p2 = BudgetBody {
+        max_tokens: Some(400_000),
+        max_cost_usd: Some(0.3),
+        max_wallclock_secs: Some(300.0),
+        max_tool_calls: Some(20),
+        max_answer_tokens: Some(2_000),
+    }
+    .into_budget();
+    assert_eq!(
+        (
+            p2.max_tool_calls,
+            p2.max_cost_usd,
+            p2.max_tokens,
+            p2.max_wallclock_secs,
+            p2.max_answer_tokens
+        ),
+        (20, 0.3, 400_000, 300.0, 2_000)
+    );
+}

@@ -107,14 +107,37 @@ pub struct BudgetBody {
     pub max_answer_tokens: Option<u64>,
 }
 
+/// The most one request may ask for: the P4 level of the evaluation ladder
+/// (`docs/08-evaluation.md`), past which the loop was measured to stop on its
+/// own. A caller of the hosted API cannot buy an unbounded loop with one
+/// request; the daily cap per key guards the total.
+pub const MAX_TOOL_CALLS: u32 = 50;
+/// See [`MAX_TOOL_CALLS`].
+pub const MAX_COST_USD: f64 = 2.0;
+/// See [`MAX_TOOL_CALLS`].
+pub const MAX_TOKENS: u64 = 1_000_000;
+/// See [`MAX_TOOL_CALLS`].
+pub const MAX_WALLCLOCK_SECS: f64 = 900.0;
+
 impl BudgetBody {
-    fn into_budget(self) -> AskBudget {
+    /// The request's budget: a missing field takes `AskBudget::default()`,
+    /// and every field is clamped to the ceiling above. A cost or wall-clock
+    /// value of zero means "no limit" to the loop, so it becomes the ceiling
+    /// too.
+    pub fn into_budget(self) -> AskBudget {
         let d = AskBudget::default();
+        let within = |v: f64, cap: f64| if v > 0.0 && v <= cap { v } else { cap };
         AskBudget {
-            max_tokens: self.max_tokens.unwrap_or(d.max_tokens),
-            max_cost_usd: self.max_cost_usd.unwrap_or(d.max_cost_usd),
-            max_wallclock_secs: self.max_wallclock_secs.unwrap_or(d.max_wallclock_secs),
-            max_tool_calls: self.max_tool_calls.unwrap_or(d.max_tool_calls),
+            max_tokens: self.max_tokens.unwrap_or(d.max_tokens).min(MAX_TOKENS),
+            max_cost_usd: within(self.max_cost_usd.unwrap_or(d.max_cost_usd), MAX_COST_USD),
+            max_wallclock_secs: within(
+                self.max_wallclock_secs.unwrap_or(d.max_wallclock_secs),
+                MAX_WALLCLOCK_SECS,
+            ),
+            max_tool_calls: self
+                .max_tool_calls
+                .unwrap_or(d.max_tool_calls)
+                .min(MAX_TOOL_CALLS),
             max_answer_tokens: self.max_answer_tokens.unwrap_or(d.max_answer_tokens),
         }
     }

@@ -19,9 +19,9 @@ class Budget:
     max_tool_calls: int
     def __init__(
         self,
-        max_tokens: int = 50000,
+        max_tokens: int = 120000,
         max_cost_usd: float = 0.5,
-        max_wallclock_secs: float = 120.0,
+        max_wallclock_secs: float = 300.0,
         max_tool_calls: int = 8,
     ) -> None: ...
 
