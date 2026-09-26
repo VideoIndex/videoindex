@@ -75,17 +75,28 @@ def judge_prompt(q: CorpusQuestion, catalog: list[dict], text: str) -> str:
     )
 
 
-def call_judge(client, model: str, prompt: str) -> dict:
-    resp = client.messages.create(
-        model=model, max_tokens=8000, messages=[{"role": "user", "content": prompt}],
-        output_config={"format": {"type": "json_schema", "schema": SCHEMA}},
-    )
-    if resp.stop_reason == "refusal":
-        raise RuntimeError(f"judge refused: {getattr(resp, 'stop_details', None)}")
-    text = next(b.text for b in resp.content if b.type == "text")
-    out = json.loads(text)
-    out["usage"] = {"tokens_in": resp.usage.input_tokens, "tokens_out": resp.usage.output_tokens}
-    return out
+def call_judge(client, model: str, prompt: str, attempts: int = 3) -> dict:
+    """One judgement. The structured output is normally valid JSON; a reply cut
+    at max_tokens or an empty text block is retried, so one bad reply does not
+    lose a whole run file's judgements (seen 2026-09-26)."""
+    last = None
+    for attempt in range(attempts):
+        resp = client.messages.create(
+            model=model, max_tokens=8000, messages=[{"role": "user", "content": prompt}],
+            output_config={"format": {"type": "json_schema", "schema": SCHEMA}},
+        )
+        if resp.stop_reason == "refusal":
+            raise RuntimeError(f"judge refused: {getattr(resp, 'stop_details', None)}")
+        text = next((b.text for b in resp.content if b.type == "text"), "")
+        try:
+            out = json.loads(text)
+        except json.JSONDecodeError as e:
+            last = f"attempt {attempt + 1}: {e} (stop_reason={resp.stop_reason}, {len(text)} chars: {text[:120]!r})"
+            print(f"  judge reply was not JSON; {last}", file=sys.stderr)
+            continue
+        out["usage"] = {"tokens_in": resp.usage.input_tokens, "tokens_out": resp.usage.output_tokens}
+        return out
+    raise RuntimeError(f"judge returned no valid JSON after {attempts} attempts; {last}")
 
 
 # ---------------------------------------------------------------- scoring
@@ -168,8 +179,16 @@ def main():
                 return r, j
 
             with ThreadPoolExecutor(max_workers=a.jobs) as ex:
-                for fut in as_completed([ex.submit(work, it) for it in todo]):
-                    r, j = fut.result()
+                futs = {ex.submit(work, it): it[0] for it in todo}
+                for fut in as_completed(futs):
+                    try:
+                        r, j = fut.result()
+                    except Exception as e:  # noqa: BLE001 - one failed judgement must not lose the file
+                        failed = futs[fut]
+                        print(f"  {failed['id']} judge failed: {e}", file=sys.stderr)
+                        failed.pop("judge", None)
+                        failed.pop("scores", None)
+                        continue
                     r["judge"] = j
                     r["scores"] = score_result(qs[r["id"]], j)
                     s = r["scores"]
