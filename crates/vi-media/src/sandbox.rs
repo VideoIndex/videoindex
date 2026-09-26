@@ -59,8 +59,16 @@ pub fn apply(cmd: &mut Command, limits: Limits) {
 #[cfg(not(unix))]
 pub fn apply(_cmd: &mut Command, _limits: Limits) {}
 
+/// The resource argument of `setrlimit`: a distinct enum-like type on glibc,
+/// a plain `c_int` on every other Unix (macOS, musl, the BSDs).
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+type RlimitResource = libc::__rlimit_resource_t;
+/// The resource argument of `setrlimit` on non-glibc Unix.
+#[cfg(all(unix, not(all(target_os = "linux", target_env = "gnu"))))]
+type RlimitResource = libc::c_int;
+
 #[cfg(unix)]
-fn set_rlimit(resource: libc::__rlimit_resource_t, value: u64) {
+fn set_rlimit(resource: RlimitResource, value: u64) {
     let lim = libc::rlimit {
         rlim_cur: value as libc::rlim_t,
         rlim_max: value as libc::rlim_t,

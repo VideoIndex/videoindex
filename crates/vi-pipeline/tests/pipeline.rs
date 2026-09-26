@@ -122,7 +122,14 @@ async fn m0_policy_indexes_the_fixture() {
     let stats = idx.stats().await.unwrap();
     assert_eq!(stats.videos[0].frame_samples, samples.len() as u64);
     assert_eq!(stats.videos[0].thumbnails, samples.len() as u64);
-    assert_eq!(stats.blob_count as usize, samples.len());
+    if fx::fixture_has_text() {
+        assert_eq!(stats.blob_count as usize, samples.len());
+    } else {
+        // Without the timestamp overlay the frames of a segment are identical
+        // and the content-addressed blob store deduplicates them.
+        let blobs = stats.blob_count as usize;
+        assert!((12..=samples.len()).contains(&blobs), "{blobs} blobs");
+    }
     assert!(stats.blob_bytes > 0 && stats.dir_bytes > stats.blob_bytes);
 
     // Events: started, progress, stage events, finished.

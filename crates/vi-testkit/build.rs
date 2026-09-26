@@ -1,11 +1,17 @@
 //! Generates the synthetic fixture video with the `ffmpeg` CLI.
 //!
 //! 120 s, 640x360, 30 fps. Twelve 10-second segments, each a distinct solid
-//! background with a white box at a segment-specific position (so perceptual
-//! hashes differ between segments and stay constant within one), a burned-in
+//! background with two white boxes at segment-specific positions (so
+//! perceptual hashes differ between segments and stay constant within one), a burned-in
 //! `HH:MM:SS.mmm` timestamp top-right, and a 440 Hz tone. Keyframes every
 //! 2 s plus the hard cuts. The colours are mirrored in `src/lib.rs`; keep the
 //! two lists identical.
+//!
+//! The timestamp needs ffmpeg's `drawtext` filter (libfreetype). Builds of
+//! ffmpeg without it (Homebrew's, for one) get a fixture without the text;
+//! frames within a segment are then identical, which content-addressed
+//! stores deduplicate. `VI_FIXTURE_HAS_TEXT` tells tests which fixture they
+//! have (`vi_testkit::fixture_has_text`).
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -22,19 +28,37 @@ const FPS: u32 = 30;
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=VI_FIXTURE_FORCE");
+    println!("cargo:rerun-if-env-changed=FFMPEG");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     let out = out_dir.join("fixture-2min.mp4");
+    // Present when the fixture was generated without the timestamp overlay.
+    let no_text_marker = out_dir.join("fixture-2min.notext");
     println!("cargo:rustc-env=VI_FIXTURE_PATH={}", out.display());
     if out.is_file() && std::env::var_os("VI_FIXTURE_FORCE").is_none() {
+        emit_has_text(!no_text_marker.is_file());
         return;
     }
     let ffmpeg = std::env::var("FFMPEG").unwrap_or_else(|_| "ffmpeg".to_string());
-    if !generate(&ffmpeg, &out, true) && !generate(&ffmpeg, &out, false) {
+    let has_text = if generate(&ffmpeg, &out, true) {
+        let _ = std::fs::remove_file(&no_text_marker);
+        true
+    } else if generate(&ffmpeg, &out, false) {
+        println!(
+            "cargo:warning=vi-testkit: fixture generated without the timestamp overlay (drawtext unavailable in `{ffmpeg}`)"
+        );
+        std::fs::write(&no_text_marker, b"").expect("write fixture marker");
+        false
+    } else {
         panic!(
             "vi-testkit: could not generate {} with `{ffmpeg}`; install ffmpeg (apt install ffmpeg / brew install ffmpeg) or set FFMPEG",
             out.display()
         );
-    }
+    };
+    emit_has_text(has_text);
+}
+
+fn emit_has_text(has_text: bool) {
+    println!("cargo:rustc-env=VI_FIXTURE_HAS_TEXT={has_text}");
 }
 
 fn generate(ffmpeg: &str, out: &std::path::Path, with_text: bool) -> bool {
@@ -58,11 +82,18 @@ fn generate(ffmpeg: &str, out: &std::path::Path, with_text: bool) -> bool {
     ]);
     let mut graph = String::new();
     for (i, _) in COLORS.iter().enumerate() {
-        // A white box whose position shifts per segment.
+        // Two white boxes whose positions shift per segment in opposite
+        // directions, so neighbouring segments differ structurally even when
+        // their backgrounds have the same luminance (segments 4 and 5) and no
+        // timestamp text is drawn. Neither box reaches the bottom-left probe
+        // pixel (`BACKGROUND_PROBE_XY` in `src/lib.rs`).
         graph.push_str(&format!(
-            "[{i}:v]drawbox=x={x}:y={y}:w=200:h=120:color=white:t=fill[s{i}];",
+            "[{i}:v]drawbox=x={x}:y={y}:w=200:h=120:color=white:t=fill,\
+             drawbox=x={x2}:y={y2}:w=120:h=200:color=white:t=fill[s{i}];",
             x = i * 40,
-            y = i * 20
+            y = i * 20,
+            x2 = 520 - i * 40,
+            y2 = 28 + i * 12
         ));
     }
     for i in 0..COLORS.len() {
@@ -98,10 +129,16 @@ fn generate(ffmpeg: &str, out: &std::path::Path, with_text: bool) -> bool {
         "+faststart",
     ]);
     cmd.arg(&tmp);
-    match cmd.status() {
-        Ok(s) if s.success() => std::fs::rename(&tmp, out).is_ok(),
-        Ok(s) => {
-            println!("cargo:warning=ffmpeg exited with {s} (with_text={with_text})");
+    match cmd.output() {
+        Ok(o) if o.status.success() => std::fs::rename(&tmp, out).is_ok(),
+        Ok(o) => {
+            println!(
+                "cargo:warning=ffmpeg exited with {} (with_text={with_text})",
+                o.status
+            );
+            for line in String::from_utf8_lossy(&o.stderr).lines().take(4) {
+                println!("cargo:warning=  ffmpeg: {line}");
+            }
             let _ = std::fs::remove_file(&tmp);
             false
         }
