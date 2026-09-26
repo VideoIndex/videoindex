@@ -1,0 +1,408 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="560.770969pt" height="277.887547pt" viewBox="0 0 560.770969 277.887547" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-09-26T02:57:18.050522</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.11.2, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 277.887547 
+L 560.770969 277.887547 
+L 560.770969 0 
+L 0 0 
+z
+" style="fill: #fcfcfb"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 42.046992 239.96825 
+L 421.486992 239.96825 
+L 421.486992 29.29625 
+L 42.046992 29.29625 
+z
+" style="fill: #fcfcfb"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="xtick_1">
+     <g id="line2d_1">
+      <path d="M 49.508908 239.96825 
+L 49.508908 29.29625 
+" clip-path="url(#pab73a1e79b)" style="fill: none; stroke: #e1e0d9; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_2"/>
+     <g id="text_1">
+      <text style="font-size: 9px; font-family: 'Inter'; text-anchor: middle; fill: #52514e" x="49.508908" y="252.187" transform="rotate(-0 49.508908 252.187)">0.05</text>
+     </g>
+    </g>
+    <g id="xtick_2">
+     <g id="line2d_3">
+      <path d="M 99.342849 239.96825 
+L 99.342849 29.29625 
+" clip-path="url(#pab73a1e79b)" style="fill: none; stroke: #e1e0d9; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_4"/>
+     <g id="text_2">
+      <text style="font-size: 9px; font-family: 'Inter'; text-anchor: middle; fill: #52514e" x="99.342849" y="252.187" transform="rotate(-0 99.342849 252.187)">0.10</text>
+     </g>
+    </g>
+    <g id="xtick_3">
+     <g id="line2d_5">
+      <path d="M 149.176791 239.96825 
+L 149.176791 29.29625 
+" clip-path="url(#pab73a1e79b)" style="fill: none; stroke: #e1e0d9; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_6"/>
+     <g id="text_3">
+      <text style="font-size: 9px; font-family: 'Inter'; text-anchor: middle; fill: #52514e" x="149.176791" y="252.187" transform="rotate(-0 149.176791 252.187)">0.15</text>
+     </g>
+    </g>
+    <g id="xtick_4">
+     <g id="line2d_7">
+      <path d="M 199.010733 239.96825 
+L 199.010733 29.29625 
+" clip-path="url(#pab73a1e79b)" style="fill: none; stroke: #e1e0d9; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_8"/>
+     <g id="text_4">
+      <text style="font-size: 9px; font-family: 'Inter'; text-anchor: middle; fill: #52514e" x="199.010733" y="252.187" transform="rotate(-0 199.010733 252.187)">0.20</text>
+     </g>
+    </g>
+    <g id="xtick_5">
+     <g id="line2d_9">
+      <path d="M 248.844675 239.96825 
+L 248.844675 29.29625 
+" clip-path="url(#pab73a1e79b)" style="fill: none; stroke: #e1e0d9; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_10"/>
+     <g id="text_5">
+      <text style="font-size: 9px; font-family: 'Inter'; text-anchor: middle; fill: #52514e" x="248.844675" y="252.187" transform="rotate(-0 248.844675 252.187)">0.25</text>
+     </g>
+    </g>
+    <g id="xtick_6">
+     <g id="line2d_11">
+      <path d="M 298.678616 239.96825 
+L 298.678616 29.29625 
+" clip-path="url(#pab73a1e79b)" style="fill: none; stroke: #e1e0d9; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_12"/>
+     <g id="text_6">
+      <text style="font-size: 9px; font-family: 'Inter'; text-anchor: middle; fill: #52514e" x="298.678616" y="252.187" transform="rotate(-0 298.678616 252.187)">0.30</text>
+     </g>
+    </g>
+    <g id="xtick_7">
+     <g id="line2d_13">
+      <path d="M 348.512558 239.96825 
+L 348.512558 29.29625 
+" clip-path="url(#pab73a1e79b)" style="fill: none; stroke: #e1e0d9; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_14"/>
+     <g id="text_7">
+      <text style="font-size: 9px; font-family: 'Inter'; text-anchor: middle; fill: #52514e" x="348.512558" y="252.187" transform="rotate(-0 348.512558 252.187)">0.35</text>
+     </g>
+    </g>
+    <g id="xtick_8">
+     <g id="line2d_15">
+      <path d="M 398.3465 239.96825 
+L 398.3465 29.29625 
+" clip-path="url(#pab73a1e79b)" style="fill: none; stroke: #e1e0d9; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_16"/>
+     <g id="text_8">
+      <text style="font-size: 9px; font-family: 'Inter'; text-anchor: middle; fill: #52514e" x="398.3465" y="252.187" transform="rotate(-0 398.3465 252.187)">0.40</text>
+     </g>
+    </g>
+    <g id="text_9">
+     <text style="font-size: 9px; font-family: 'Inter'; text-anchor: middle; fill: #52514e" x="231.766992" y="267.076648" transform="rotate(-0 231.766992 267.076648)">USD per question (list price, every call)</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_17">
+      <path d="M 42.046992 239.96825 
+L 421.486992 239.96825 
+" clip-path="url(#pab73a1e79b)" style="fill: none; stroke: #e1e0d9; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_18"/>
+     <g id="text_10">
+      <text style="font-size: 9px; font-family: 'Inter'; text-anchor: end; fill: #52514e" x="38.546992" y="244.327625" transform="rotate(-0 38.546992 244.327625)">0</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_19">
+      <path d="M 42.046992 199.84025 
+L 421.486992 199.84025 
+" clip-path="url(#pab73a1e79b)" style="fill: none; stroke: #e1e0d9; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_20"/>
+     <g id="text_11">
+      <text style="font-size: 9px; font-family: 'Inter'; text-anchor: end; fill: #52514e" x="38.546992" y="204.199625" transform="rotate(-0 38.546992 204.199625)">20</text>
+     </g>
+    </g>
+    <g id="ytick_3">
+     <g id="line2d_21">
+      <path d="M 42.046992 159.71225 
+L 421.486992 159.71225 
+" clip-path="url(#pab73a1e79b)" style="fill: none; stroke: #e1e0d9; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_22"/>
+     <g id="text_12">
+      <text style="font-size: 9px; font-family: 'Inter'; text-anchor: end; fill: #52514e" x="38.546992" y="164.071625" transform="rotate(-0 38.546992 164.071625)">40</text>
+     </g>
+    </g>
+    <g id="ytick_4">
+     <g id="line2d_23">
+      <path d="M 42.046992 119.58425 
+L 421.486992 119.58425 
+" clip-path="url(#pab73a1e79b)" style="fill: none; stroke: #e1e0d9; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_24"/>
+     <g id="text_13">
+      <text style="font-size: 9px; font-family: 'Inter'; text-anchor: end; fill: #52514e" x="38.546992" y="123.943625" transform="rotate(-0 38.546992 123.943625)">60</text>
+     </g>
+    </g>
+    <g id="ytick_5">
+     <g id="line2d_25">
+      <path d="M 42.046992 79.45625 
+L 421.486992 79.45625 
+" clip-path="url(#pab73a1e79b)" style="fill: none; stroke: #e1e0d9; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_26"/>
+     <g id="text_14">
+      <text style="font-size: 9px; font-family: 'Inter'; text-anchor: end; fill: #52514e" x="38.546992" y="83.815625" transform="rotate(-0 38.546992 83.815625)">80</text>
+     </g>
+    </g>
+    <g id="ytick_6">
+     <g id="line2d_27">
+      <path d="M 42.046992 39.32825 
+L 421.486992 39.32825 
+" clip-path="url(#pab73a1e79b)" style="fill: none; stroke: #e1e0d9; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_28"/>
+     <g id="text_15">
+      <text style="font-size: 9px; font-family: 'Inter'; text-anchor: end; fill: #52514e" x="38.546992" y="43.687625" transform="rotate(-0 38.546992 43.687625)">100</text>
+     </g>
+    </g>
+    <g id="text_16">
+     <text style="font-size: 9px; font-family: 'Inter'; text-anchor: middle; fill: #52514e" x="17.35875" y="134.63225" transform="rotate(-90 17.35875 134.63225)">quality (%)</text>
+    </g>
+   </g>
+   <g id="patch_3">
+    <path d="M 42.046992 239.96825 
+L 42.046992 29.29625 
+" style="fill: none; stroke: #c3c2b7; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 42.046992 239.96825 
+L 421.486992 239.96825 
+" style="fill: none; stroke: #c3c2b7; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="PathCollection_1">
+    <defs>
+     <path id="m03274eb295" d="M 0 4 
+C 1.060812 4 2.078319 3.578535 2.828427 2.828427 
+C 3.578535 2.078319 4 1.060812 4 0 
+C 4 -1.060812 3.578535 -2.078319 2.828427 -2.828427 
+C 2.078319 -3.578535 1.060812 -4 0 -4 
+C -1.060812 -4 -2.078319 -3.578535 -2.828427 -2.828427 
+C -3.578535 -2.078319 -4 -1.060812 -4 0 
+C -4 1.060812 -3.578535 2.078319 -2.828427 2.828427 
+C -2.078319 3.578535 -1.060812 4 0 4 
+z
+" style="stroke: #fcfcfb; stroke-width: 2"/>
+    </defs>
+    <g clip-path="url(#pab73a1e79b)">
+     <use xlink:href="#m03274eb295" x="157.048383" y="53.513498" style="fill: #2a78d6; stroke: #fcfcfb; stroke-width: 2"/>
+    </g>
+   </g>
+   <g id="text_17">
+    <text style="font-size: 8px; font-family: 'Inter'; text-anchor: start; fill: #0b0b0b" x="165.048383" y="47.513498" transform="rotate(-0 165.048383 47.513498)">VI agent with library tools (Sonnet 5)</text>
+   </g>
+   <g id="PathCollection_2">
+    <defs>
+     <path id="mef3704e444" d="M 0 4 
+C 1.060812 4 2.078319 3.578535 2.828427 2.828427 
+C 3.578535 2.078319 4 1.060812 4 0 
+C 4 -1.060812 3.578535 -2.078319 2.828427 -2.828427 
+C 2.078319 -3.578535 1.060812 -4 0 -4 
+C -1.060812 -4 -2.078319 -3.578535 -2.828427 -2.828427 
+C -3.578535 -2.078319 -4 -1.060812 -4 0 
+C -4 1.060812 -3.578535 2.078319 -2.828427 2.828427 
+C -2.078319 3.578535 -1.060812 4 0 4 
+z
+" style="stroke: #fcfcfb; stroke-width: 2"/>
+    </defs>
+    <g clip-path="url(#pab73a1e79b)">
+     <use xlink:href="#mef3704e444" x="118.664403" y="58.181244" style="fill: #eb6834; stroke: #fcfcfb; stroke-width: 2"/>
+    </g>
+   </g>
+   <g id="text_18">
+    <text style="font-size: 8px; font-family: 'Inter'; text-anchor: start; fill: #0b0b0b" x="126.664403" y="52.181244" transform="rotate(-0 126.664403 52.181244)">VI agent with library tools (Gemini 3.8 Flash)</text>
+   </g>
+   <g id="PathCollection_3">
+    <defs>
+     <path id="m327e0c87e6" d="M 0 4 
+C 1.060812 4 2.078319 3.578535 2.828427 2.828427 
+C 3.578535 2.078319 4 1.060812 4 0 
+C 4 -1.060812 3.578535 -2.078319 2.828427 -2.828427 
+C 2.078319 -3.578535 1.060812 -4 0 -4 
+C -1.060812 -4 -2.078319 -3.578535 -2.828427 -2.828427 
+C -3.578535 -2.078319 -4 -1.060812 -4 0 
+C -4 1.060812 -3.578535 2.078319 -2.828427 2.828427 
+C -2.078319 3.578535 -1.060812 4 0 4 
+z
+" style="stroke: #fcfcfb; stroke-width: 2"/>
+    </defs>
+    <g clip-path="url(#pab73a1e79b)">
+     <use xlink:href="#m327e0c87e6" x="172.421335" y="55.498348" style="fill: #1baf7a; stroke: #fcfcfb; stroke-width: 2"/>
+    </g>
+   </g>
+   <g id="text_19">
+    <text style="font-size: 8px; font-family: 'Inter'; text-anchor: start; fill: #0b0b0b" x="180.421335" y="49.498348" transform="rotate(-0 180.421335 49.498348)">VI agent, multi-window and parallel tools (Sonnet 5)</text>
+   </g>
+   <g id="PathCollection_4">
+    <defs>
+     <path id="mf42db03ee1" d="M 0 4 
+C 1.060812 4 2.078319 3.578535 2.828427 2.828427 
+C 3.578535 2.078319 4 1.060812 4 0 
+C 4 -1.060812 3.578535 -2.078319 2.828427 -2.828427 
+C 2.078319 -3.578535 1.060812 -4 0 -4 
+C -1.060812 -4 -2.078319 -3.578535 -2.828427 -2.828427 
+C -3.578535 -2.078319 -4 -1.060812 -4 0 
+C -4 1.060812 -3.578535 2.078319 -2.828427 2.828427 
+C -2.078319 3.578535 -1.060812 4 0 4 
+z
+" style="stroke: #fcfcfb; stroke-width: 2"/>
+    </defs>
+    <g clip-path="url(#pab73a1e79b)">
+     <use xlink:href="#mf42db03ee1" x="103.088075" y="53.793677" style="fill: #eda100; stroke: #fcfcfb; stroke-width: 2"/>
+    </g>
+   </g>
+   <g id="text_20">
+    <text style="font-size: 8px; font-family: 'Inter'; text-anchor: start; fill: #0b0b0b" x="111.088075" y="47.793677" transform="rotate(-0 111.088075 47.793677)">VI agent, multi-window and parallel tools (Gemini 3.8 Flash)</text>
+   </g>
+   <g id="PathCollection_5">
+    <defs>
+     <path id="m381238a309" d="M 0 4 
+C 1.060812 4 2.078319 3.578535 2.828427 2.828427 
+C 3.578535 2.078319 4 1.060812 4 0 
+C 4 -1.060812 3.578535 -2.078319 2.828427 -2.828427 
+C 2.078319 -3.578535 1.060812 -4 0 -4 
+C -1.060812 -4 -2.078319 -3.578535 -2.828427 -2.828427 
+C -3.578535 -2.078319 -4 -1.060812 -4 0 
+C -4 1.060812 -3.578535 2.078319 -2.828427 2.828427 
+C -2.078319 3.578535 -1.060812 4 0 4 
+z
+" style="stroke: #fcfcfb; stroke-width: 2"/>
+    </defs>
+    <g clip-path="url(#pab73a1e79b)">
+     <use xlink:href="#m381238a309" x="222.190279" y="52.273113" style="fill: #e87ba4; stroke: #fcfcfb; stroke-width: 2"/>
+    </g>
+   </g>
+   <g id="text_21">
+    <text style="font-size: 8px; font-family: 'Inter'; text-anchor: start; fill: #0b0b0b" x="230.190279" y="46.273113" transform="rotate(-0 230.190279 46.273113)">VI agent, view as comparison, length continue (Sonnet 5)</text>
+   </g>
+   <g id="PathCollection_6">
+    <defs>
+     <path id="m4d69468b65" d="M 0 4 
+C 1.060812 4 2.078319 3.578535 2.828427 2.828427 
+C 3.578535 2.078319 4 1.060812 4 0 
+C 4 -1.060812 3.578535 -2.078319 2.828427 -2.828427 
+C 2.078319 -3.578535 1.060812 -4 0 -4 
+C -1.060812 -4 -2.078319 -3.578535 -2.828427 -2.828427 
+C -3.578535 -2.078319 -4 -1.060812 -4 0 
+C -4 1.060812 -3.578535 2.078319 -2.828427 2.828427 
+C -2.078319 3.578535 -1.060812 4 0 4 
+z
+" style="stroke: #fcfcfb; stroke-width: 2"/>
+    </defs>
+    <g clip-path="url(#pab73a1e79b)">
+     <use xlink:href="#m4d69468b65" x="97.705342" y="54.748867" style="fill: #008300; stroke: #fcfcfb; stroke-width: 2"/>
+    </g>
+   </g>
+   <g id="text_22">
+    <text style="font-size: 8px; font-family: 'Inter'; text-anchor: start; fill: #0b0b0b" x="105.705342" y="48.748867" transform="rotate(-0 105.705342 48.748867)">VI agent, view as comparison, length continue (Gemini 3.8 Flash)</text>
+   </g>
+   <g id="PathCollection_7">
+    <defs>
+     <path id="ma275d2fa93" d="M 0 4 
+C 1.060812 4 2.078319 3.578535 2.828427 2.828427 
+C 3.578535 2.078319 4 1.060812 4 0 
+C 4 -1.060812 3.578535 -2.078319 2.828427 -2.828427 
+C 2.078319 -3.578535 1.060812 -4 0 -4 
+C -1.060812 -4 -2.078319 -3.578535 -2.828427 -2.828427 
+C -3.578535 -2.078319 -4 -1.060812 -4 0 
+C -4 1.060812 -3.578535 2.078319 -2.828427 2.828427 
+C -2.078319 3.578535 -1.060812 4 0 4 
+z
+" style="stroke: #fcfcfb; stroke-width: 2"/>
+    </defs>
+    <g clip-path="url(#pab73a1e79b)">
+     <use xlink:href="#ma275d2fa93" x="234.318294" y="53.467637" style="fill: #4a3aa7; stroke: #fcfcfb; stroke-width: 2"/>
+    </g>
+   </g>
+   <g id="text_23">
+    <text style="font-size: 8px; font-family: 'Inter'; text-anchor: start; fill: #0b0b0b" x="242.318294" y="47.467637" transform="rotate(-0 242.318294 47.467637)">VI agent, focused multi-window tools (Sonnet 5)</text>
+   </g>
+   <g id="PathCollection_8">
+    <defs>
+     <path id="mb324e53f38" d="M 0 4 
+C 1.060812 4 2.078319 3.578535 2.828427 2.828427 
+C 3.578535 2.078319 4 1.060812 4 0 
+C 4 -1.060812 3.578535 -2.078319 2.828427 -2.828427 
+C 2.078319 -3.578535 1.060812 -4 0 -4 
+C -1.060812 -4 -2.078319 -3.578535 -2.828427 -2.828427 
+C -3.578535 -2.078319 -4 -1.060812 -4 0 
+C -4 1.060812 -3.578535 2.078319 -2.828427 2.828427 
+C -2.078319 3.578535 -1.060812 4 0 4 
+z
+" style="stroke: #fcfcfb; stroke-width: 2"/>
+    </defs>
+    <g clip-path="url(#pab73a1e79b)">
+     <use xlink:href="#mb324e53f38" x="105.183316" y="48.537626" style="fill: #e34948; stroke: #fcfcfb; stroke-width: 2"/>
+    </g>
+   </g>
+   <g id="text_24">
+    <text style="font-size: 8px; font-family: 'Inter'; text-anchor: start; fill: #0b0b0b" x="113.183316" y="42.537626" transform="rotate(-0 113.183316 42.537626)">VI agent, focused multi-window tools (Gemini 3.8 Flash)</text>
+   </g>
+   <g id="PathCollection_9">
+    <g clip-path="url(#pab73a1e79b)">
+     <use xlink:href="#m03274eb295" x="59.294265" y="144.570379" style="fill: #2a78d6; stroke: #fcfcfb; stroke-width: 2"/>
+    </g>
+   </g>
+   <g id="text_25">
+    <text style="font-size: 8px; font-family: 'Inter'; text-anchor: start; fill: #0b0b0b" x="67.294265" y="138.570379" transform="rotate(-0 67.294265 138.570379)">VI retrieval-only with per-video cap (Sonnet 5)</text>
+   </g>
+   <g id="PathCollection_10">
+    <g clip-path="url(#pab73a1e79b)">
+     <use xlink:href="#mef3704e444" x="404.239719" y="52.918027" style="fill: #eb6834; stroke: #fcfcfb; stroke-width: 2"/>
+    </g>
+   </g>
+   <g id="text_26">
+    <text style="font-size: 8px; font-family: 'Inter'; text-anchor: start; fill: #0b0b0b" x="412.239719" y="46.918027" transform="rotate(-0 412.239719 46.918027)">Gemini agentic video (3×10 + merge)</text>
+   </g>
+   <g id="text_27">
+    <text style="font-weight: 600; font-size: 11px; font-family: 'Inter'; text-anchor: start; fill: #0b0b0b" x="42.046992" y="19.29625" transform="rotate(-0 42.046992 19.29625)">Quality against cost per question</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pab73a1e79b">
+   <rect x="42.046992" y="29.29625" width="379.44" height="210.672"/>
+  </clipPath>
+ </defs>
+</svg>

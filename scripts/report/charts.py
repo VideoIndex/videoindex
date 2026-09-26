@@ -104,10 +104,10 @@ def grouped_bars(path, categories, series, *, title, ylabel="", ylim=None, fmt="
         for xi, v in zip(xs, values):
             if v is None:
                 continue
-            _rounded_bar(ax, xi + offs - width / 2, 0, width, v, SERIES[i], radius=0.3 * width, aspect=top / max(1, len(categories)))
+            _rounded_bar(ax, xi + offs - width / 2, 0, width, v, SERIES[i % len(SERIES)], radius=0.3 * width, aspect=top / max(1, len(categories)))
             if label_all:
                 ax.text(xi + offs, v + top * 0.015, fmt.format(v), ha="center", va="bottom", fontsize=7.8, color=INK2)
-        ax.bar([0], [0], color=SERIES[i], label=name, width=0)  # legend proxy
+        ax.bar([0], [0], color=SERIES[i % len(SERIES)], label=name, width=0)  # legend proxy
     ax.set_xticks(list(xs))
     ax.set_xticklabels(categories)
     ax.set_xlim(-0.6, len(categories) - 0.4)
@@ -170,7 +170,7 @@ def scatter_labeled(path, points, *, title, xlabel, ylabel, figsize=(6.4, 3.8), 
     ax.grid(axis="x", color=GRID, linewidth=0.8, zorder=0)
     if groups:
         for i, g in enumerate(groups):
-            ax.scatter([], [], color=SERIES[i], label=g, s=40)
+            ax.scatter([], [], color=SERIES[i % len(SERIES)], label=g, s=40)
         ax.legend(loc="lower right")
     if note:
         fig.text(0.01, -0.08, note, fontsize=7.5, color=MUTED, ha="left")
