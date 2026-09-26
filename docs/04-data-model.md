@@ -159,6 +159,21 @@ myindex.vidx/
     <job-id>.json         checkpoints
 ```
 
+### The live store, the index's neighbour
+
+A stream is recorded, while it runs, into a segmented local store next to the index (`<media-cache>/live/<video-id>/`; the live modules in `videoindex-live` write it, the decoder in `vi-media` reads it). Its layout and the `index.json` schema are defined once, in `vi_media::segments::SegmentIndex`, so writer and reader cannot drift:
+
+```
+<media-cache>/live/<video-id>/
+  index.json            { schema: 1, timebase: {num, den}, segments: [{ seq, file, t0, t1, bytes, wallclock? }], gaps: [{t0, t1}], ended }
+  seg/000001.ts …       2 s MPEG-TS segments (audio + video, codec copy)
+```
+
+- `segments` are in `seq` order and contiguous unless a range appears in `gaps`; `t0`/`t1` are `Timestamp` rationals on the stream's media timeline (in-segment PTS keep that timeline, `-reset_timestamps 0` style), `wallclock` is the source's programme date-time for `t0` when it has one, `ended` is set once the writer has closed the recording.
+- Writers append a segment by writing `seg/NNNNNN.ts.tmp`, renaming it, then rewriting `index.json` through a temporary file and rename, so a reader never lists a partial segment. `SegmentIndex::covering(t0, t1)` names the segments a window decode must open.
+- A truncated or unreadable `index.json` is a `protocol` error naming the file; a newer `schema` is refused like a newer index schema.
+- The test fixture exists in this layout too: `vi_testkit::fixture_segments_dir()` is the 2-minute fixture cut into 60 segments, and `vi_testkit::PacedWriter` replays it into a fresh directory at any speed.
+
 Properties:
 - Copy the directory anywhere and open it. No absolute paths inside.
 - `manifest.json` is the only file a reader must parse before deciding whether it can open the index. Unknown newer schema versions are refused with a clear error; older ones are migrated in place with a backup.

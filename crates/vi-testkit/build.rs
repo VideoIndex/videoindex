@@ -6,6 +6,15 @@
 //! `HH:MM:SS.mmm` timestamp top-right, and a 440 Hz tone. Keyframes every
 //! 2 s plus the hard cuts. The colours are mirrored in `src/lib.rs`; keep the
 //! two lists identical.
+//!
+//! Two derived fixtures follow it, both for the live work:
+//! - `fixture-2min-segments/`: the fixture cut into 2 s MPEG-TS segments
+//!   (`seg/000001.ts` …) plus `index.json` in the live store's
+//!   `SegmentIndex` format (`vi_media::segments`), written here by hand so
+//!   this crate does not depend on `vi-media`.
+//! - `fixture-tone-silence.wav`: 120 s of 16 kHz mono, 3 s of silence then
+//!   5 s of a 440 Hz tone in every 8 s period, for chunking and endpointing
+//!   logic driven by a scripted VAD.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -25,16 +34,150 @@ fn main() {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     let out = out_dir.join("fixture-2min.mp4");
     println!("cargo:rustc-env=VI_FIXTURE_PATH={}", out.display());
-    if out.is_file() && std::env::var_os("VI_FIXTURE_FORCE").is_none() {
-        return;
-    }
+    let segments_dir = out_dir.join("fixture-2min-segments");
+    println!(
+        "cargo:rustc-env=VI_FIXTURE_SEGMENTS_DIR={}",
+        segments_dir.display()
+    );
+    let tone = out_dir.join("fixture-tone-silence.wav");
+    println!(
+        "cargo:rustc-env=VI_FIXTURE_TONE_SILENCE_PATH={}",
+        tone.display()
+    );
     let ffmpeg = std::env::var("FFMPEG").unwrap_or_else(|_| "ffmpeg".to_string());
-    if !generate(&ffmpeg, &out, true) && !generate(&ffmpeg, &out, false) {
+    let force = std::env::var_os("VI_FIXTURE_FORCE").is_some();
+    if (force || !out.is_file())
+        && !generate(&ffmpeg, &out, true)
+        && !generate(&ffmpeg, &out, false)
+    {
         panic!(
             "vi-testkit: could not generate {} with `{ffmpeg}`; install ffmpeg (apt install ffmpeg / brew install ffmpeg) or set FFMPEG",
             out.display()
         );
     }
+    if force || !segments_dir.join("index.json").is_file() {
+        segment(&ffmpeg, &out, &segments_dir);
+    }
+    if force || !tone.is_file() {
+        tone_silence(&ffmpeg, &tone);
+    }
+}
+
+/// Segment duration of the live-store copy of the fixture.
+const LIVE_SEGMENT_SECS: u32 = 2;
+/// MPEG-TS clock.
+const TS_TIMEBASE_DEN: i64 = 90_000;
+
+/// Cut the fixture into MPEG-TS segments with the ffmpeg segment muxer and
+/// write `index.json` from the CSV segment list it produces.
+fn segment(ffmpeg: &str, fixture: &std::path::Path, dir: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(dir);
+    let seg = dir.join("seg");
+    std::fs::create_dir_all(&seg).expect("create segment dir");
+    let list = dir.join("seglist.csv");
+    let status = Command::new(ffmpeg)
+        .args(["-y", "-hide_banner", "-loglevel", "error", "-nostdin", "-i"])
+        .arg(fixture)
+        .args([
+            "-c",
+            "copy",
+            "-f",
+            "segment",
+            "-segment_time",
+            &LIVE_SEGMENT_SECS.to_string(),
+            "-segment_format",
+            "mpegts",
+            "-segment_start_number",
+            "1",
+            "-reset_timestamps",
+            "0",
+            "-segment_list",
+        ])
+        .arg(&list)
+        .args(["-segment_list_type", "csv"])
+        .arg(seg.join("%06d.ts"))
+        .status();
+    assert!(
+        matches!(status, Ok(s) if s.success()),
+        "vi-testkit: ffmpeg segment muxer failed: {status:?}"
+    );
+    // `-segment_start_number 1`: the live store numbers segments from 1.
+    let csv = std::fs::read_to_string(&list).expect("read segment list");
+    let mut entries = Vec::new();
+    for line in csv.lines().filter(|l| !l.trim().is_empty()) {
+        let mut cols = line.split(',');
+        let file = cols.next().expect("segment file").trim();
+        let start: f64 = cols
+            .next()
+            .expect("segment start")
+            .trim()
+            .parse()
+            .expect("segment start as seconds");
+        let end: f64 = cols
+            .next()
+            .expect("segment end")
+            .trim()
+            .parse()
+            .expect("segment end as seconds");
+        let seq: u64 = file
+            .trim_end_matches(".ts")
+            .parse()
+            .expect("segment file name is a number");
+        assert_eq!(file, format!("{seq:06}.ts"), "segment file name");
+        let bytes = std::fs::metadata(seg.join(file))
+            .expect("segment size")
+            .len();
+        entries.push(serde_json::json!({
+            "seq": seq,
+            "file": format!("seg/{file}"),
+            "t0": {"num": (start * TS_TIMEBASE_DEN as f64).round() as i64, "den": TS_TIMEBASE_DEN},
+            "t1": {"num": (end * TS_TIMEBASE_DEN as f64).round() as i64, "den": TS_TIMEBASE_DEN},
+            "bytes": bytes,
+            "wallclock": serde_json::Value::Null,
+        }));
+    }
+    let _ = std::fs::remove_file(&list);
+    let index = serde_json::json!({
+        "schema": 1,
+        "timebase": {"num": 1, "den": TS_TIMEBASE_DEN},
+        "segments": entries,
+        "gaps": [],
+        "ended": true,
+    });
+    let tmp = dir.join("index.json.tmp");
+    std::fs::write(
+        &tmp,
+        serde_json::to_vec_pretty(&index).expect("serialise index"),
+    )
+    .expect("write index");
+    std::fs::rename(tmp, dir.join("index.json")).expect("rename index");
+}
+
+/// 120 s of 16 kHz mono PCM: in every 8 s period, 3 s of silence then 5 s of
+/// a 440 Hz tone (`gt(mod(t,8),3)` gates the sine).
+fn tone_silence(ffmpeg: &str, out: &std::path::Path) {
+    let tmp = out.with_extension("tmp.wav");
+    let status = Command::new(ffmpeg)
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-f",
+            "lavfi",
+            "-i",
+            "aevalsrc=exprs='0.5*sin(2*PI*440*t)*gt(mod(t\\,8)\\,3)':sample_rate=16000:channel_layout=mono:duration=120",
+            "-c:a",
+            "pcm_s16le",
+        ])
+        .arg(&tmp)
+        .status();
+    assert!(
+        matches!(status, Ok(s) if s.success()),
+        "vi-testkit: ffmpeg tone-and-silence generation failed: {status:?}"
+    );
+    std::fs::rename(&tmp, out).expect("rename tone fixture");
 }
 
 fn generate(ffmpeg: &str, out: &std::path::Path, with_text: bool) -> bool {
