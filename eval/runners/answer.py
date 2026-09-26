@@ -85,8 +85,15 @@ def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question,
             # One record per call: the loop turn that issued it (calls sharing
             # a turn ran concurrently) and, once the result arrives, its wall time.
             args = ev.get("args") or {}
+            # Tool options worth reading back from the run file (EVAL-LESSONS: record
+            # the arguments, not just the names): the look's flags, and whether a
+            # `zoom` named a region.
+            flags = {k: args[k] for k in ("detail", "strip", "slow", "fps") if k in args}
+            if "region" in args:
+                flags["region"] = True
             calls.append({"tool": ev["tool"], "turn": ev.get("turn"), "ms": None,
-                          "windows": len(args["windows"]) if isinstance(args.get("windows"), list) else (1 if "t0" in args else 0)})
+                          "windows": len(args["windows"]) if isinstance(args.get("windows"), list) else (1 if "t0" in args else 0),
+                          **({"flags": flags} if flags else {})})
         elif ev["type"] == "tool_result":
             for c in calls:
                 if c["tool"] == ev["tool"] and c["ms"] is None and c["turn"] == ev.get("turn"):
