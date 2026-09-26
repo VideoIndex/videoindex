@@ -77,6 +77,32 @@ eval/
 
 Acquisition runs on the development Mac, not on azuremc, because YouTube blocks most datacenter IPs. `scripts/download_videos.sh` installs yt-dlp via Homebrew if missing, downloads the playlists at 720p with subtitles, chapters, and `.info.json` metadata into `dataset/videos/`, keeps a download archive so re-runs only fetch new entries, and prints the rsync command that moves the files into `/data/videoindex/videos/` on azuremc. The same script takes a plain-text file of URLs, which is how benchmark video lists are fetched. On azuremc the `LocalFile` acquirer imports the `.info.json` and subtitle sidecars so transferred downloads keep their metadata.
 
+## Reading results
+
+Lessons from the first rounds, so the pages under `docs/results/` are read the way they were
+produced.
+
+- The samples are fixed (25% stratified, seed 1: 340 LVBench and 310 MINERVA questions) so runs
+  pair question by question. Between two near-identical agents about 40 of 310 questions flip,
+  which is ±2 points of accuracy; the 95% interval on 340 questions is about ±4 points. A paired
+  comparison (questions fixed against questions broken, with an exact McNemar test) is the reading
+  that means something; two headline percentages one or two points apart do not.
+- Per-task-type deltas are noise unless the type is large: a 30-question type swings ±10 points
+  between runs of equal overall accuracy.
+- Effects of a few points hide in the full sample. The first 120 questions of the MINERVA sample
+  showed no gap between two agents that differ by two points overall; slices of 60 or 120
+  questions are for checking a mechanism on the questions where it applies, not for measuring.
+- Split before you rerun. The two regressions found so far were located from the run files alone,
+  by splitting the questions on a feature of the run (calls used, a tool called, a multi-window
+  call made) and comparing agents on the same questions.
+- Every tool argument that can change behaviour is recorded per call in the run file
+  (`calls: [{tool, turn, ms, windows}]`); a hypothesis that cannot be read from the run file
+  cannot be tested without a rerun.
+- Cost and latency medians are stable at these sizes; a 20% latency change is real when a
+  two-point accuracy change is not.
+- Every experiment gets a new run name (the runner resumes an existing file), and results pages
+  are generated, never edited.
+
 ## Regression gates
 
 - The 50-question dev set runs in CI nightly against the default configuration; accuracy drops of more than 3 points fail the run.
