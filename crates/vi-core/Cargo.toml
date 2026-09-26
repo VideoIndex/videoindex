@@ -17,6 +17,7 @@ thiserror = { workspace = true }
 ulid = { workspace = true }
 tokio = { workspace = true }
 chrono = { workspace = true }
+blake3 = { workspace = true }
 rayon = { workspace = true }
 tracing = { workspace = true }
 

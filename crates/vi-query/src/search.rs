@@ -122,7 +122,8 @@ fn state_rank(s: IndexState) -> u8 {
     match s {
         IndexState::Failed => 0,
         IndexState::Acquired => 1,
-        IndexState::Coarse => 2,
+        // Live is "coarse, still growing".
+        IndexState::Coarse | IndexState::Live => 2,
         IndexState::Fine => 3,
     }
 }

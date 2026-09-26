@@ -21,6 +21,11 @@ pub enum IndexState {
     Fine,
     /// Indexing failed.
     Failed,
+    /// A stream that is still being indexed while it runs: coarse rows are
+    /// committed up to [`Video::watermark`], `duration` is the head and grows.
+    /// Readers treat it as "coarse, still growing"; when the stream ends the
+    /// video moves to `coarse` and then `fine` like a batch video.
+    Live,
 }
 
 impl IndexState {
@@ -31,6 +36,7 @@ impl IndexState {
             Self::Coarse => "coarse",
             Self::Fine => "fine",
             Self::Failed => "failed",
+            Self::Live => "live",
         }
     }
 
@@ -41,9 +47,33 @@ impl IndexState {
             "coarse" => Some(Self::Coarse),
             "fine" => Some(Self::Fine),
             "failed" => Some(Self::Failed),
+            "live" => Some(Self::Live),
             _ => None,
         }
     }
+
+    /// True for a video whose rows are still arriving.
+    pub fn is_live(&self) -> bool {
+        matches!(self, Self::Live)
+    }
+}
+
+/// The identity hash of a stream: blake3 of `"live:" + source_key + start`,
+/// hex, where `start` is the stream's start time as RFC 3339 in UTC at
+/// whole-second precision (`2026-09-26T19:00:00Z`). It fills
+/// [`Video::content_hash`] for a live video, so re-attaching to a running
+/// stream with the same source key and start time finds the same row
+/// through `find_video_by_hash`.
+pub fn live_identity_hash(source_key: &str, start: DateTime<Utc>) -> String {
+    let mut h = blake3::Hasher::new();
+    h.update(b"live:");
+    h.update(source_key.as_bytes());
+    h.update(
+        start
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            .as_bytes(),
+    );
+    h.finalize().to_hex().to_string()
 }
 
 /// The indexed record of one Source.
@@ -53,7 +83,9 @@ pub struct Video {
     pub id: VideoId,
     /// Original location.
     pub source_uri: String,
-    /// blake3 of the media file, hex.
+    /// The identity hash, hex: blake3 of the media file for a file, or
+    /// [`live_identity_hash`] of the source key and start time for a stream
+    /// (`probe["live"]` says which). Drives caching, dedup and re-attaching.
     pub content_hash: String,
     /// Title from container or sidecar metadata.
     pub title: Option<String>,
@@ -63,9 +95,11 @@ pub struct Video {
     pub channel: Option<String>,
     /// Publication time.
     pub published_at: Option<DateTime<Utc>>,
-    /// Total duration.
+    /// Total duration; for a live video, the head (latest decoded time),
+    /// which grows.
     pub duration: Timestamp,
-    /// Wall-clock start when the container knows it.
+    /// Wall-clock start when the container knows it, or the stream's
+    /// programme date-time or ingest start for a live video.
     pub start_wallclock: Option<DateTime<Utc>>,
     /// ffprobe-equivalent output.
     pub probe: serde_json::Value,
@@ -73,6 +107,15 @@ pub struct Video {
     pub index_state: IndexState,
     /// Row creation time.
     pub created_at: DateTime<Utc>,
+    /// For a live video, the media time up to which every coarse operator
+    /// has committed its rows; answers read only below it. `None` for batch
+    /// videos and before the first live tick.
+    #[serde(default)]
+    pub watermark: Option<Timestamp>,
+    /// When the stream ended, once it has; `None` while live and for batch
+    /// videos.
+    #[serde(default)]
+    pub live_ended_at: Option<DateTime<Utc>>,
 }
 
 /// Elementary stream kind.
@@ -661,5 +704,74 @@ impl JobState {
         self.stages
             .get(stage)
             .is_some_and(|s| s.status == StageStatus::Complete)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn index_state_strings_roundtrip() {
+        for s in [
+            IndexState::Acquired,
+            IndexState::Coarse,
+            IndexState::Fine,
+            IndexState::Failed,
+            IndexState::Live,
+        ] {
+            assert_eq!(IndexState::parse(s.as_str()), Some(s));
+        }
+        assert_eq!(IndexState::parse("live"), Some(IndexState::Live));
+        assert!(IndexState::Live.is_live() && !IndexState::Coarse.is_live());
+        assert_eq!(
+            serde_json::to_string(&IndexState::Live).unwrap(),
+            "\"live\""
+        );
+    }
+
+    #[test]
+    fn live_identity_hash_is_stable_and_keyed() {
+        let start = DateTime::parse_from_rfc3339("2026-09-26T19:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let a = live_identity_hash("youtube:abc", start);
+        let b = live_identity_hash("youtube:abc", start);
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 64);
+        assert_ne!(a, live_identity_hash("youtube:abd", start));
+        assert_ne!(
+            a,
+            live_identity_hash("youtube:abc", start + chrono::Duration::seconds(1))
+        );
+        // Sub-second differences do not change the identity.
+        assert_eq!(
+            a,
+            live_identity_hash("youtube:abc", start + chrono::Duration::milliseconds(400))
+        );
+        assert_eq!(
+            a,
+            blake3::hash(b"live:youtube:abc2026-09-26T19:00:00Z")
+                .to_hex()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn video_live_fields_default_when_absent() {
+        let v: Video = serde_json::from_value(serde_json::json!({
+            "id": VideoId::new(),
+            "source_uri": "file:///a.mp4",
+            "content_hash": "h",
+            "title": null, "description": null, "channel": null, "published_at": null,
+            "duration": {"num": 10, "den": 1},
+            "start_wallclock": null,
+            "probe": {},
+            "index_state": "coarse",
+            "created_at": Utc::now(),
+        }))
+        .unwrap();
+        assert_eq!(v.watermark, None);
+        assert_eq!(v.live_ended_at, None);
     }
 }

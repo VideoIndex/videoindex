@@ -37,12 +37,16 @@ erDiagram
 |---|---|---|
 | id | ULID | Stable across re-indexing of the same content |
 | source_uri | text | Original location |
-| content_hash | blake3 | Of the media file; drives caching and dedup |
+| content_hash | blake3 | The **identity hash**: of the media file for a file; for a stream, of `"live:" + source key + start time` (`vi_core::model::live_identity_hash`, start as RFC 3339 UTC at whole seconds), so re-attaching to a running stream finds its row. Drives caching, dedup and `find_video_by_hash` |
 | title, description, channel, published_at | text/ts | From container or yt-dlp metadata |
-| duration | Timestamp | |
-| start_wallclock | ts, nullable | |
-| probe | JSON | ffprobe-equivalent output |
-| index_state | enum | `acquired`, `coarse`, `fine`, `failed` |
+| duration | Timestamp | For a live video, the head: the latest decoded time, which grows |
+| start_wallclock | ts, nullable | Container metadata; for a stream, the programme date-time or ingest start |
+| probe | JSON | ffprobe-equivalent output; `probe["live"]` names the source and store for a stream |
+| index_state | enum | `acquired`, `coarse`, `fine`, `failed`, `live` (schema v3: coarse rows still arriving; readers treat it as coarse) |
+| watermark | Timestamp, nullable | Live only: the time up to which every coarse operator has committed its rows; answers read below it. `NULL` for batch videos (schema v3) |
+| live_ended_at | ts, nullable | Live only: when the stream ended; `NULL` while live (schema v3) |
+
+A live video reports progress through `Event::LiveProgress { video, head, watermark, lag_by_stage }` on the event bus rather than a fraction; `vidx status` prints `live (head HH:MM:SS, watermark HH:MM:SS)` and its `--json` carries `head` and `watermark` per video. When the stream ends, the video moves to `coarse` and then `fine` like any other.
 
 ### Track
 `id, video_id, kind (video|audio|subtitle), stream_index, codec, timebase, width, height, fps, sample_rate, channels, language`.
@@ -188,4 +192,10 @@ Properties:
 
 ## Schema versioning
 
-The schema version is a single integer in `manifest.json` and in a `schema_meta` table. Migrations are Rust functions registered in order. Every migration is tested against fixture indexes produced by the previous version.
+The schema version is a single integer in `manifest.json` and in a `schema_meta` table. Migrations are Rust functions registered in order (`vi_index::schema::MIGRATIONS`); `schema::migrate_to` builds an index at an older version for tests. Every migration is tested against fixture indexes produced by the previous version.
+
+| Version | Change |
+|---|---|
+| 1 | Initial schema |
+| 2 | `embeddings.row`: an embedding knows its row in the model's vector file |
+| 3 | Live videos: `videos.watermark_num`, `watermark_den`, `watermark_secs`, `live_ended_at`, all nullable; `index_state` may be `live`. A v2 index opens as v3 after a copy to `meta.sqlite.v2.bak`; a build older than v3 refuses a v3 index (`SchemaTooNew`), so hosts upgrade `vidx` before receiving one |
