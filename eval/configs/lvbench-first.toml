@@ -84,6 +84,39 @@ max_tool_calls = 12
 budget_usd = 0.5
 budget_tokens = 120000
 
+# The 2026-09-29 agent (`zoom` and `view detail`, see minerva-first.toml) at the
+# historical P1 protocol, then both agents under P2 (20 calls, $0.30, 400k
+# tokens, 300 s; the demo's cap and the headline protocol since 2026-09-29), so
+# the page reads the two agents the same way at each level.
+[[runs]]
+name = "agent-gemini-v7-tc12"
+policy = "agent"
+model = "gemini-3.8-flash"
+label = "agent 2026-09-29 (gemini-3.8-flash, 12 tool calls)"
+max_tool_calls = 12
+budget_usd = 0.5
+budget_tokens = 120000
+
+[[runs]]
+name = "agent-gemini-v5-P2"
+policy = "agent"
+model = "gemini-3.8-flash"
+label = "agent 2026-09-26 (gemini-3.8-flash, P2: 20 calls, $0.30)"
+max_tool_calls = 20
+budget_usd = 0.30
+budget_tokens = 400000
+budget_secs = 300
+
+[[runs]]
+name = "agent-gemini-v7-P2"
+policy = "agent"
+model = "gemini-3.8-flash"
+label = "agent 2026-09-29 (gemini-3.8-flash, P2: 20 calls, $0.30)"
+max_tool_calls = 20
+budget_usd = 0.30
+budget_tokens = 400000
+budget_secs = 300
+
 [[runs]]
 name = "retrieval-only"
 policy = "retrieval-only"
