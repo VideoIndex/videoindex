@@ -3,6 +3,7 @@
 
 use std::collections::VecDeque;
 use std::path::Path;
+use std::time::Duration;
 
 use ff::format::{Pixel, Sample};
 use ff::software::{resampling, scaling};
@@ -14,7 +15,8 @@ use vi_core::Timestamp;
 use crate::error::{MediaError, Result};
 use crate::frame::PixelFormat;
 use crate::probe::{ChapterInfo, Probe, StreamInfo};
-use crate::protocol::{AudioDecodeRequest, Response, VideoDecodeRequest};
+use crate::protocol::{AudioDecodeRequest, LiveDecodeRequest, Response, VideoDecodeRequest};
+use crate::segments::{MediaInput, SegmentEntry, SegmentFeed, SegmentIndex};
 use crate::shm::SharedRegionMut;
 
 /// Where decoded items go: a slot allocator plus a response channel. The
@@ -257,39 +259,54 @@ fn scaled_dims(sw: u32, sh: u32, max_dim: u32) -> (u32, u32) {
     (w, h)
 }
 
-struct VideoSession<'a> {
-    sink: &'a mut dyn Sink,
-    shm: &'a mut SharedRegionMut,
-    scaler: Option<scaling::Context>,
-    out_fmt: Pixel,
+/// Scales decoded frames to the delivery geometry and copies each into a
+/// shared-memory slot, announcing it to the parent.
+struct FrameWriter {
+    /// The scaler and the input geometry it was built for; rebuilt when a
+    /// frame arrives in another format or size.
+    scaler: Option<(scaling::Context, (Pixel, u32, u32))>,
     out_dims: (u32, u32),
-    src_dims: (u32, u32),
-    tb: (u32, u32),
-    start_time: i64,
     format: PixelFormat,
     rgb: frame::Video,
     items: u64,
 }
 
-impl VideoSession<'_> {
-    fn frame_time(&self, pts: i64) -> Timestamp {
-        ts_from(pts.saturating_sub(self.start_time), self.tb)
+impl FrameWriter {
+    fn new(out_dims: (u32, u32), format: PixelFormat) -> Self {
+        Self {
+            scaler: None,
+            out_dims,
+            format,
+            rgb: frame::Video::empty(),
+            items: 0,
+        }
     }
 
-    fn emit(&mut self, decoded: &frame::Video, pts: i64, t: Timestamp) -> Result<()> {
-        if self.scaler.is_none() {
+    fn emit(
+        &mut self,
+        sink: &mut dyn Sink,
+        shm: &mut SharedRegionMut,
+        decoded: &frame::Video,
+        pts: i64,
+        t: Timestamp,
+    ) -> Result<()> {
+        let key = (decoded.format(), decoded.width(), decoded.height());
+        if self.scaler.as_ref().is_none_or(|(_, k)| *k != key) {
             let (ow, oh) = self.out_dims;
-            self.scaler = Some(scaling::Context::get(
-                decoded.format(),
-                decoded.width(),
-                decoded.height(),
-                self.out_fmt,
-                ow,
-                oh,
-                scaling::Flags::BILINEAR,
-            )?);
+            self.scaler = Some((
+                scaling::Context::get(
+                    key.0,
+                    key.1,
+                    key.2,
+                    Pixel::RGB24,
+                    ow,
+                    oh,
+                    scaling::Flags::BILINEAR,
+                )?,
+                key,
+            ));
         }
-        let scaler = self
+        let (scaler, _) = self
             .scaler
             .as_mut()
             .ok_or_else(|| MediaError::Libav("scaler missing".into()))?;
@@ -299,9 +316,9 @@ impl VideoSession<'_> {
         let bpp = self.format.bytes_per_pixel();
         let row_bytes = ow as usize * bpp;
         let needed = self.format.frame_size(ow, oh);
-        let slot = self.sink.acquire_slot()?;
+        let slot = sink.acquire_slot()?;
         {
-            let dst = self.shm.slot_mut(slot);
+            let dst = shm.slot_mut(slot);
             if dst.len() < needed {
                 return Err(MediaError::Protocol(format!(
                     "shm slot of {} bytes cannot hold a {}x{} frame ({} bytes)",
@@ -319,7 +336,7 @@ impl VideoSession<'_> {
             }
         }
         self.items += 1;
-        self.sink.send(&Response::Frame {
+        sink.send(&Response::Frame {
             slot,
             len: needed,
             width: ow,
@@ -330,6 +347,37 @@ impl VideoSession<'_> {
             t,
             is_keyframe: decoded.is_key(),
         })
+    }
+}
+
+struct VideoSession<'a> {
+    sink: &'a mut dyn Sink,
+    shm: &'a mut SharedRegionMut,
+    writer: FrameWriter,
+    src_dims: (u32, u32),
+    tb: (u32, u32),
+    start_time: i64,
+}
+
+impl VideoSession<'_> {
+    fn frame_time(&self, pts: i64) -> Timestamp {
+        ts_from(pts.saturating_sub(self.start_time), self.tb)
+    }
+
+    fn emit(&mut self, decoded: &frame::Video, pts: i64, t: Timestamp) -> Result<()> {
+        self.writer
+            .emit(&mut *self.sink, &mut *self.shm, decoded, pts, t)
+    }
+}
+
+/// Decoder threads for a request: 0 means every CPU.
+fn resolve_threads(requested: usize) -> usize {
+    if requested == 0 {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(2)
+    } else {
+        requested
     }
 }
 
@@ -347,23 +395,38 @@ pub(crate) fn decode_video(
             "only rgb24 delivery is implemented in M0".into(),
         ));
     }
-    let mut ictx = format::input(&req.path)?;
+    match &req.input {
+        MediaInput::File { path } => {
+            decode_video_file(req, path, keyframe_interval_hint, shm, sink)
+        }
+        MediaInput::Segments(feed) => decode_video_segments(req, feed, shm, sink),
+    }
+}
+
+/// The file decode: one container, seeking per sample when the rate is far
+/// below the keyframe rate, sequential otherwise. Batch indexing runs on
+/// this path and its outputs must not change.
+fn decode_video_file(
+    req: &VideoDecodeRequest,
+    path: &Path,
+    keyframe_interval_hint: Option<f64>,
+    shm: &mut SharedRegionMut,
+    sink: &mut dyn Sink,
+) -> Result<(u64, u64)> {
+    let mut ictx = format::input(path)?;
 
     let (sidx, tb, start_time, params, src_fps, stream_duration) = {
         let stream = match req.stream_index {
             Some(i) => ictx
                 .stream(i as usize)
-                .ok_or_else(|| MediaError::NoStream("video", req.path.display().to_string()))?,
+                .ok_or_else(|| MediaError::NoStream("video", path.display().to_string()))?,
             None => ictx
                 .streams()
                 .best(media::Type::Video)
-                .ok_or_else(|| MediaError::NoStream("video", req.path.display().to_string()))?,
+                .ok_or_else(|| MediaError::NoStream("video", path.display().to_string()))?,
         };
         if stream.parameters().medium() != media::Type::Video {
-            return Err(MediaError::NoStream(
-                "video",
-                req.path.display().to_string(),
-            ));
+            return Err(MediaError::NoStream("video", path.display().to_string()));
         }
         let tb = rational_parts(stream.time_base());
         let st = stream.start_time();
@@ -386,13 +449,7 @@ pub(crate) fn decode_video(
         (None, None) => f64::INFINITY,
     };
 
-    let threads = if req.threads == 0 {
-        std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(2)
-    } else {
-        req.threads
-    };
+    let threads = resolve_threads(req.threads);
     let mut ctx = codec::context::Context::from_parameters(params)?;
     let mut tcfg = threading::Config::count(threads);
     tcfg.kind = threading::Type::Frame;
@@ -429,15 +486,10 @@ pub(crate) fn decode_video(
     let mut session = VideoSession {
         sink,
         shm,
-        scaler: None,
-        out_fmt: Pixel::RGB24,
-        out_dims,
+        writer: FrameWriter::new(out_dims, req.format),
         src_dims,
         tb,
         start_time,
-        format: req.format,
-        rgb: frame::Video::empty(),
-        items: 0,
     };
     let _ = session.src_dims;
 
@@ -583,7 +635,7 @@ pub(crate) fn decode_video(
         }
     }
 
-    Ok((session.items, decoded_frames))
+    Ok((session.writer.items, decoded_frames))
 }
 
 // ---------------------------------------------------------------- audio --
@@ -596,23 +648,34 @@ pub(crate) fn decode_audio(
 ) -> Result<(u64, u64)> {
     init()?;
     req.check()?;
-    let mut ictx = format::input(&req.path)?;
+    match &req.input {
+        MediaInput::File { path } => decode_audio_file(req, path, shm, sink),
+        MediaInput::Segments(feed) => decode_audio_segments(req, feed, shm, sink),
+    }
+}
+
+/// The file decode; batch indexing runs on this path and its outputs must
+/// not change.
+fn decode_audio_file(
+    req: &AudioDecodeRequest,
+    path: &Path,
+    shm: &mut SharedRegionMut,
+    sink: &mut dyn Sink,
+) -> Result<(u64, u64)> {
+    let mut ictx = format::input(path)?;
 
     let (sidx, tb, start_time, params) = {
         let stream = match req.stream_index {
             Some(i) => ictx
                 .stream(i as usize)
-                .ok_or_else(|| MediaError::NoStream("audio", req.path.display().to_string()))?,
+                .ok_or_else(|| MediaError::NoStream("audio", path.display().to_string()))?,
             None => ictx
                 .streams()
                 .best(media::Type::Audio)
-                .ok_or_else(|| MediaError::NoStream("audio", req.path.display().to_string()))?,
+                .ok_or_else(|| MediaError::NoStream("audio", path.display().to_string()))?,
         };
         if stream.parameters().medium() != media::Type::Audio {
-            return Err(MediaError::NoStream(
-                "audio",
-                req.path.display().to_string(),
-            ));
+            return Err(MediaError::NoStream("audio", path.display().to_string()));
         }
         let tb = rational_parts(stream.time_base());
         let st = stream.start_time();
@@ -851,6 +914,962 @@ pub(crate) fn decode_audio(
         emit_chunk(&mut pending, &mut pending_start, n, b, sink, shm)?;
     }
     Ok((chunks.get(), samples_decoded))
+}
+
+// ------------------------------------------------------------- segments --
+//
+// A segmented recording (live C2). Every segment is opened on its own: the
+// S0.5 measurement put one open at about 100 ms, a third of the budget, and
+// libav logs `Packet corrupt` at each boundary when TS segments are read as
+// one byte stream. libav reports a segment's times from its own start, so
+// the recording's timeline comes from the index: a frame or sample at
+// in-segment PTS `p` sits at `entry.t0 + (p - base)`, `base` being the
+// segment's first video PTS (audio's when there is no video). A hole in the
+// index is therefore a hole in the times, and a `Gap` for live sessions.
+
+/// Poll interval while a following feed has no new segment.
+const FOLLOW_POLL: Duration = Duration::from_millis(100);
+
+/// Holes shorter than this between consecutive segments are rounding, not
+/// gaps.
+const GAP_MIN_SECS: f64 = 0.001;
+
+/// An audio clock that disagrees with the index by more than this at a
+/// segment boundary is re-anchored (an index that does not follow the PTS,
+/// or the other way round).
+const AUDIO_REANCHOR_SECS: f64 = 0.1;
+
+/// Ignore audio this far before a window's start, as the file decoder does.
+const AUDIO_LEAD_SECS: f64 = 0.05;
+
+/// One stream of an open segment.
+#[derive(Clone, Copy)]
+struct SegStream {
+    index: usize,
+    tb: (u32, u32),
+}
+
+/// One segment, open, with the mapping onto the recording's timeline.
+struct OpenSegment {
+    ictx: format::context::Input,
+    /// The segment's `t0` on the recording timeline.
+    t0: Timestamp,
+    /// In-segment time of the base stream's first packet.
+    base: Timestamp,
+    video: Option<SegStream>,
+    audio: Option<SegStream>,
+}
+
+impl OpenSegment {
+    /// Open a listed segment, telling the parent (at debug level) which file
+    /// so tests can count opens.
+    fn open(
+        feed: &SegmentFeed,
+        entry: &SegmentEntry,
+        video_index: Option<u32>,
+        audio_index: Option<u32>,
+        sink: &mut dyn Sink,
+    ) -> Result<Self> {
+        let path = feed.segment_path(entry);
+        sink.send(&Response::Log {
+            level: "debug".into(),
+            message: format!("opening segment {}", path.display()),
+        })?;
+        let ictx = format::input(&path)?;
+        let pick = |kind: media::Type, wanted: Option<u32>| -> Result<Option<(SegStream, i64)>> {
+            let stream = match wanted {
+                Some(i) => {
+                    let s = ictx.stream(i as usize).ok_or_else(|| {
+                        MediaError::NoStream(
+                            if kind == media::Type::Video {
+                                "video"
+                            } else {
+                                "audio"
+                            },
+                            path.display().to_string(),
+                        )
+                    })?;
+                    if s.parameters().medium() != kind {
+                        return Ok(None);
+                    }
+                    s
+                }
+                None => match ictx.streams().best(kind) {
+                    Some(s) => s,
+                    None => return Ok(None),
+                },
+            };
+            let st = stream.start_time();
+            Ok(Some((
+                SegStream {
+                    index: stream.index(),
+                    tb: rational_parts(stream.time_base()),
+                },
+                if st == no_pts() { 0 } else { st },
+            )))
+        };
+        let video = pick(media::Type::Video, video_index)?;
+        let audio = pick(media::Type::Audio, audio_index)?;
+        let base = video
+            .or(audio)
+            .map(|(s, st)| ts_from(st, s.tb))
+            .unwrap_or(Timestamp::ZERO);
+        Ok(Self {
+            ictx,
+            t0: entry.t0,
+            base,
+            video: video.map(|(s, _)| s),
+            audio: audio.map(|(s, _)| s),
+        })
+    }
+
+    /// Recording time of an in-segment PTS.
+    fn rec_time(&self, pts: i64, tb: (u32, u32)) -> Timestamp {
+        self.t0.add(ts_from(pts, tb).sub(self.base))
+    }
+
+    fn video_stream(&self, dir: &Path) -> Result<SegStream> {
+        self.video
+            .ok_or_else(|| MediaError::NoStream("video", dir.display().to_string()))
+    }
+
+    fn audio_stream(&self, dir: &Path) -> Result<SegStream> {
+        self.audio
+            .ok_or_else(|| MediaError::NoStream("audio", dir.display().to_string()))
+    }
+
+    /// Codec of a stream, to notice a change between segments.
+    fn codec_id(&self, s: SegStream) -> Option<codec::Id> {
+        self.ictx.stream(s.index).map(|st| st.parameters().id())
+    }
+
+    /// The next packet of stream `index`, skipping the others; `None` at the
+    /// end of the segment.
+    fn next_packet_of(&mut self, index: usize) -> Option<codec::packet::Packet> {
+        loop {
+            let next = {
+                let mut it = self.ictx.packets();
+                it.next()
+            };
+            match next {
+                Some((s, p)) if s.index() == index => return Some(p),
+                Some(_) => continue,
+                None => return None,
+            }
+        }
+    }
+
+    /// The next packet of either stream: `(true, packet)` for video,
+    /// `(false, packet)` for audio; `None` at the end of the segment.
+    fn next_av_packet(
+        &mut self,
+        video: usize,
+        audio: Option<usize>,
+    ) -> Option<(bool, codec::packet::Packet)> {
+        loop {
+            let next = {
+                let mut it = self.ictx.packets();
+                it.next()
+            };
+            match next {
+                Some((s, p)) if s.index() == video => return Some((true, p)),
+                Some((s, p)) if Some(s.index()) == audio => return Some((false, p)),
+                Some(_) => continue,
+                None => return None,
+            }
+        }
+    }
+}
+
+/// A video decoder for one segment.
+struct SegVideoDecoder {
+    dec: ff::decoder::Video,
+    src_fps: f64,
+    src_dims: (u32, u32),
+}
+
+fn open_video_decoder(
+    seg: &OpenSegment,
+    s: SegStream,
+    threads: usize,
+    fps_req: f64,
+) -> Result<SegVideoDecoder> {
+    let stream = seg
+        .ictx
+        .stream(s.index)
+        .ok_or_else(|| MediaError::Libav("video stream vanished".into()))?;
+    let src_fps = rational_f64(stream.avg_frame_rate())
+        .or_else(|| rational_f64(stream.rate()))
+        .unwrap_or(30.0);
+    let mut ctx = codec::context::Context::from_parameters(stream.parameters())?;
+    let mut tcfg = threading::Config::count(threads);
+    tcfg.kind = threading::Type::Frame;
+    ctx.set_threading(tcfg);
+    let mut dec = ctx.decoder();
+    // Same rule as the file decoder: far below the source rate, dropping
+    // non-reference frames is lossless for the frames kept.
+    if fps_req * 2.0 < src_fps {
+        dec.skip_frame(Discard::NonReference);
+    }
+    let vdec = dec.video()?;
+    let src_dims = (vdec.width(), vdec.height());
+    Ok(SegVideoDecoder {
+        dec: vdec,
+        src_fps,
+        src_dims,
+    })
+}
+
+fn open_audio_decoder(seg: &OpenSegment, s: SegStream) -> Result<ff::decoder::Audio> {
+    let stream = seg
+        .ictx
+        .stream(s.index)
+        .ok_or_else(|| MediaError::Libav("audio stream vanished".into()))?;
+    let ctx = codec::context::Context::from_parameters(stream.parameters())?;
+    Ok(ctx.decoder().audio()?)
+}
+
+/// Picks the frames a fixed-rate sample keeps, on any timeline: the first
+/// frame at or after each target, with half a source frame of tolerance so
+/// a target that lands a hair after a frame's PTS still takes that frame.
+struct FrameSampler {
+    next_target: f64,
+    interval: f64,
+    t_end: f64,
+    eps: f64,
+}
+
+impl FrameSampler {
+    fn done(&self) -> bool {
+        self.next_target >= self.t_end
+    }
+
+    /// Whether a frame at `secs` is kept; advances past every target the
+    /// frame satisfies.
+    fn take(&mut self, secs: f64) -> bool {
+        if self.done() || secs + self.eps < self.next_target {
+            return false;
+        }
+        while secs + self.eps >= self.next_target {
+            self.next_target += self.interval;
+        }
+        true
+    }
+}
+
+/// Receive every frame the decoder has ready, keep the sampled ones. Returns
+/// `(frames decoded, sampler exhausted)`.
+#[allow(clippy::too_many_arguments)]
+fn receive_video_frames(
+    seg: &OpenSegment,
+    s: SegStream,
+    vdec: &mut ff::decoder::Video,
+    frame: &mut frame::Video,
+    sampler: &mut FrameSampler,
+    writer: &mut FrameWriter,
+    shm: &mut SharedRegionMut,
+    sink: &mut dyn Sink,
+) -> Result<(u64, bool)> {
+    let mut decoded = 0u64;
+    loop {
+        match vdec.receive_frame(frame) {
+            Ok(()) => {
+                decoded += 1;
+                let pts = frame.pts().or_else(|| frame.timestamp()).unwrap_or(0);
+                let t = seg.rec_time(pts, s.tb);
+                if sampler.take(t.as_secs_f64()) {
+                    writer.emit(sink, shm, frame, pts, t)?;
+                }
+                if sampler.done() {
+                    return Ok((decoded, true));
+                }
+            }
+            Err(e) if is_again(&e) => return Ok((decoded, false)),
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+/// Resamples decoded audio to mono PCM at `rate` and cuts it into chunks of
+/// `chunk` samples every `hop` samples, timing them by sample count from the
+/// first sample's recording time (the file decoder's rule), so chunk
+/// boundaries do not depend on where segments are cut.
+struct AudioChunker {
+    rate: u32,
+    chunk: usize,
+    hop: usize,
+    /// The resampler and the input layout it was built for.
+    resampler: Option<(resampling::Context, (Sample, u16, u32))>,
+    pending: VecDeque<i16>,
+    /// Sample index (at `rate`) of `pending[0]`, relative to `base`.
+    pending_start: u64,
+    base: Option<Timestamp>,
+    chunks: u64,
+    samples: u64,
+}
+
+impl AudioChunker {
+    fn new(rate: u32, chunk: usize, hop: usize) -> Self {
+        Self {
+            rate,
+            chunk,
+            hop: hop.max(1),
+            resampler: None,
+            pending: VecDeque::with_capacity(chunk + 4096),
+            pending_start: 0,
+            base: None,
+            chunks: 0,
+            samples: 0,
+        }
+    }
+
+    /// Recording time at which the clock expects the next sample.
+    fn expected_next(&self) -> Option<Timestamp> {
+        self.base.map(|b| {
+            b.add(Timestamp::new(
+                (self.pending_start + self.pending.len() as u64) as i64,
+                self.rate,
+            ))
+        })
+    }
+
+    /// Resample a decoded frame whose first sample sits at `t` and emit the
+    /// chunks that became complete.
+    fn push(
+        &mut self,
+        aframe: &frame::Audio,
+        t: Timestamp,
+        sink: &mut dyn Sink,
+        shm: &mut SharedRegionMut,
+    ) -> Result<()> {
+        if self.base.is_none() {
+            self.base = Some(t);
+        }
+        let key = (aframe.format(), aframe.channels(), aframe.rate());
+        if self.resampler.as_ref().is_none_or(|(_, k)| *k != key) {
+            self.resampler = Some((
+                resampling::Context::get(
+                    aframe.format(),
+                    aframe.channel_layout(),
+                    aframe.rate(),
+                    Sample::I16(ff::format::sample::Type::Packed),
+                    ChannelLayout::default(1),
+                    self.rate,
+                )?,
+                key,
+            ));
+        }
+        let (rs, _) = self
+            .resampler
+            .as_mut()
+            .ok_or_else(|| MediaError::Libav("resampler missing".into()))?;
+        let mut out = frame::Audio::empty();
+        rs.run(aframe, &mut out)?;
+        self.append(&out);
+        self.emit_full(sink, shm)
+    }
+
+    fn append(&mut self, out: &frame::Audio) {
+        let n = out.samples();
+        if n > 0 {
+            let bytes = &out.data(0)[..n * 2];
+            self.pending.extend(
+                bytes
+                    .chunks_exact(2)
+                    .map(|b| i16::from_le_bytes([b[0], b[1]])),
+            );
+            self.samples += n as u64;
+        }
+    }
+
+    fn emit_full(&mut self, sink: &mut dyn Sink, shm: &mut SharedRegionMut) -> Result<()> {
+        while self.pending.len() >= self.chunk {
+            self.emit_chunk(self.chunk, sink, shm)?;
+        }
+        Ok(())
+    }
+
+    fn emit_chunk(
+        &mut self,
+        n: usize,
+        sink: &mut dyn Sink,
+        shm: &mut SharedRegionMut,
+    ) -> Result<()> {
+        let slot = sink.acquire_slot()?;
+        {
+            let dst = shm.slot_mut(slot);
+            for (i, s) in self.pending.iter().take(n).enumerate() {
+                dst[i * 2..i * 2 + 2].copy_from_slice(&s.to_le_bytes());
+            }
+        }
+        let base = self.base.unwrap_or(Timestamp::ZERO);
+        let t0 = base.add(Timestamp::new(self.pending_start as i64, self.rate));
+        let t1 = base.add(Timestamp::new(
+            (self.pending_start + n as u64) as i64,
+            self.rate,
+        ));
+        self.chunks += 1;
+        sink.send(&Response::AudioChunk {
+            slot,
+            len: n * 2,
+            t0,
+            t1,
+            sample_rate: self.rate,
+            samples: n,
+        })?;
+        let drop_n = self.hop.min(n);
+        self.pending.drain(..drop_n);
+        self.pending_start += drop_n as u64;
+        Ok(())
+    }
+
+    /// Drain the resampler's delay and emit what is pending, including a
+    /// final partial chunk when it holds more than the overlap (else it is
+    /// entirely inside the previous chunk).
+    fn flush(&mut self, sink: &mut dyn Sink, shm: &mut SharedRegionMut) -> Result<()> {
+        if let Some((rs, _)) = self.resampler.as_mut() {
+            loop {
+                // `flush` does not allocate its output; size it explicitly.
+                let mut out = frame::Audio::new(
+                    Sample::I16(ff::format::sample::Type::Packed),
+                    8192,
+                    ChannelLayout::default(1),
+                );
+                out.set_rate(self.rate);
+                let delay = rs.flush(&mut out)?;
+                let n = out.samples();
+                if n > 0 {
+                    let bytes = &out.data(0)[..n * 2];
+                    self.pending.extend(
+                        bytes
+                            .chunks_exact(2)
+                            .map(|b| i16::from_le_bytes([b[0], b[1]])),
+                    );
+                    self.samples += n as u64;
+                }
+                if delay.is_none() || n == 0 {
+                    break;
+                }
+            }
+        }
+        self.emit_full(sink, shm)?;
+        let overlap = self.chunk - self.hop.min(self.chunk);
+        if !self.pending.is_empty() && (self.chunks == 0 || self.pending.len() > overlap) {
+            let n = self.pending.len();
+            self.emit_chunk(n, sink, shm)?;
+        }
+        Ok(())
+    }
+
+    /// Forget the clock and the resampler; the next sample re-anchors.
+    fn reset(&mut self) {
+        self.resampler = None;
+        self.pending.clear();
+        self.pending_start = 0;
+        self.base = None;
+    }
+}
+
+/// Feed one audio packet's frames to the chunker. `range` bounds the
+/// recording times kept (`None` for a live pass); returns true once a frame
+/// at or past the range's end arrived.
+#[allow(clippy::too_many_arguments)]
+fn receive_audio_frames(
+    seg: &OpenSegment,
+    s: SegStream,
+    adec: &mut ff::decoder::Audio,
+    aframe: &mut frame::Audio,
+    chunker: &mut AudioChunker,
+    range: Option<(f64, Option<f64>)>,
+    first_in_segment: &mut bool,
+    shm: &mut SharedRegionMut,
+    sink: &mut dyn Sink,
+) -> Result<bool> {
+    loop {
+        match adec.receive_frame(aframe) {
+            Ok(()) => {
+                let pts = aframe.pts().or_else(|| aframe.timestamp()).unwrap_or(0);
+                let t = seg.rec_time(pts, s.tb);
+                if let Some((t0, t1)) = range {
+                    let secs = t.as_secs_f64();
+                    if secs < t0 - AUDIO_LEAD_SECS {
+                        continue;
+                    }
+                    if t1.is_some_and(|t1| secs >= t1) {
+                        return Ok(true);
+                    }
+                }
+                if *first_in_segment {
+                    *first_in_segment = false;
+                    // The index says where this segment starts; if the
+                    // sample clock disagrees by more than rounding, trust the
+                    // index and start a new run of chunks here.
+                    if let Some(expected) = chunker.expected_next() {
+                        let drift = (t.as_secs_f64() - expected.as_secs_f64()).abs();
+                        if drift > AUDIO_REANCHOR_SECS {
+                            sink.send(&Response::Log {
+                                level: "debug".into(),
+                                message: format!(
+                                    "audio clock {drift:.3} s off the index at {t}; re-anchoring"
+                                ),
+                            })?;
+                            chunker.flush(sink, shm)?;
+                            chunker.reset();
+                        }
+                    }
+                }
+                chunker.push(aframe, t, sink, shm)?;
+            }
+            Err(e) if is_again(&e) => return Ok(false),
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+/// Send EOF to an audio decoder and push what it still holds; the times of
+/// those frames continue the sample clock.
+fn drain_audio_decoder(
+    adec: &mut ff::decoder::Audio,
+    aframe: &mut frame::Audio,
+    chunker: &mut AudioChunker,
+    shm: &mut SharedRegionMut,
+    sink: &mut dyn Sink,
+) -> Result<()> {
+    adec.send_eof()?;
+    loop {
+        match adec.receive_frame(aframe) {
+            Ok(()) => {
+                let t = chunker.expected_next().unwrap_or(Timestamp::ZERO);
+                chunker.push(aframe, t, sink, shm)?;
+            }
+            Err(e) if is_again(&e) => return Ok(()),
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+/// The index, or an empty one while a following feed's writer has not
+/// created it yet.
+fn load_index_for(feed: &SegmentFeed) -> Result<SegmentIndex> {
+    match feed.load_index() {
+        Ok(idx) => Ok(idx),
+        Err(MediaError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound && feed.follow => {
+            Ok(SegmentIndex::new())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn started_response(s: SegStream, out_dims: (u32, u32), src_dims: (u32, u32)) -> Response {
+    Response::Started {
+        time_base_num: s.tb.0,
+        time_base_den: s.tb.1,
+        stream_index: s.index as u32,
+        width: out_dims.0,
+        height: out_dims.1,
+        source_width: src_dims.0,
+        source_height: src_dims.1,
+        seeking: false,
+    }
+}
+
+/// A window decode over a recording: open only the segments that hold a
+/// sampling target inside `[t0, t1)`, in order, and sample across them on
+/// the recording's timeline.
+fn decode_video_segments(
+    req: &VideoDecodeRequest,
+    feed: &SegmentFeed,
+    shm: &mut SharedRegionMut,
+    sink: &mut dyn Sink,
+) -> Result<(u64, u64)> {
+    let index = feed.load_index()?;
+    let dir = feed.dir.as_path();
+    let t0 = Timestamp::from_secs_f64(req.t0_secs, Timestamp::MICROS);
+    let t1 = req
+        .t1_secs
+        .map(|s| Timestamp::from_secs_f64(s, Timestamp::MICROS))
+        .unwrap_or_else(|| index.head());
+    let covering: Vec<SegmentEntry> = index.covering(t0, t1).to_vec();
+    let mut sampler = FrameSampler {
+        next_target: req.t0_secs,
+        interval: 1.0 / req.fps,
+        t_end: req.t1_secs.unwrap_or(f64::INFINITY),
+        eps: 0.5 / 30.0,
+    };
+    let threads = resolve_threads(req.threads);
+    let mut writer: Option<FrameWriter> = None;
+    let mut frame = frame::Video::empty();
+    let mut decoded = 0u64;
+    for entry in &covering {
+        if sampler.done() {
+            break;
+        }
+        if sampler.next_target >= entry.t1.as_secs_f64() {
+            // No target falls inside this segment.
+            continue;
+        }
+        let mut seg = OpenSegment::open(feed, entry, req.stream_index, None, sink)?;
+        let vs = seg.video_stream(dir)?;
+        let mut vdec = open_video_decoder(&seg, vs, threads, req.fps)?;
+        sampler.eps = 0.5 / vdec.src_fps;
+        if writer.is_none() {
+            let out_dims = scaled_dims(vdec.src_dims.0, vdec.src_dims.1, req.max_dim);
+            sink.send(&started_response(vs, out_dims, vdec.src_dims))?;
+            writer = Some(FrameWriter::new(out_dims, req.format));
+        }
+        let w = writer
+            .as_mut()
+            .ok_or_else(|| MediaError::Libav("frame writer missing".into()))?;
+        let mut packets_seen = 0u64;
+        let mut exhausted = false;
+        while let Some(p) = seg.next_packet_of(vs.index) {
+            packets_seen += 1;
+            if packets_seen % 64 == 0 {
+                sink.poll_cancel()?;
+            }
+            vdec.dec.send_packet(&p)?;
+            let (n, done) = receive_video_frames(
+                &seg,
+                vs,
+                &mut vdec.dec,
+                &mut frame,
+                &mut sampler,
+                w,
+                shm,
+                sink,
+            )?;
+            decoded += n;
+            if done {
+                exhausted = true;
+                break;
+            }
+        }
+        if !exhausted {
+            vdec.dec.send_eof()?;
+            let (n, _) = receive_video_frames(
+                &seg,
+                vs,
+                &mut vdec.dec,
+                &mut frame,
+                &mut sampler,
+                w,
+                shm,
+                sink,
+            )?;
+            decoded += n;
+        }
+    }
+    let items = match writer {
+        Some(w) => w.items,
+        None => {
+            // Nothing to open (a window past the head, or one that holds no
+            // sampling target). The parent still expects the geometry, so
+            // read it from the nearest listed segment.
+            let nearest = index
+                .covering(t0, t1)
+                .first()
+                .or_else(|| index.segments.last())
+                .ok_or_else(|| MediaError::NoStream("segment", dir.display().to_string()))?;
+            let seg = OpenSegment::open(feed, nearest, req.stream_index, None, sink)?;
+            let vs = seg.video_stream(dir)?;
+            let vdec = open_video_decoder(&seg, vs, threads, req.fps)?;
+            let out_dims = scaled_dims(vdec.src_dims.0, vdec.src_dims.1, req.max_dim);
+            sink.send(&started_response(vs, out_dims, vdec.src_dims))?;
+            0
+        }
+    };
+    Ok((items, decoded))
+}
+
+/// A window decode of audio over a recording: the covering segments in
+/// order, one audio decoder and one sample clock across contiguous
+/// segments, re-anchored at holes and discontinuities.
+fn decode_audio_segments(
+    req: &AudioDecodeRequest,
+    feed: &SegmentFeed,
+    shm: &mut SharedRegionMut,
+    sink: &mut dyn Sink,
+) -> Result<(u64, u64)> {
+    let index = feed.load_index()?;
+    let dir = feed.dir.as_path();
+    let t0 = Timestamp::from_secs_f64(req.t0_secs, Timestamp::MICROS);
+    let t1 = req
+        .t1_secs
+        .map(|s| Timestamp::from_secs_f64(s, Timestamp::MICROS))
+        .unwrap_or_else(|| index.head());
+    let covering: Vec<SegmentEntry> = index.covering(t0, t1).to_vec();
+    let chunk = req.chunk_samples();
+    let slot_bytes = shm.spec().slot_size;
+    if slot_bytes < chunk * 2 {
+        return Err(MediaError::Protocol(format!(
+            "shm slot of {slot_bytes} bytes cannot hold a chunk of {chunk} samples"
+        )));
+    }
+    let mut chunker = AudioChunker::new(req.sample_rate, chunk, chunk - req.overlap_samples());
+    let mut aframe = frame::Audio::empty();
+    let mut adec: Option<(Option<codec::Id>, ff::decoder::Audio)> = None;
+    let mut started = false;
+    let mut prev_t1: Option<Timestamp> = None;
+    let range = Some((req.t0_secs, req.t1_secs));
+    'segments: for entry in &covering {
+        let mut seg = OpenSegment::open(feed, entry, None, req.stream_index, sink)?;
+        let a = seg.audio_stream(dir)?;
+        if !started {
+            sink.send(&started_response(a, (0, 0), (0, 0)))?;
+            started = true;
+        }
+        let hole = prev_t1.is_some_and(|p| entry.t0.as_secs_f64() - p.as_secs_f64() > GAP_MIN_SECS);
+        let codec_now = seg.codec_id(a);
+        if hole || entry.discontinuity || adec.as_ref().is_some_and(|(id, _)| *id != codec_now) {
+            if let Some((_, dec)) = adec.as_mut() {
+                drain_audio_decoder(dec, &mut aframe, &mut chunker, shm, sink)?;
+            }
+            chunker.flush(sink, shm)?;
+            chunker.reset();
+            adec = None;
+        }
+        if adec.is_none() {
+            adec = Some((codec_now, open_audio_decoder(&seg, a)?));
+        }
+        let (_, dec) = adec
+            .as_mut()
+            .ok_or_else(|| MediaError::Libav("audio decoder missing".into()))?;
+        let mut first = true;
+        let mut packets_seen = 0u64;
+        while let Some(p) = seg.next_packet_of(a.index) {
+            packets_seen += 1;
+            if packets_seen % 64 == 0 {
+                sink.poll_cancel()?;
+            }
+            dec.send_packet(&p)?;
+            if receive_audio_frames(
+                &seg,
+                a,
+                dec,
+                &mut aframe,
+                &mut chunker,
+                range,
+                &mut first,
+                shm,
+                sink,
+            )? {
+                break 'segments;
+            }
+        }
+        prev_t1 = Some(entry.t1);
+    }
+    if let Some((_, dec)) = adec.as_mut() {
+        drain_audio_decoder(dec, &mut aframe, &mut chunker, shm, sink)?;
+    }
+    chunker.flush(sink, shm)?;
+    if !started {
+        let nearest = index
+            .segments
+            .last()
+            .ok_or_else(|| MediaError::NoStream("segment", dir.display().to_string()))?;
+        let seg = OpenSegment::open(feed, nearest, None, req.stream_index, sink)?;
+        let a = seg.audio_stream(dir)?;
+        sink.send(&started_response(a, (0, 0), (0, 0)))?;
+    }
+    Ok((chunker.chunks, chunker.samples))
+}
+
+/// One pass over a recording: frames at `fps`, audio in chunks, a `Tick`
+/// whenever the decoded stream time crosses another `tick_secs`, a `Gap` at
+/// every hole in the index. Under `follow` the worker waits at the index for
+/// the next segment and returns when the index says `ended`; otherwise it
+/// returns after the last listed segment. Returns `(items, frames decoded)`.
+pub(crate) fn decode_live(
+    req: &LiveDecodeRequest,
+    shm: &mut SharedRegionMut,
+    sink: &mut dyn Sink,
+) -> Result<(u64, u64)> {
+    init()?;
+    req.check()?;
+    let feed = req
+        .input
+        .as_segments()
+        .ok_or_else(|| MediaError::Invalid("decode_live needs a segment feed".into()))?;
+    let dir = feed.dir.as_path();
+    let chunk = req.chunk_samples();
+    let slot_bytes = shm.spec().slot_size;
+    if slot_bytes < chunk * 2 {
+        return Err(MediaError::Protocol(format!(
+            "shm slot of {slot_bytes} bytes cannot hold a chunk of {chunk} samples"
+        )));
+    }
+    let threads = resolve_threads(req.threads);
+    let mut chunker = AudioChunker::new(req.sample_rate, chunk, chunk);
+    let mut sampler = FrameSampler {
+        next_target: f64::NAN,
+        interval: 1.0 / req.fps,
+        t_end: f64::INFINITY,
+        eps: 0.5 / 30.0,
+    };
+    let mut writer: Option<FrameWriter> = None;
+    let mut adec: Option<(Option<codec::Id>, ff::decoder::Audio)> = None;
+    let mut frame = frame::Video::empty();
+    let mut aframe = frame::Audio::empty();
+    let mut last_seq: Option<u64> = None;
+    let mut prev_t1: Option<Timestamp> = None;
+    let mut next_tick: Option<f64> = None;
+    let mut last_tick: Option<Timestamp> = None;
+    let mut done_until: Option<Timestamp> = None;
+    let mut decoded_frames = 0u64;
+
+    let mut index = load_index_for(feed)?;
+    loop {
+        let entry = index
+            .segments
+            .iter()
+            .find(|e| last_seq.is_none_or(|s| e.seq > s))
+            .cloned();
+        let Some(entry) = entry else {
+            if index.ended || !feed.follow {
+                break;
+            }
+            sink.poll_cancel()?;
+            std::thread::sleep(FOLLOW_POLL);
+            index = load_index_for(feed)?;
+            continue;
+        };
+
+        // A hole in the index is a gap in the stream: finish the audio run,
+        // tell the parent, and let the sample clock re-anchor after it.
+        let hole = prev_t1.filter(|p| entry.t0.as_secs_f64() - p.as_secs_f64() > GAP_MIN_SECS);
+        if hole.is_some() || entry.discontinuity {
+            if let Some((_, dec)) = adec.as_mut() {
+                drain_audio_decoder(dec, &mut aframe, &mut chunker, shm, sink)?;
+            }
+            chunker.flush(sink, shm)?;
+            chunker.reset();
+            adec = None;
+            if let Some(p) = hole {
+                sink.send(&Response::Gap {
+                    t0: p,
+                    t1: entry.t0,
+                })?;
+            }
+        }
+
+        let mut seg = OpenSegment::open(feed, &entry, None, None, sink)?;
+        let vs = seg.video_stream(dir)?;
+        let mut vdec = open_video_decoder(&seg, vs, threads, req.fps)?;
+        sampler.eps = 0.5 / vdec.src_fps;
+        if sampler.next_target.is_nan() {
+            sampler.next_target = entry.t0.as_secs_f64();
+        }
+        if writer.is_none() {
+            let out_dims = scaled_dims(vdec.src_dims.0, vdec.src_dims.1, req.max_dim);
+            sink.send(&started_response(vs, out_dims, vdec.src_dims))?;
+            writer = Some(FrameWriter::new(out_dims, PixelFormat::Rgb24));
+        }
+        if next_tick.is_none() {
+            next_tick = Some(entry.t0.as_secs_f64() + req.tick_secs);
+        }
+        let w = writer
+            .as_mut()
+            .ok_or_else(|| MediaError::Libav("frame writer missing".into()))?;
+        let audio = seg.audio;
+        if let Some(a) = audio {
+            let codec_now = seg.codec_id(a);
+            if adec.as_ref().is_some_and(|(id, _)| *id != codec_now) {
+                if let Some((_, dec)) = adec.as_mut() {
+                    drain_audio_decoder(dec, &mut aframe, &mut chunker, shm, sink)?;
+                }
+                chunker.flush(sink, shm)?;
+                chunker.reset();
+                adec = None;
+            }
+            if adec.is_none() {
+                adec = Some((codec_now, open_audio_decoder(&seg, a)?));
+            }
+        }
+
+        let mut first_audio = true;
+        let mut packets_seen = 0u64;
+        while let Some((is_video, p)) = seg.next_av_packet(vs.index, audio.map(|a| a.index)) {
+            packets_seen += 1;
+            if packets_seen % 64 == 0 {
+                sink.poll_cancel()?;
+            }
+            if is_video {
+                vdec.dec.send_packet(&p)?;
+                let (n, _) = receive_video_frames(
+                    &seg,
+                    vs,
+                    &mut vdec.dec,
+                    &mut frame,
+                    &mut sampler,
+                    w,
+                    shm,
+                    sink,
+                )?;
+                decoded_frames += n;
+            } else if let (Some(a), Some((_, dec))) = (audio, adec.as_mut()) {
+                dec.send_packet(&p)?;
+                receive_audio_frames(
+                    &seg,
+                    a,
+                    dec,
+                    &mut aframe,
+                    &mut chunker,
+                    None,
+                    &mut first_audio,
+                    shm,
+                    sink,
+                )?;
+            }
+        }
+        // The video decoder is per segment: drain it now. The audio decoder
+        // and its clock continue into the next contiguous segment.
+        vdec.dec.send_eof()?;
+        let (n, _) = receive_video_frames(
+            &seg,
+            vs,
+            &mut vdec.dec,
+            &mut frame,
+            &mut sampler,
+            w,
+            shm,
+            sink,
+        )?;
+        decoded_frames += n;
+
+        prev_t1 = Some(entry.t1);
+        last_seq = Some(entry.seq);
+        done_until = Some(entry.t1);
+        // A tick whenever the decoded stream time crosses the next
+        // multiple of `tick_secs`; `head` is what has been delivered,
+        // never past a listed segment's end.
+        if let Some(due) = next_tick {
+            let head = entry.t1.as_secs_f64();
+            if head >= due {
+                sink.send(&Response::Tick { head: entry.t1 })?;
+                last_tick = Some(entry.t1);
+                let mut n = due;
+                while head >= n {
+                    n += req.tick_secs;
+                }
+                next_tick = Some(n);
+            }
+        }
+    }
+
+    if writer.is_none() {
+        return Err(MediaError::NoStream("segment", dir.display().to_string()));
+    }
+    if let Some((_, dec)) = adec.as_mut() {
+        drain_audio_decoder(dec, &mut aframe, &mut chunker, shm, sink)?;
+    }
+    chunker.flush(sink, shm)?;
+    if let Some(head) = done_until {
+        if last_tick.is_none_or(|t| t < head) {
+            sink.send(&Response::Tick { head })?;
+        }
+    }
+    let frames = writer.map(|w| w.items).unwrap_or(0);
+    Ok((frames + chunker.chunks, decoded_frames))
 }
 
 #[cfg(test)]

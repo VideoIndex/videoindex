@@ -35,6 +35,7 @@ futures = { workspace = true }
 vi-testkit = { workspace = true }
 tempfile = { workspace = true }
 serde_json = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

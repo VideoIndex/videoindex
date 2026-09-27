@@ -93,6 +93,12 @@ fn run() -> Result<()> {
                 });
                 finish_session(&mut out, result)?;
             }
+            Request::DecodeLive { req, shm } => {
+                let result = with_session(&mut out, &rx, &shm, |shm, sink| {
+                    decode::decode_live(&req, shm, sink)
+                });
+                finish_session(&mut out, result)?;
+            }
             Request::SlotFree { .. } | Request::Cancel => {
                 // Outside a session these are stale; ignore.
             }

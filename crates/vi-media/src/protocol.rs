@@ -5,7 +5,6 @@
 //! through the pipe, they go through [`crate::shm`] slots.
 
 use std::io::{Read, Write};
-use std::path::PathBuf;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use vi_core::Timestamp;
@@ -16,8 +15,11 @@ use crate::probe::Probe;
 use crate::segments::MediaInput;
 use crate::shm::ShmSpec;
 
-/// Protocol version; both sides must agree.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// Protocol version; both sides must agree. Version 3 added the live decode
+/// session (`DecodeLive`, `Tick`, `Gap`) and made every decode request name a
+/// [`MediaInput`]. Parent and worker are always the same build, so there is
+/// no compatibility shim.
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Largest message either side will accept.
 pub const MAX_MESSAGE_BYTES: u32 = 64 * 1024 * 1024;
@@ -25,8 +27,10 @@ pub const MAX_MESSAGE_BYTES: u32 = 64 * 1024 * 1024;
 /// A request to decode video frames at a fixed rate over a range.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VideoDecodeRequest {
-    /// Media file.
-    pub path: PathBuf,
+    /// What to decode: a file, or a segment feed. Over a feed the range is
+    /// on the recording's timeline (the segment index's `t0`/`t1`) and only
+    /// the segments covering it are opened.
+    pub input: MediaInput,
     /// Stream index; `None` picks the best video stream.
     pub stream_index: Option<u32>,
     /// Frames per second to sample.
@@ -44,10 +48,11 @@ pub struct VideoDecodeRequest {
 }
 
 impl VideoDecodeRequest {
-    /// Sample the whole file at `fps`, scaled to `max_dim`.
-    pub fn new(path: impl Into<PathBuf>, fps: f64, max_dim: u32) -> Self {
+    /// Sample the whole input at `fps`, scaled to `max_dim`. Takes a path
+    /// (file) or anything else that converts into a [`MediaInput`].
+    pub fn new(input: impl Into<MediaInput>, fps: f64, max_dim: u32) -> Self {
         Self {
-            path: path.into(),
+            input: input.into(),
             stream_index: None,
             fps,
             t0_secs: 0.0,
@@ -88,8 +93,9 @@ impl VideoDecodeRequest {
 /// A request to decode audio to 16 kHz mono PCM chunks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioDecodeRequest {
-    /// Media file.
-    pub path: PathBuf,
+    /// What to decode: a file, or a segment feed (range on the recording's
+    /// timeline, covering segments only, as for video).
+    pub input: MediaInput,
     /// Stream index; `None` picks the best audio stream.
     pub stream_index: Option<u32>,
     /// Start time in seconds.
@@ -105,10 +111,10 @@ pub struct AudioDecodeRequest {
 }
 
 impl AudioDecodeRequest {
-    /// Whole file, 16 kHz, 30 s chunks with 1 s overlap.
-    pub fn new(path: impl Into<PathBuf>) -> Self {
+    /// Whole input, 16 kHz, 30 s chunks with 1 s overlap.
+    pub fn new(input: impl Into<MediaInput>) -> Self {
         Self {
-            path: path.into(),
+            input: input.into(),
             stream_index: None,
             t0_secs: 0.0,
             t1_secs: None,
@@ -148,6 +154,74 @@ impl AudioDecodeRequest {
     }
 }
 
+/// A request to decode a growing recording once, in a single pass that
+/// yields frames, audio chunks, ticks and gaps on the recording's timeline
+/// (live C2). See [`crate::client::decode_live`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveDecodeRequest {
+    /// The segment feed to decode; `follow` decides whether the worker waits
+    /// at the index for more segments.
+    pub input: MediaInput,
+    /// Frames per second to sample.
+    pub fps: f64,
+    /// Longest side of delivered frames. 0 keeps the source size.
+    pub max_dim: u32,
+    /// Output sample rate of the audio chunks.
+    pub sample_rate: u32,
+    /// Audio chunk length in seconds (no overlap: the chunks are a stream).
+    pub chunk_secs: f64,
+    /// Emit a `Tick` every this many seconds of stream time.
+    pub tick_secs: f64,
+    /// Decoder threads; 0 means the worker's default.
+    pub threads: usize,
+}
+
+impl LiveDecodeRequest {
+    /// Frames at `fps` scaled to `max_dim`, 16 kHz audio in 1 s chunks, a
+    /// tick every 2 s of stream time.
+    pub fn new(input: impl Into<MediaInput>, fps: f64, max_dim: u32) -> Self {
+        Self {
+            input: input.into(),
+            fps,
+            max_dim,
+            sample_rate: 16_000,
+            chunk_secs: 1.0,
+            tick_secs: 2.0,
+            threads: 0,
+        }
+    }
+
+    /// Samples per audio chunk.
+    pub fn chunk_samples(&self) -> usize {
+        (self.chunk_secs * f64::from(self.sample_rate)).round() as usize
+    }
+
+    /// Validate.
+    pub fn check(&self) -> Result<()> {
+        if self.input.as_segments().is_none() {
+            return Err(MediaError::Invalid(
+                "decode_live needs a segment feed as its input".into(),
+            ));
+        }
+        if self.fps <= 0.0 || !self.fps.is_finite() {
+            return Err(MediaError::Invalid(format!(
+                "fps must be > 0, got {}",
+                self.fps
+            )));
+        }
+        if self.sample_rate == 0 {
+            return Err(MediaError::Invalid("sample_rate must be > 0".into()));
+        }
+        if self.chunk_secs <= 0.0 || !self.chunk_secs.is_finite() {
+            return Err(MediaError::Invalid("chunk_secs must be > 0".into()));
+        }
+        if self.tick_secs <= 0.0 || !self.tick_secs.is_finite() {
+            return Err(MediaError::Invalid("tick_secs must be > 0".into()));
+        }
+        Ok(())
+    }
+}
+
 /// Parent to worker.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -174,6 +248,14 @@ pub enum Request {
         /// What to decode.
         req: AudioDecodeRequest,
         /// Where chunks go.
+        shm: ShmSpec,
+    },
+    /// Decode a growing recording in one pass: frames and chunks into
+    /// shared memory, ticks and gaps as messages.
+    DecodeLive {
+        /// What to decode.
+        req: LiveDecodeRequest,
+        /// Where frames and chunks go.
         shm: ShmSpec,
     },
     /// The parent finished with a slot.
@@ -256,6 +338,21 @@ pub enum Response {
         sample_rate: u32,
         /// Samples in the chunk.
         samples: usize,
+    },
+    /// Live sessions: everything up to `head` on the recording's timeline
+    /// has been delivered.
+    Tick {
+        /// Stream time decoded so far; never past the last listed segment's
+        /// end.
+        head: Timestamp,
+    },
+    /// Live sessions: the recording has no media for `[t0, t1)`; times after
+    /// it skip the hole.
+    Gap {
+        /// Start of the hole.
+        t0: Timestamp,
+        /// End of the hole.
+        t1: Timestamp,
     },
     /// The session finished.
     End {
@@ -393,5 +490,24 @@ mod tests {
         assert_eq!(a.chunk_samples(), 480_000);
         a.overlap_secs = 30.0;
         assert!(a.check().is_err());
+        assert_eq!(
+            VideoDecodeRequest::new("x.mp4", 1.0, 640).input,
+            MediaInput::from("x.mp4")
+        );
+
+        let feed = crate::segments::SegmentFeed::following("/store");
+        let live = LiveDecodeRequest::new(feed.clone(), 1.0, 320);
+        assert!(live.check().is_ok());
+        assert_eq!(live.chunk_samples(), 16_000);
+        assert!(LiveDecodeRequest::new("x.mp4", 1.0, 320).check().is_err());
+        assert!(LiveDecodeRequest::new(feed.clone(), 0.0, 320)
+            .check()
+            .is_err());
+        let mut bad = LiveDecodeRequest::new(feed.clone(), 1.0, 320);
+        bad.tick_secs = 0.0;
+        assert!(bad.check().is_err());
+        let mut bad = LiveDecodeRequest::new(feed, 1.0, 320);
+        bad.chunk_secs = f64::NAN;
+        assert!(bad.check().is_err());
     }
 }
