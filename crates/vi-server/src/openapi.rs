@@ -76,7 +76,9 @@ pub fn spec() -> Value {
             "question": {"type": "string"}, "videos": {"type": "array", "items": {"type": "string"}},
             "budget": {"type": "object", "description": "Limits for this answer. A missing field takes the default (120000 tokens, $0.50, 300 s, 8 tool calls, 4000 answer tokens); a value above the ceiling (1000000 tokens, $2.00, 900 s, 50 tool calls) is clamped to it, and a zero cost or wall-clock value, which would mean no limit, becomes the ceiling.", "properties": {"max_tokens": {"type": "integer"}, "max_cost_usd": {"type": "number"}, "max_wallclock_secs": {"type": "number"}, "max_tool_calls": {"type": "integer"}, "max_answer_tokens": {"type": "integer"}}},
             "session_id": {"type": "string"}, "policy": {"type": "string", "enum": ["agent", "retrieval-only"], "default": "agent"},
-            "model": {"type": "string", "description": "provider name or model id from GET /v1/models; default: the agent_llm role"}}})),
+            "model": {"type": "string", "description": "provider name or model id from GET /v1/models; default: the agent_llm role"},
+            "until": {"type": "number", "description": "answer as of this media time in seconds: the tools read, and the answer cites, only below it; absent means the whole video"},
+            "system_addendum": {"type": "string", "description": "text appended to the system prompt for this ask only; recorded in provenance by hash"}}})),
         "responses": {"200": {"description": "answer"}, "429": {"description": "daily spend cap reached"}}}}));
     paths.insert("/v1/indexes/{index}/view".into(), json!({"post": {"summary": "Labelled frame grid as PNG", "tags": ["query"], "parameters": [index_param],
         "requestBody": json_body(json!({"type": "object", "required": ["video_id", "t0", "t1"], "properties": {

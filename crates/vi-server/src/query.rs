@@ -164,6 +164,14 @@ pub struct AskBody {
     /// `GET /v1/models`; default is the `agent_llm` role.
     #[serde(default)]
     pub model: Option<String>,
+    /// Answer as of this media time, seconds: the tools read, and the
+    /// answer cites, only below it. Absent: the whole video.
+    #[serde(default)]
+    pub until: Option<f64>,
+    /// Text appended to the system prompt for this ask only (a live
+    /// preamble); recorded in provenance by hash.
+    #[serde(default)]
+    pub system_addendum: Option<String>,
 }
 
 fn default_policy() -> String {
@@ -206,6 +214,8 @@ pub fn ask_stream(
         videos: parse_videos(&body.videos)?,
         budget: body.budget.into_budget(),
         session_id: body.session_id,
+        until: body.until,
+        system_addendum: body.system_addendum,
     };
     state.metrics.asks.fetch_add(1, Ordering::Relaxed);
     Ok(agent.ask(req))

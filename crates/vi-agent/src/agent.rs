@@ -146,6 +146,15 @@ pub struct AskRequest {
     pub budget: AskBudget,
     /// Conversation to continue.
     pub session_id: Option<String>,
+    /// Answer as of this media time, seconds: every tool read and every
+    /// citation stays below it (`crate::until`). `None` means the whole
+    /// video, or a live video's watermark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<f64>,
+    /// Text appended to the system prompt for this ask only (a live
+    /// preamble); recorded in provenance by hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_addendum: Option<String>,
 }
 
 impl AskRequest {
@@ -156,6 +165,8 @@ impl AskRequest {
             videos: Vec::new(),
             budget: AskBudget::default(),
             session_id: None,
+            until: None,
+            system_addendum: None,
         }
     }
 }
@@ -185,6 +196,7 @@ pub struct Agent {
     config: Arc<Config>,
     policy: Option<Arc<dyn Policy>>,
     provider: Option<String>,
+    pub(crate) ext: crate::tool_ext::AgentExt,
 }
 
 impl std::fmt::Debug for Agent {
@@ -212,6 +224,7 @@ impl Agent {
             config,
             policy: None,
             provider: None,
+            ext: Default::default(),
         }
     }
 
@@ -237,19 +250,23 @@ impl Agent {
         let config = self.config.clone();
         let policy = self.policy.clone();
         let provider = self.provider.clone();
+        let scope = self.ext.scope_for(&req);
         tokio::spawn(async move {
             let started = Instant::now();
             let mut usage = AskUsage::default();
-            let result = run(
-                storage,
-                providers,
-                config,
-                policy,
-                provider,
-                req,
-                tx.clone(),
-                &mut usage,
-                started,
+            let result = crate::tool_ext::scoped(
+                scope,
+                run(
+                    storage,
+                    providers,
+                    config,
+                    policy,
+                    provider,
+                    req,
+                    tx.clone(),
+                    &mut usage,
+                    started,
+                ),
             )
             .await;
             usage.wallclock_ms = started.elapsed().as_millis() as u64;
@@ -333,7 +350,7 @@ async fn run(
     let caps = llm.vlm_capabilities();
     let with_describe = providers.has_role(roles::VLM_DESCRIBE);
     let ctx = ToolContext {
-        storage: storage.clone(),
+        storage: crate::until::bounded(storage.clone()),
         providers: providers.clone(),
         config: config.clone(),
         videos: req.videos.clone(),
@@ -368,6 +385,7 @@ async fn run(
     if caps.max_images_per_request == 0 {
         system.push_str("\nYou cannot see images: do not call view or zoom.\n");
     }
+    crate::until::apply_addendum(&mut system, &req, storage.clone()).await?;
     let session: Session = match &req.session_id {
         Some(id) => storage
             .get_session(id)
@@ -408,6 +426,7 @@ async fn run(
         .await;
 
     loop {
+        crate::until::refresh_live(storage.as_ref(), &mut messages).await?;
         // Budget check before each provider call.
         let over = budget_exceeded(&req.budget, usage, started);
         let tools_left = req.budget.max_tool_calls.saturating_sub(usage.tool_calls);
@@ -882,6 +901,9 @@ async fn generate_turn(
                             let _ = tx.send(AskEvent::Token { text: t }).await;
                         }
                         Piece::Cite(c) => {
+                            let Some(c) = crate::until::clamp_citation(c) else {
+                                continue;
+                            };
                             if known.contains(&c.video_id) {
                                 let kind = evidence
                                     .iter()

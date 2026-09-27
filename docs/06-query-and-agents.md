@@ -106,6 +106,16 @@ Several windows in one call cost one tool call. That is the point for the text t
 
 Tool arguments are validated against JSON Schema; `t0 < t1`, windows are clamped to configured maxima (default 120 s per `view`), and fps × duration is capped by the remaining token budget.
 
+### Module tools
+
+A module built on the core adds tools without editing the built-in set: it implements `vi_agent::tool_ext::Tool` (`fn spec(&self) -> ToolSpec` and `async fn execute(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutput>`) and registers it with `Agent::with_tools(vec![...])` for one agent, or `tool_ext::register_global` for the whole process (what a module's server does at start-up so the MCP `tools/list` names them too). Registered tools are appended after the built-in specs and dispatched by name before the built-in `match`, so a module cannot lose a call to a built-in tool of the same name and a built-in name is never shadowed by accident. Their state (a stream handle, a portal offset, linked indexes) travels in `Agent::with_extensions(Extensions)`, a type map the tool reads back with `ctx.extensions().get::<T>()`; the core type gains no field for it. The live modules' `recent` and `catch_up` are the first such tools (`videoindex-live/docs/05-realtime-query.md`).
+
+### Answers as of a time
+
+`AskRequest.until: Option<f64>` bounds an ask at a media time: every read the tools make and every citation the answer carries stays below it. The rule for a video is `until.unwrap_or(watermark).unwrap_or(duration)`: the caller's bound when given, else a live video's watermark (the time up to which every coarse stage has committed), else the duration, which is today's behaviour for batch videos. It is applied once, where every tool reads: during an ask the tools see the index through a bounded `Storage` that cuts video durations, ranges, `time_range` filters and segment lists at the bound, so `search`, `timeline`, the text tools, `view`, `zoom` and any module tool are bounded alike, and the system prompt's video list reports the bounded extents. Citation markers starting at or after the bound are dropped and one running past it is cut. The live videos are re-read at the start of every turn (one query) so the bound, and the head in the prompt, follow a stream during a long answer. A live session passes its watermark as `until`, fixed for the whole answer so nothing that arrived mid-answer is cited; batch evaluation passes a question's "ask at" time, which is how the live dev set is scored against a batch index.
+
+`AskRequest.system_addendum: Option<String>` is text appended to the system prompt for this ask only (the live preamble with head, watermark and portal facts); prompt overrides stay global. The addendum is recorded in provenance by hash: a row with operator `ask`, `prompt_hash` the addendum's prompt hash and `params.kind = "system_addendum"`, whose id is derived from the text, so a run file that has the text can find the row. Media is located through `vi_agent::media_input::media_input(video)`: `probe["live"]["store"]` names a stream's segmented recording, else `probe["path"]` the file, so `view`, `zoom` and `describe` decode a live video from its recording once the worker's window decode reads segment feeds (live C2 part 2); until then they report that the feed decode is not yet available rather than the media being missing.
+
 ### Budgets
 
 An `ask` carries `Budget { max_tokens, max_cost_usd, max_wallclock, max_tool_calls, max_answer_tokens }`; the last one caps the output of each model turn (4,000 by default; answers that list many videos need more than a single-video answer). The loop checks the budget before each tool call and passes the remainder to the policy so it can plan. On exhaustion the loop answers with what it has and sets `partial: true` with the reason.
@@ -134,7 +144,7 @@ Streaming events over the SDK and over SSE:
 
 Citations are emitted inline as the answer streams and are always backed by a stored row (span, description, or the frames a `view` returned, which are persisted as a blob so the citation can be rendered later). The chat app renders citations as clickable timestamps that seek the player.
 
-Implementation (M2): the model writes markers of the form `[[cite:VIDEO_ID:T0-T1]]` (seconds, or `HH:MM:SS`); a streaming scanner removes them from the token stream and emits `citation` events, typed by the evidence the loop has already seen for that video and range (`transcript`, `ocr`, `frame`, `description`, else `range`). Markers naming a video that is not in the index are dropped. The CLI prints them as `[HH:MM:SS]` (with the video title when the index holds several videos).
+Implementation (M2): the model writes markers of the form `[[cite:VIDEO_ID:T0-T1]]` (seconds, or `HH:MM:SS`); a streaming scanner removes them from the token stream and emits `citation` events, typed by the evidence the loop has already seen for that video and range (`transcript`, `ocr`, `frame`, `description`, else `range`). Markers naming a video that is not in the index are dropped, as are markers starting at or after the ask's bound (`until`, else a live video's watermark); one that runs past the bound is cut at it. The CLI prints them as `[HH:MM:SS]` (with the video title when the index holds several videos).
 
 ## Multi-video and cross-video queries
 
@@ -146,7 +156,7 @@ An Index holds many Videos. `search` and `ask` accept a video filter; without on
 
 ## MCP server
 
-`vi-server` exposes an MCP server with the tools above, plus `index_state` and `ask`. An external agent such as Claude Code or a LangGraph graph can therefore run its own loop over a VideoIndex, which is also how VideoIndex is compared against other agent strategies in evaluation. Resources expose thumbnails and frame grids by blob URI.
+`vi-server` exposes an MCP server with the tools above, plus `index_state` and `ask`, plus any tool a module registered process-wide (`tool_ext::register_global`). An external agent such as Claude Code or a LangGraph graph can therefore run its own loop over a VideoIndex, which is also how VideoIndex is compared against other agent strategies in evaluation. Resources expose thumbnails and frame grids by blob URI.
 
 ## Performance targets
 

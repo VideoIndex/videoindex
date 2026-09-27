@@ -268,6 +268,8 @@ impl Index {
                 max_answer_tokens: d.max_answer_tokens,
             },
             session_id: opts.session_id,
+            until: None,
+            system_addendum: None,
         };
         // The stream is created on first `next()`, inside the async
         // runtime, because `Agent::ask` spawns tasks.

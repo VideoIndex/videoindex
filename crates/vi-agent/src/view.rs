@@ -183,13 +183,10 @@ pub struct ViewResult {
     pub distinct: usize,
 }
 
-/// Media file for a video, from its stored probe.
+/// The file whose presence says the media is on this machine: the media
+/// file, or a live store's `index.json` (`crate::media_input`).
 pub fn media_path(video: &Video) -> Option<PathBuf> {
-    video
-        .probe
-        .get("path")
-        .and_then(|p| p.as_str())
-        .map(PathBuf::from)
+    crate::media_input::media_path(video)
 }
 
 /// Decode and render.
@@ -198,12 +195,7 @@ pub async fn render_view(
     video: &Video,
     req: ViewRequest,
 ) -> Result<ViewResult> {
-    let path = media_path(video).filter(|p| p.is_file()).ok_or_else(|| {
-        Error::NotFound(format!(
-            "media file for video {} is not on this machine",
-            video.id
-        ))
-    })?;
+    let path = crate::media_input::decode_path(video)?;
     let req = req.clamped(video.duration.as_secs_f64());
     let decode = VideoDecodeRequest::new(&path, req.fps, req.max_dim).range(req.t0, Some(req.t1));
     let mut stream = vi_media::decode_video(worker, decode).await?;
@@ -268,12 +260,7 @@ pub async fn decode_frame(
     t: f64,
     max_dim: u32,
 ) -> Result<Arc<FrameBuffer>> {
-    let path = media_path(video).filter(|p| p.is_file()).ok_or_else(|| {
-        Error::NotFound(format!(
-            "media file for video {} is not on this machine",
-            video.id
-        ))
-    })?;
+    let path = crate::media_input::decode_path(video)?;
     let duration = video.duration.as_secs_f64();
     let t = if t.is_finite() {
         t.clamp(0.0, (duration - 0.1).max(0.0))
