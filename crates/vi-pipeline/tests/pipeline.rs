@@ -908,7 +908,7 @@ async fn sidecars_from_incoming_are_imported_and_media_moves_into_the_cache() {
 /// and the operator cache: the regression guard for live changes to the
 /// pipeline. The numbers were measured before C3 (at `c0ce635`, whose
 /// pipeline is `3bfa6fd`'s) on the GPU box's fixture and must not move.
-#[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct GuardNumbers {
     frame_samples: u64,
     hashed: u64,
@@ -921,6 +921,10 @@ struct GuardNumbers {
     /// Marker file names, sorted; they hash the fixture's content hash, so
     /// they are compared only where the fixture is byte-identical.
     marker_files: Vec<String>,
+    /// The fixture's content hash: the same bytes (same ffmpeg build) mean
+    /// the marker names must match too.
+    #[serde(default)]
+    content_hash: String,
 }
 
 async fn guard_numbers(idx: &EmbeddedIndex, dir: &std::path::Path) -> GuardNumbers {
@@ -946,6 +950,7 @@ async fn guard_numbers(idx: &EmbeddedIndex, dir: &std::path::Path) -> GuardNumbe
     markers.sort();
     marker_files.sort();
     GuardNumbers {
+        content_hash: video.content_hash.clone(),
         frame_samples: samples.len() as u64,
         hashed: samples.iter().filter(|s| s.phash.is_some()).count() as u64,
         thumbnailed: samples
@@ -1025,18 +1030,42 @@ async fn batch_guard_row_counts_and_cache_markers_are_unchanged() {
         "batch jobs record no last_t"
     );
 
-    // The numbers measured before C3, byte for byte, where the fixture is
-    // the same bytes (Linux ffmpeg with drawtext; the macOS runner's fixture
-    // has no text and a different content hash, so its marker names differ
-    // and its blobs deduplicate).
-    if fx::fixture_has_text() && cfg!(target_os = "linux") {
-        let before: GuardNumbers = serde_json::from_str(BEFORE_C3).unwrap();
-        assert_eq!(now, before);
+    // The numbers measured before C3. The marker names hash the fixture's
+    // content hash, which follows the ffmpeg build that generated it, so
+    // they are compared only when the fixture is the same bytes; the blob
+    // count follows `drawtext` (without it the frames of a segment are
+    // identical and the blob store deduplicates them). Everything else is
+    // compared everywhere.
+    let before: GuardNumbers = serde_json::from_str(BEFORE_C3).unwrap();
+    let same_bytes = now.content_hash == before.content_hash;
+    let comparable = GuardNumbers {
+        marker_files: if same_bytes {
+            now.marker_files.clone()
+        } else {
+            before.marker_files.clone()
+        },
+        content_hash: before.content_hash.clone(),
+        blob_count: if fx::fixture_has_text() {
+            now.blob_count
+        } else {
+            before.blob_count
+        },
+        ..now.clone()
+    };
+    assert_eq!(comparable, before, "same fixture bytes: {same_bytes}");
+    for (stage, _) in &before.markers {
+        assert!(
+            now.marker_files
+                .iter()
+                .any(|f| f.starts_with(&format!("{stage}-"))),
+            "no marker for {stage}: {:?}",
+            now.marker_files
+        );
     }
 }
 
 /// `GuardNumbers` of the run before C3 (see the test).
-const BEFORE_C3: &str = r#"{"frame_samples":120,"hashed":120,"thumbnailed":120,"shots":[[0,10000],[10000,20000],[20000,30000],[30000,40000],[40000,50000],[50000,60000],[60000,70000],[70000,80000],[80000,90000],[90000,100000],[100000,110000],[110000,120000]],"transcript_spans":0,"blob_count":120,"markers":[["phash",120],["sample",120],["shot_boundary",12],["subtitle_import",0],["thumbnail",120]],"marker_files":["phash-349524285b47a43abf53dd5e.json","sample-be70178b8d3bf177cc4694c4.json","shot_boundary-cd060417e00a9f172fd5b9f6.json","subtitle_import-f5fede16dcc7dfca7da66fd2.json","thumbnail-f24f40c69ef9876673f76aad.json"]}"#;
+const BEFORE_C3: &str = r#"{"frame_samples":120,"hashed":120,"thumbnailed":120,"shots":[[0,10000],[10000,20000],[20000,30000],[30000,40000],[40000,50000],[50000,60000],[60000,70000],[70000,80000],[80000,90000],[90000,100000],[100000,110000],[110000,120000]],"transcript_spans":0,"blob_count":120,"markers":[["phash",120],["sample",120],["shot_boundary",12],["subtitle_import",0],["thumbnail",120]],"marker_files":["phash-349524285b47a43abf53dd5e.json","sample-be70178b8d3bf177cc4694c4.json","shot_boundary-cd060417e00a9f172fd5b9f6.json","subtitle_import-f5fede16dcc7dfca7da66fd2.json","thumbnail-f24f40c69ef9876673f76aad.json"],"content_hash":"7078db70872ab887527dc9b3818fba5f5c005967b9373c33cf4fd1b802ddb29f"}"#;
 
 // ---- live jobs ---------------------------------------------------------
 
