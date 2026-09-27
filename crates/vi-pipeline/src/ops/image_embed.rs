@@ -126,7 +126,12 @@ impl Operator for ImageEmbed {
     }
 
     fn inputs(&self) -> &[InputKind] {
-        &[ItemKind::Hashed]
+        &[ItemKind::Hashed, ItemKind::Tick]
+    }
+
+    fn optional_inputs(&self) -> &[InputKind] {
+        // Live jobs tick; batch jobs have no producer of ticks.
+        &[ItemKind::Tick]
     }
 
     fn outputs(&self) -> &[OutputKind] {
@@ -162,6 +167,13 @@ impl Operator for ImageEmbed {
     }
 
     async fn run(&self, ctx: &OpContext, input: OpInput) -> Result<OpOutput> {
+        if let Item::Tick { .. } = input.item {
+            // Live: the stream reached another tick; embed what is waiting
+            // rather than hold it for a full batch.
+            let mut st = self.state.lock().await;
+            let stored = self.flush(ctx, &mut st, true).await?;
+            return Ok(OpOutput { emitted: 0, stored });
+        }
         let Item::Hashed {
             sample,
             phash,

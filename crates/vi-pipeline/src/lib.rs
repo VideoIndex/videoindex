@@ -7,7 +7,8 @@
 //! - [`scheduler`]: runs the DAG as tokio tasks joined by bounded channels,
 //!   checkpoints every stage, emits progress events.
 //! - [`ops`]: the shipped operators (`subtitle_import`, `sample`, `phash`,
-//!   `thumbnail`, `vad`, `asr`, ...).
+//!   `thumbnail`, `vad`, `asr`, ...), including the live ones
+//!   (`vad_stream`; tick handling in `shot_boundary` and the embedders).
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
@@ -20,6 +21,6 @@ pub mod scheduler;
 pub use dag::Dag;
 pub use operator::{
     Budget, CostEstimate, Emitter, FrameItem, InputSummary, Item, ItemKind, MediaItem, OpContext,
-    OpInput, OpOutput, Operator, SpeechItem, StageFailures,
+    OpInput, OpOutput, Operator, RollingLimits, SpeechItem, StageClock, StageFailures,
 };
-pub use scheduler::{JobOptions, JobReport, OperatorFactory, Scheduler};
+pub use scheduler::{BudgetReport, JobOptions, JobReport, OperatorFactory, Scheduler};

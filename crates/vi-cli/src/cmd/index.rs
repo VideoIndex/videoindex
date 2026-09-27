@@ -165,6 +165,7 @@ pub async fn run(args: Args, mut config: Config, out: &Output) -> Result<()> {
             resume: args.resume,
             force: args.force,
             inline_policy: None,
+            live: false,
         };
         match sched.run(source, opts, cancel.clone()).await {
             Ok(r) => {

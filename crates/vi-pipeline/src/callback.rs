@@ -66,6 +66,13 @@ pub fn item_to_json(item: &Item) -> Value {
         }
         Item::OcrSpan(s) => serde_json::to_value(s.as_ref()).unwrap_or(Value::Null),
         Item::Description(d) => serde_json::to_value(d.as_ref()).unwrap_or(Value::Null),
+        Item::AudioChunk(c) => json!({
+            "t0": c.t0.as_secs_f64(),
+            "t1": c.t1.as_secs_f64(),
+            "sample_rate": c.sample_rate,
+            "samples": c.samples.len(),
+        }),
+        Item::Tick { head } => json!({ "head": head.as_secs_f64() }),
     };
     if let Value::Object(m) = &mut v {
         m.insert("kind".into(), kind);

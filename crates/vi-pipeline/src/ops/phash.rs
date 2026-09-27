@@ -43,7 +43,12 @@ impl Operator for PHash {
     }
 
     fn inputs(&self) -> &[InputKind] {
-        &[ItemKind::Frame]
+        &[ItemKind::Frame, ItemKind::Tick]
+    }
+
+    fn optional_inputs(&self) -> &[InputKind] {
+        // Live jobs tick; batch jobs have no producer of ticks.
+        &[ItemKind::Tick]
     }
 
     fn outputs(&self) -> &[OutputKind] {
@@ -59,6 +64,12 @@ impl Operator for PHash {
     }
 
     async fn run(&self, ctx: &OpContext, input: OpInput) -> Result<OpOutput> {
+        if let Item::Tick { .. } = input.item {
+            // Live: write the hashes waiting for a batch, so the rows are
+            // complete up to the head.
+            let stored = self.flush(ctx, true).await?;
+            return Ok(OpOutput { emitted: 0, stored });
+        }
         let Item::Frame(FrameItem { sample, frame }) = input.item else {
             return Err(ctx.err("expected a frame"));
         };

@@ -31,6 +31,10 @@ pub struct Progress {
     pub cost_usd: f64,
     /// Estimated seconds remaining when computable.
     pub eta_secs: Option<f64>,
+    /// Live jobs: the stream time the stage has processed up to, in place
+    /// of a fraction (a stream has no total). Absent for batch jobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<Timestamp>,
 }
 
 /// Events emitted by the pipeline and other subsystems.
