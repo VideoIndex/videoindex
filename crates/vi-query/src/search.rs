@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use vi_core::model::{IndexState, Segment, SegmentLevel, TargetKind};
-use vi_core::{Result, SegmentId, Timestamp, VideoId};
+use vi_core::{Result, SegmentId, TimeRange, Timestamp, VideoId};
 use vi_index::{BlobKey, Hit, Kind, Storage, TextQuery, VectorQuery};
 use vi_providers::ProviderRegistry;
 
@@ -47,6 +47,13 @@ pub struct SearchRequest {
     /// talks most about the topic. `None` means no cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub per_video_k: Option<usize>,
+    /// Answer as of this media time: rows starting at or after it are
+    /// dropped before fusion, and a live video's fallback windows end here
+    /// rather than at its head. `None` means the whole video. A live
+    /// session passes its watermark; batch evaluation passes the question's
+    /// "ask at" time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<Timestamp>,
 }
 
 impl SearchRequest {
@@ -59,6 +66,7 @@ impl SearchRequest {
             k,
             text_only: false,
             per_video_k: None,
+            until: None,
         }
     }
 }
@@ -154,6 +162,12 @@ pub async fn search(
     let k = req.k.max(1);
     // Over-fetch per list so fusion has material.
     let per_list = (k * 5).clamp(20, 200);
+    // `until` bounds every list at the storage layer, so nothing at or
+    // after it reaches fusion.
+    let time_range = req.until.map(|u| TimeRange {
+        t0: Timestamp::ZERO,
+        t1: u,
+    });
 
     let mut fused: BTreeMap<String, Fused> = BTreeMap::new();
     let mut candidates = 0usize;
@@ -184,6 +198,7 @@ pub async fn search(
                 videos: req.videos.clone(),
                 kinds: vec![*kind],
                 k: per_list,
+                time_range,
             })
             .await?;
         add_list(&format!("bm25:{}", kind_name(*kind)), hits, &mut fused);
@@ -211,6 +226,7 @@ pub async fn search(
                                         })
                                         .collect(),
                                     k: per_list,
+                                    time_range,
                                 })
                                 .await?;
                             add_list("text_vec", hits, &mut fused);
@@ -232,6 +248,7 @@ pub async fn search(
                                     videos: req.videos.clone(),
                                     kinds: vec![TargetKind::Frame],
                                     k: per_list,
+                                    time_range,
                                 })
                                 .await?;
                             add_list("image_vec", hits, &mut fused);
@@ -276,9 +293,16 @@ pub async fn search(
             _ => video.index_state,
         });
         let title = video.title.clone();
-        let duration = video.duration;
+        // A live video's duration is its head, which keeps moving; its grid
+        // of windows ends at the bound the caller asked for instead. Batch
+        // videos keep their duration.
+        let extent = if video.index_state.is_live() {
+            req.until.unwrap_or(video.duration)
+        } else {
+            video.duration
+        };
         let chapters = storage.segments(video_id, SegmentLevel::Chapter).await?;
-        let (units, how) = temporal_units(storage, video_id, duration, &chapters).await?;
+        let (units, how) = temporal_units(storage, video_id, extent, &chapters).await?;
         if grouping.is_empty() {
             grouping = how.to_string();
         }

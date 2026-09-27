@@ -60,6 +60,12 @@ pub struct TextQuery {
     pub kinds: Vec<Kind>,
     /// Max hits.
     pub k: usize,
+    /// Only rows whose start time lies in this half-open range. `None`
+    /// means every row. Ranking among the remaining rows is unchanged (the
+    /// filter is applied before the limit, and BM25 scores rows
+    /// independently). This is how a live index answers "as of `until`".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_range: Option<TimeRange>,
 }
 
 /// Exhaustive term search: every row whose text contains one of the
@@ -80,6 +86,10 @@ pub struct MentionQuery {
     /// Earliest matching rows to return per video, term and kind; 0 for
     /// counts only.
     pub samples_per_video: usize,
+    /// Only rows whose start time lies in this half-open range; counts and
+    /// samples both respect it. `None` means every row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_range: Option<TimeRange>,
 }
 
 /// Rows of one kind in one video that contain a term.
@@ -140,6 +150,7 @@ impl TextQuery {
             videos: Vec::new(),
             kinds: Vec::new(),
             k,
+            time_range: None,
         }
     }
 }
@@ -157,6 +168,13 @@ pub struct VectorQuery {
     pub kinds: Vec<TargetKind>,
     /// Max hits.
     pub k: usize,
+    /// Only targets whose start time lies in this half-open range. The
+    /// vector files carry no time column, so the store over-fetches three
+    /// times `k` nearest rows and drops those outside the range after
+    /// resolving them; a later vector-file format may add the column. `None`
+    /// means every row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_range: Option<TimeRange>,
 }
 
 /// Everything known about a time window of one video.
@@ -241,6 +259,35 @@ pub trait Storage: Send + Sync {
     async fn list_videos(&self) -> Result<Vec<Video>>;
     /// Update a video's index state.
     async fn set_index_state(&self, id: VideoId, state: IndexState) -> Result<()>;
+    /// Record a live video's progress: `head` (the latest decoded media
+    /// time) becomes the video's `duration`, which is the head while a video
+    /// is live, and `watermark` the time up to which every coarse stage has
+    /// committed its rows. Called once per tick by a live indexer. Fails
+    /// with `Invalid` when the video does not exist.
+    async fn set_live_progress(
+        &self,
+        video: VideoId,
+        head: Timestamp,
+        watermark: Timestamp,
+    ) -> Result<()> {
+        let Some(mut v) = self.get_video(video).await? else {
+            return Err(crate::error::IndexError::Invalid(format!(
+                "no video {video}"
+            )));
+        };
+        v.duration = head;
+        v.watermark = Some(watermark);
+        self.put_video(&v).await
+    }
+    /// Videos whose `index_state` is `live`, oldest first.
+    async fn live_videos(&self) -> Result<Vec<Video>> {
+        Ok(self
+            .list_videos()
+            .await?
+            .into_iter()
+            .filter(|v| v.index_state.is_live())
+            .collect())
+    }
     /// Insert or replace tracks.
     async fn put_tracks(&self, t: &[Track]) -> Result<()>;
     /// Tracks of a video.
@@ -281,6 +328,13 @@ pub trait Storage: Send + Sync {
     async fn put_embeddings(&self, e: &[Embedding]) -> Result<()>;
     /// Insert a provenance row.
     async fn put_provenance(&self, p: &Provenance) -> Result<ProvenanceId>;
+    /// Fetch a provenance row (how a caller checks what produced a fact, or
+    /// which prompt an answer was given).
+    async fn get_provenance(&self, id: ProvenanceId) -> Result<Option<Provenance>> {
+        Err(crate::error::IndexError::Unsupported(format!(
+            "get_provenance({id}) is not implemented by this backend"
+        )))
+    }
     /// Stored vectors for targets under one model, in the order given
     /// (`None` where no embedding exists).
     async fn get_embeddings(
@@ -319,6 +373,58 @@ pub trait Storage: Send + Sync {
         t1: Timestamp,
         kinds: &[Kind],
     ) -> Result<Window>;
+
+    // ---- live feeds ------------------------------------------------------
+
+    /// Transcript and OCR spans of a video from `since` on, in time order:
+    /// the tail of [`Storage::time_window`] over `[since, ∞)`, so a
+    /// transcript span still running at `since` is included and one that
+    /// ended at or before it is not. A live events feed polls this with the
+    /// previous tick's watermark as the marker. `kinds` empty means
+    /// transcript and OCR; other kinds are ignored.
+    async fn spans_since(
+        &self,
+        video: VideoId,
+        kinds: &[Kind],
+        since: Timestamp,
+    ) -> Result<Vec<Span>> {
+        let kinds: Vec<Kind> = if kinds.is_empty() {
+            vec![Kind::Transcript, Kind::Ocr]
+        } else {
+            kinds
+                .iter()
+                .copied()
+                .filter(|k| matches!(k, Kind::Transcript | Kind::Ocr))
+                .collect()
+        };
+        let w = self
+            .time_window(video, since, Timestamp::new(i64::MAX, 1), &kinds)
+            .await?;
+        let mut out: Vec<(Timestamp, Span)> = w
+            .transcript
+            .into_iter()
+            .map(|t| (t.t0, Span::Transcript(t)))
+            .chain(w.ocr.into_iter().map(|o| (o.t, Span::Ocr(o))))
+            .collect();
+        out.sort_by_key(|(t, _)| *t);
+        Ok(out.into_iter().map(|(_, s)| s).collect())
+    }
+    /// Segments of a video at one level that end after `since`, by time:
+    /// closed segments written since the marker and the open one still being
+    /// extended.
+    async fn segments_since(
+        &self,
+        video: VideoId,
+        level: SegmentLevel,
+        since: Timestamp,
+    ) -> Result<Vec<Segment>> {
+        Ok(self
+            .segments(video, level)
+            .await?
+            .into_iter()
+            .filter(|s| s.t1 > since)
+            .collect())
+    }
 
     // ---- blobs -----------------------------------------------------------
 

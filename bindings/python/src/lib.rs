@@ -683,6 +683,7 @@ impl Index {
             k,
             text_only,
             per_video_k,
+            until: None,
         };
         let storage = self.storage.clone();
         let providers = self.prov();

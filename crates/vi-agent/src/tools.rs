@@ -385,6 +385,7 @@ async fn tool_search(ctx: &ToolContext, args: &Value) -> ToolResult {
         k,
         text_only: false,
         per_video_k,
+        until: None,
     };
     let resp = vi_query::search(ctx.storage.as_ref(), Some(&ctx.providers), &req)
         .await
@@ -526,6 +527,7 @@ async fn tool_find_mentions(ctx: &ToolContext, args: &Value) -> ToolResult {
             kinds,
             prefix,
             samples_per_video: per_video,
+            time_range: None,
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -614,6 +616,7 @@ async fn tool_count_mentions(ctx: &ToolContext, args: &Value) -> ToolResult {
             kinds,
             prefix,
             samples_per_video: 0,
+            time_range: None,
         })
         .await
         .map_err(|e| e.to_string())?;

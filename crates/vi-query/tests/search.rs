@@ -230,6 +230,93 @@ async fn per_video_k_caps_hits_from_one_video() {
 }
 
 #[tokio::test]
+async fn until_drops_rows_at_or_after_it_and_keeps_the_ranking() {
+    let dir = tempfile::tempdir().unwrap();
+    let idx = EmbeddedIndex::create(&dir.path().join("q.vidx")).unwrap();
+    let (vid, _) = seed(&idx).await;
+    let req = |until: i64| SearchRequest {
+        until: Some(Timestamp::from_secs(until)),
+        ..SearchRequest::new("hybrid retrieval", 10)
+    };
+    let all = search(&idx, None, &SearchRequest::new("hybrid retrieval", 10))
+        .await
+        .unwrap();
+    assert_eq!(all.hits.len(), 2);
+
+    // A bound past every row changes nothing.
+    let late = search(&idx, None, &req(3600)).await.unwrap();
+    assert_eq!(late.hits, all.hits);
+
+    // Before the second chapter's rows: only part one remains.
+    let early = search(&idx, None, &req(1000)).await.unwrap();
+    assert_eq!(early.hits.len(), 1, "{early:#?}");
+    assert_eq!(early.hits[0].segment_title.as_deref(), Some("Part one"));
+    assert!(early
+        .hits
+        .iter()
+        .flat_map(|h| &h.evidence)
+        .all(|e| e.t0 < Timestamp::from_secs(1000)));
+    // The same evidence in the same order; fused scores differ because
+    // reciprocal rank fusion scores by rank within each list, and the list
+    // is shorter.
+    let identity = |h: &vi_query::SearchHit| -> Vec<(Kind, Timestamp, Timestamp, String)> {
+        h.evidence
+            .iter()
+            .map(|e| (e.kind, e.t0, e.t1, e.text.clone()))
+            .collect()
+    };
+    assert_eq!(identity(&early.hits[0]), identity(&all.hits[1]));
+
+    // Between the transcript at 1840 and the OCR at 1841: the OCR row is
+    // out, so part two keeps one piece of evidence and its thumbnail (a
+    // frame near the anchor, not a search row) stays.
+    let mid = search(&idx, None, &req(1841)).await.unwrap();
+    assert_eq!(mid.hits.len(), 2, "{mid:#?}");
+    let two = mid
+        .hits
+        .iter()
+        .find(|h| h.segment_title.as_deref() == Some("Part two"))
+        .unwrap();
+    assert_eq!(two.evidence.len(), 1);
+    assert_eq!(two.evidence[0].kind, Kind::Transcript);
+    assert!(mid
+        .hits
+        .iter()
+        .flat_map(|h| &h.evidence)
+        .all(|e| e.t0 < Timestamp::from_secs(1841)));
+
+    // Nothing before zero.
+    let none = search(&idx, None, &req(0)).await.unwrap();
+    assert!(none.hits.is_empty());
+    assert_eq!(none.candidates, 0);
+
+    // A live video without chapters is cut into windows up to `until`, not
+    // up to its head.
+    idx.delete_segments(vid, SegmentLevel::Chapter)
+        .await
+        .unwrap();
+    idx.set_index_state(vid, IndexState::Live).await.unwrap();
+    let live = search(&idx, None, &req(1900)).await.unwrap();
+    assert_eq!(live.grouping, "window");
+    assert_eq!(live.index_state, Some(IndexState::Live));
+    assert!(
+        live.hits.iter().all(|h| h.t1 <= Timestamp::from_secs(1900)),
+        "{:?}",
+        live.hits.iter().map(|h| (h.t0, h.t1)).collect::<Vec<_>>()
+    );
+    assert!(live
+        .hits
+        .iter()
+        .any(|h| h.t0 == Timestamp::from_secs(1800) && h.t1 == Timestamp::from_secs(1860)));
+
+    // The field is optional on the wire.
+    let parsed: SearchRequest =
+        serde_json::from_str(r#"{"query":"x","videos":[],"kinds":[],"k":5,"text_only":false}"#)
+            .unwrap();
+    assert_eq!(parsed.until, None);
+}
+
+#[tokio::test]
 async fn falls_back_to_windows_without_chapters() {
     let dir = tempfile::tempdir().unwrap();
     let idx = EmbeddedIndex::create(&dir.path().join("q.vidx")).unwrap();

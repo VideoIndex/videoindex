@@ -21,6 +21,10 @@ Filters: video ids, time range, source kind (transcript, ocr, description, frame
 
 Optional **reranking** with a cross-encoder provider or an LLM over the top 30 candidates.
 
+### Answers as of a time
+
+`SearchRequest.until: Option<Timestamp>` bounds a search at a media time: every list is fetched with `time_range = [0, until)` on the rows' start times (`TextQuery`, `VectorQuery` and, for the mention tools, `MentionQuery` carry the range to the storage layer), so nothing starting at or after `until` reaches fusion, and the rows that remain keep the ranking the unbounded search gives them (BM25 scores a row independently of the filter; the vector store over-fetches and drops). A live video's fallback grid of 60 s windows ends at `until` rather than at its head, which keeps moving. `None`, the default and the wire default, searches the whole video. A live session passes its watermark so an answer never rests on rows that arrived while it was being written; batch evaluation passes a question's "ask at" time, which is how the live dev set is scored against a batch index (`videoindex-live/docs/08-testing-and-evaluation.md`). The agent's `until` (below) is this field plus the clamps on the reading tools and on citations.
+
 ### Output
 
 ```json
