@@ -1679,3 +1679,276 @@ async fn vad_stream_caps_utterances_and_flushes_soon_after_silence() {
     assert!(report.stopped_at.is_none(), "the stream ended on its own");
     assert!(report.stages["vad_stream"].last_t.is_some());
 }
+
+/// What the fake VLM answers for a shot (the request carries the shot
+/// prompt) and for a scene.
+const FAKE_SHOT_JSON: &str = r#"{"people":["3 people: a host, two guests"],"objects":[{"name":"chairs","count":2},{"name":"laptop","count":1}],"actions":["host waves"],"on_screen_text":["LIVE"],"summary":"A host greets two guests at a desk."}"#;
+const FAKE_SCENE_JSON: &str = r#"{"summary":"A synthetic test pattern.","visible":"Coloured bars.","on_screen_text":[],"actions":[],"topics":["test"]}"#;
+
+/// Request bodies a fake VLM received, and the most requests it had open
+/// at once.
+type Bodies = Arc<std::sync::Mutex<Vec<String>>>;
+type Peak = Arc<std::sync::atomic::AtomicUsize>;
+
+/// A fake OpenAI-compatible VLM: every chat request gets a fixed
+/// description back after 150 ms as a stream with usage (1,000 prompt
+/// tokens); the request bodies are kept, and the peak number of requests
+/// in flight. It also transcribes (`audio/transcriptions`), always the
+/// same sentence.
+async fn fake_vlm_server() -> (std::net::SocketAddr, Bodies, Peak) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let bodies: Bodies = Arc::default();
+    let peak: Peak = Arc::default();
+    let open = Arc::new(AtomicUsize::new(0));
+    let (seen, top) = (bodies.clone(), peak.clone());
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
+            let (seen, top, open) = (seen.clone(), top.clone(), open.clone());
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut chunk = vec![0u8; 1 << 16];
+                let body_start = loop {
+                    let r = sock.read(&mut chunk).await.unwrap_or(0);
+                    if r == 0 {
+                        break None;
+                    }
+                    buf.extend_from_slice(&chunk[..r]);
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buf[..pos]).to_ascii_lowercase();
+                        let len: usize = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .and_then(|v| v.trim().parse().ok())
+                            .unwrap_or(0);
+                        if buf.len() >= pos + 4 + len {
+                            break Some(pos + 4);
+                        }
+                    }
+                };
+                let Some(start) = body_start else { return };
+                if buf.starts_with(b"POST /v1/audio/transcriptions") {
+                    // ASR: one segment, whatever the audio.
+                    let json = r#"{"language":"en","duration":10.0,"text":"the speaker counts three apples","segments":[{"start":0.0,"end":4.0,"text":" the speaker counts three apples"}]}"#;
+                    let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}", json.len());
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                    return;
+                }
+                let now = open.fetch_add(1, Ordering::SeqCst) + 1;
+                top.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                open.fetch_sub(1, Ordering::SeqCst);
+                let body = String::from_utf8_lossy(&buf[start..]).to_string();
+                let answer = if body.contains("80 words") {
+                    FAKE_SHOT_JSON
+                } else {
+                    FAKE_SCENE_JSON
+                };
+                seen.lock().unwrap().push(body);
+                let delta = serde_json::json!({"choices":[{"delta":{"content":answer},"finish_reason":"stop"}]});
+                let usage = serde_json::json!({"choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":0}});
+                let sse = format!("data: {delta}\n\ndata: {usage}\n\ndata: [DONE]\n\n");
+                let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{sse}", sse.len());
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            });
+        }
+    });
+    (addr, bodies, peak)
+}
+
+/// A config over `cache` whose `vlm_describe` role is the fake VLM at
+/// `addr`, $0.01 a call (1,000 input tokens at $10 per million), taking
+/// `concurrency` calls at once.
+fn fake_vlm_config(
+    cache: &std::path::Path,
+    addr: std::net::SocketAddr,
+    concurrency: u32,
+) -> Config {
+    let mut c = Config::default();
+    c.media.worker.path = Some(fx::worker_path());
+    c.media.sample_max_dim = 320;
+    c.media.cache_dir = cache.to_path_buf();
+    c.providers.insert(
+        "fake".into(),
+        vi_core::config::ProviderConfig {
+            adapter: "openai_compat".into(),
+            base_url: Some(format!("http://{addr}/v1")),
+            model: Some("fake-vl".into()),
+            max_retries: Some(0),
+            concurrency: Some(concurrency),
+            pricing: Some(vi_core::config::Pricing {
+                input_per_mtok: 10.0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    c.roles.insert(
+        "vlm_describe".into(),
+        vi_core::config::RoleBinding {
+            provider: "fake".into(),
+            ..Default::default()
+        },
+    );
+    c
+}
+
+/// A VAD stand-in: one speech range over the first ten seconds (silent
+/// PCM; the fake ASR does not listen).
+struct OneSpeechRange;
+
+#[async_trait]
+impl Operator for OneSpeechRange {
+    fn id(&self) -> &'static str {
+        "vad"
+    }
+    fn version(&self) -> u32 {
+        1
+    }
+    fn inputs(&self) -> &[ItemKind] {
+        &[ItemKind::Media]
+    }
+    fn outputs(&self) -> &[ItemKind] {
+        &[ItemKind::SpeechRange]
+    }
+    fn cost_estimate(&self, _: &InputSummary) -> CostEstimate {
+        CostEstimate::default()
+    }
+    async fn run(&self, ctx: &OpContext, input: OpInput) -> vi_core::Result<OpOutput> {
+        let Item::Media(_) = input.item else {
+            return Err(ctx.err("expected the media item"));
+        };
+        ctx.emit(Item::SpeechRange(Arc::new(vi_pipeline::SpeechItem {
+            t0: Timestamp::ZERO,
+            t1: Timestamp::from_secs(10),
+            samples: vec![0i16; 160_000].into(),
+            sample_rate: 16_000,
+            index: 0,
+        })))
+        .await?;
+        Ok(OpOutput {
+            emitted: 1,
+            stored: 0,
+        })
+    }
+}
+
+/// A fine pass that replays `asr` and `subtitle_import` leaves their rows
+/// alone and hands each line on once: a replaying stage re-emits what is
+/// stored and is not also run on the media item (which for `asr` deletes
+/// its transcript and for `subtitle_import` imports the sidecars again
+/// under new ids and emits them twice).
+#[tokio::test]
+async fn a_fine_pass_replays_asr_and_subtitles_without_rewriting_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("videos");
+    let media = seed_incoming(&cache);
+    let idx = Arc::new(EmbeddedIndex::create(&dir.path().join("t.vidx")).unwrap());
+    let (addr, bodies, _) = fake_vlm_server().await;
+    let mut c = fake_vlm_config(&cache, addr, 1);
+    c.providers.insert(
+        "whisper".into(),
+        vi_core::config::ProviderConfig {
+            adapter: "openai_compat".into(),
+            base_url: Some(format!("http://{addr}/v1")),
+            model: Some("fake-whisper".into()),
+            max_retries: Some(0),
+            ..Default::default()
+        },
+    );
+    c.roles.insert(
+        "asr".into(),
+        vi_core::config::RoleBinding {
+            provider: "whisper".into(),
+            ..Default::default()
+        },
+    );
+    let coarse = ["subtitle_import", "vad", "asr", "sample", "shot_boundary"];
+    c.policy.insert("coarse".into(), policy(&coarse));
+    let mut fine = policy(&coarse);
+    fine.fine = vec!["scenes".into(), "vlm_describe".into()];
+    c.policy.insert("fine".into(), fine);
+    let mut sched = Scheduler::new(idx.clone(), Arc::new(c), EventBus::default());
+    sched.register_operator(
+        "vad",
+        Arc::new(|_: &Config| Box::new(OneSpeechRange) as Box<dyn Operator>),
+    );
+    let run = |p: &str, src: std::path::PathBuf| {
+        let sched = sched.clone();
+        let p = p.to_string();
+        async move {
+            sched
+                .run(
+                    Source::Path(src),
+                    JobOptions {
+                        policy: Some(p),
+                        ..JobOptions::default()
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap()
+        }
+    };
+    let first = run("coarse", media).await;
+    assert!(first.ok, "{first:?}");
+    let video = idx.list_videos().await.unwrap()[0].clone();
+    let rows = |op: &'static str| {
+        let idx = idx.clone();
+        async move {
+            idx.spans_by_operator(video.id, op)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter_map(|s| match s {
+                    vi_core::model::Span::Transcript(t) => Some((t.id, t.text)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        }
+    };
+    let asr_before = rows("asr").await;
+    let subs_before = rows("subtitle_import").await;
+    assert_eq!(asr_before.len(), 1, "{asr_before:?}");
+    assert!(asr_before[0].1.contains("three apples"));
+    assert!(!subs_before.is_empty());
+
+    let media = cache.join(format!("{}.mp4", video.content_hash));
+    let second = run("fine", media).await;
+    assert!(second.ok && !second.skipped, "{second:?}");
+    assert!(second.stages["asr"].replayed, "{:?}", second.stages["asr"]);
+    assert_eq!(second.stages["asr"].items_done, 1);
+    assert!(second.stages["subtitle_import"].replayed);
+    assert_eq!(second.stages["vad"].status, StageStatus::Skipped);
+    assert!(
+        second.stages["vlm_describe"].items_done >= 1,
+        "{:?}",
+        second.stages["vlm_describe"]
+    );
+    // Same rows, same ids.
+    assert_eq!(rows("asr").await, asr_before);
+    assert_eq!(rows("subtitle_import").await, subs_before);
+    // The first scene's prompt has the ASR line and each subtitle line once.
+    let bodies = bodies.lock().unwrap();
+    let first_shot = bodies
+        .iter()
+        .find(|b| b.contains("caption kw0 "))
+        .expect("a request carrying the first caption");
+    assert_eq!(
+        first_shot.matches("three apples").count(),
+        1,
+        "{first_shot}"
+    );
+    assert_eq!(
+        first_shot.matches("caption kw0 ").count(),
+        1,
+        "{first_shot}"
+    );
+}

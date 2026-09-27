@@ -992,8 +992,9 @@ struct StageOutcome {
 }
 
 /// Drive one operator over its input channel. Returns items emitted and
-/// rows stored. In replay mode the operator re-emits stored outputs once it
-/// has seen the media item and ignores everything else. In a live job every
+/// rows stored. In replay mode the operator re-emits stored outputs once
+/// the media item has arrived (without being run on it) and everything
+/// else is ignored. In a live job every
 /// processed item moves the stage's clock (a tick to its head, so every
 /// operator that received the tick records `last_t = head`), and ticks
 /// move the budget's rolling window.
@@ -1014,7 +1015,12 @@ async fn run_stage(
     let mut stored = 0u64;
     let result: Result<()> = async {
         if replay {
-            // Wait for the media item so the operator knows the video.
+            // Wait for the media item, then re-emit what is stored. The
+            // operator is not run on the media item: for some that is the
+            // work itself (`subtitle_import` imports the sidecars again
+            // under new ids, `asr` deletes its transcript before
+            // transcribing), which would rewrite or drop the very rows the
+            // replay is about to read. Replays read `ctx.video`.
             let mut media_seen = false;
             loop {
                 let item = tokio::select! {
@@ -1026,7 +1032,6 @@ async fn run_stage(
                 if let Item::Media(_) = &item {
                     if !media_seen {
                         media_seen = true;
-                        op.run(&ctx, OpInput { item }).await?;
                         match op.replay(&ctx).await? {
                             Some(n) => emitted += n,
                             None => {
