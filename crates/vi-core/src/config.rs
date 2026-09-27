@@ -42,6 +42,15 @@ pub struct Config {
     pub server: ServerConfig,
     /// Logging settings.
     pub log: LogConfig,
+    /// Extension tables for the modules built on the core (`[ext.live]`,
+    /// `[ext.portals]`, `[ext.voice]`, `[ext.meeting]`), kept as TOML values
+    /// and deserialised by the module that owns each one through
+    /// [`Config::ext_table`]. The core validates nothing inside them, so a
+    /// module's settings ride in the same `videoindex.toml` and take the
+    /// same `VI_EXT__<TABLE>__<KEY>` environment overrides as everything
+    /// else; unknown keys outside `ext` are still rejected.
+    #[serde(default)]
+    pub ext: BTreeMap<String, toml::Value>,
 }
 
 impl Default for Config {
@@ -64,6 +73,7 @@ impl Default for Config {
             roles: BTreeMap::new(),
             server: ServerConfig::default(),
             log: LogConfig::default(),
+            ext: BTreeMap::new(),
         }
     }
 }
@@ -737,6 +747,21 @@ impl Config {
     pub fn to_toml(&self) -> Result<String> {
         toml::to_string_pretty(self).map_err(|e| Error::Config(e.to_string()))
     }
+
+    /// The `[ext.<name>]` table deserialised into a module's own settings
+    /// type; `None` when the file has no such table, so the module applies
+    /// its defaults. A table that does not fit the type is a `Config`
+    /// error naming the table.
+    pub fn ext_table<T: serde::de::DeserializeOwned>(&self, name: &str) -> Result<Option<T>> {
+        match self.ext.get(name) {
+            None => Ok(None),
+            Some(v) => v
+                .clone()
+                .try_into()
+                .map(Some)
+                .map_err(|e| Error::Config(format!("[ext.{name}]: {e}"))),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -867,5 +892,90 @@ mod tests {
         let s = c.to_toml().unwrap();
         let back = Config::from_toml_str(&s).unwrap();
         assert_eq!(back, c);
+    }
+
+    /// A module's settings type, as `videoindex-live` would declare it.
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(default, deny_unknown_fields)]
+    struct LiveExt {
+        tick_secs: f64,
+        max_streams: u32,
+    }
+
+    impl Default for LiveExt {
+        fn default() -> Self {
+            Self {
+                tick_secs: 1.0,
+                max_streams: 4,
+            }
+        }
+    }
+
+    #[test]
+    fn ext_tables_ride_along_and_unknown_top_level_keys_still_fail() {
+        let c = Config::from_toml_str(
+            r#"
+            [ext.live]
+            tick_secs = 2
+            [ext.portals.youtube]
+            poll_secs = 60
+            "#,
+        )
+        .unwrap();
+        assert_eq!(c.ext["live"]["tick_secs"], toml::Value::Integer(2));
+        assert_eq!(
+            c.ext["portals"]["youtube"]["poll_secs"],
+            toml::Value::Integer(60)
+        );
+        // Round trip through `to_toml` keeps the tables.
+        let back = Config::from_toml_str(&c.to_toml().unwrap()).unwrap();
+        assert_eq!(back, c);
+        assert_eq!(back.ext["live"]["tick_secs"], toml::Value::Integer(2));
+        // The owning module reads its table as its own type; a missing table
+        // is `None`, a misfit is a config error naming the table.
+        let live: LiveExt = c.ext_table("live").unwrap().unwrap();
+        assert_eq!(
+            live,
+            LiveExt {
+                tick_secs: 2.0,
+                max_streams: 4
+            }
+        );
+        assert_eq!(c.ext_table::<LiveExt>("voice").unwrap(), None);
+        let bad = Config::from_toml_str("[ext.live]\nbogus = 1").unwrap();
+        assert!(matches!(
+            bad.ext_table::<LiveExt>("live"),
+            Err(Error::Config(m)) if m.starts_with("[ext.live]")
+        ));
+        // Nothing has loosened outside `ext`.
+        assert!(Config::from_toml_str("live = { tick_secs = 2 }").is_err());
+        assert!(Config::from_toml_str("[live]\ntick_secs = 2").is_err());
+        assert!(Config::from_toml_str("[media]\nbogus = 1").is_err());
+        assert!(Config::default().ext.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)] // figment::Jail's closure signature
+    fn ext_env_override_wins() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(
+                "videoindex.toml",
+                "[ext.live]\ntick_secs = 5\nmax_streams = 8\n",
+            )?;
+            jail.set_env("VI_EXT__LIVE__TICK_SECS", "2");
+            jail.set_env("VI_EXT__PORTALS__YOUTUBE_POLL_SECS", "60");
+            let c = Config::load(Some(Path::new("videoindex.toml"))).unwrap();
+            assert_eq!(c.ext["live"]["tick_secs"], toml::Value::Integer(2));
+            assert_eq!(c.ext["live"]["max_streams"], toml::Value::Integer(8));
+            assert_eq!(
+                c.ext["portals"]["youtube_poll_secs"],
+                toml::Value::Integer(60),
+                "a table the file never named"
+            );
+            let live: LiveExt = c.ext_table("live").unwrap().unwrap();
+            assert_eq!(live.tick_secs, 2.0);
+            assert_eq!(live.max_streams, 8);
+            Ok(())
+        });
     }
 }

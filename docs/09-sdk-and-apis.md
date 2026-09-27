@@ -118,7 +118,9 @@ Status (2026-09-12): implemented in `vi-server` and started with `vidx serve`. I
 
 ## Configuration file
 
-One `videoindex.toml` shared by all surfaces: providers and roles as in [07-model-providers](07-model-providers.md), policies as in [05-indexing-pipeline](05-indexing-pipeline.md), storage backend, media cache directory, decode worker limits, server bind and auth. Environment variables override with a `VI_` prefix.
+One `videoindex.toml` shared by all surfaces: providers and roles as in [07-model-providers](07-model-providers.md), policies as in [05-indexing-pipeline](05-indexing-pipeline.md), storage backend, media cache directory, decode worker limits, server bind and auth. Environment variables override with a `VI_` prefix and `__` between nested keys (`VI_MEDIA__CACHE_DIR=/x`).
+
+Unknown keys are rejected everywhere except under `[ext]`. The modules built on the core (`videoindex-live`: realtime-core, realtime-query, interactive, chrome) keep their settings in extension tables of the same file, `[ext.live]`, `[ext.portals]`, `[ext.voice]`, `[ext.meeting]`, which the core carries as TOML values (`Config.ext: BTreeMap<String, toml::Value>`) without validating their contents; the owning module deserialises its table into its own type with `Config::ext_table::<T>("live")` (`None` when the table is absent, a config error naming the table when it does not fit). Environment overrides reach them the same way as core keys: `VI_EXT__LIVE__TICK_SECS=2` sets `ext.live.tick_secs`, and wins over the file. Nothing in the core reads these tables, so a module's settings change no core behaviour.
 
 ## Stability policy
 
