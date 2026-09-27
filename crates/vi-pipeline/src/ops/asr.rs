@@ -3,6 +3,7 @@
 //! concurrently up to `models.asr.concurrency`; each request's cost lands
 //! in its own `Provenance` row.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -14,10 +15,18 @@ use vi_providers::{provenance_for, AsrOptions, AudioData};
 
 use crate::operator::*;
 
+/// Requests in flight per live job when nothing else is set, so several
+/// streams share one ASR server fairly (live C3).
+pub const LIVE_MAX_IN_FLIGHT: usize = 2;
+
 /// ASR operator.
 #[derive(Debug)]
 pub struct Asr {
     state: Mutex<State>,
+    /// Requests in flight per job; 0 means the default rule
+    /// ([`LIVE_MAX_IN_FLIGHT`] when live, `models.asr.concurrency`
+    /// otherwise). Shared so a lag policy can raise it while the job runs.
+    max_in_flight: Arc<AtomicUsize>,
 }
 
 #[derive(Debug, Default)]
@@ -39,10 +48,27 @@ impl Default for Asr {
 }
 
 impl Asr {
-    /// New operator.
+    /// New operator with the default in-flight rule.
     pub fn new() -> Self {
+        Self::with_max_in_flight(Arc::new(AtomicUsize::new(0)))
+    }
+
+    /// New operator whose in-flight limit is read from `knob` before every
+    /// request (0 selects the default rule), so the caller can change it
+    /// while the job runs.
+    pub fn with_max_in_flight(knob: Arc<AtomicUsize>) -> Self {
         Self {
             state: Mutex::new(State::default()),
+            max_in_flight: knob,
+        }
+    }
+
+    /// The in-flight limit that applies now.
+    fn max_in_flight(&self, ctx: &OpContext) -> usize {
+        match self.max_in_flight.load(Ordering::Relaxed) {
+            0 if ctx.live => LIVE_MAX_IN_FLIGHT,
+            0 => ctx.config.models.asr.concurrency,
+            n => n,
         }
     }
 
@@ -168,7 +194,7 @@ impl Operator for Asr {
                     ctx.record_skipped(1);
                     return Ok(OpOutput::default());
                 }
-                let max = ctx.config.models.asr.concurrency;
+                let max = self.max_in_flight(ctx);
                 Self::reap(&mut st, max).await?;
                 st.requests += 1;
                 st.media_secs += seg.t1.sub(seg.t0).as_secs_f64();

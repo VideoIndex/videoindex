@@ -38,6 +38,14 @@ pub struct JobOptions {
     /// A policy supplied by the caller instead of one named in the config
     /// (Python-defined policies). `policy` then only names it in reports.
     pub inline_policy: Option<IndexPolicy>,
+    /// A live job (live C3): the media is a growing recording with no
+    /// duration. Nothing is cached or replayed (the recording is unique),
+    /// the budget is [`Budget::for_live`], `index_state` is left to the
+    /// caller, every stage's `last_t` is checkpointed while the job runs,
+    /// and cancelling the job is its normal end: stages complete and
+    /// `JobReport.stopped_at` carries the head reached.
+    #[serde(default)]
+    pub live: bool,
 }
 
 /// Builds an operator the config does not know about: the extension point
@@ -54,8 +62,12 @@ pub struct BudgetReport {
     pub max_cost_usd: Option<f64>,
     /// Wall-clock ceiling in seconds, if any.
     pub max_wallclock_secs: Option<f64>,
-    /// Which limit stopped provider calls, if one did.
+    /// Which limit stopped provider calls, if one did (for a live job: at
+    /// the end).
     pub exhausted: Option<String>,
+    /// Live jobs: the rolling cost ceiling per hour of stream time.
+    #[serde(default)]
+    pub max_cost_usd_per_hour: Option<f64>,
 }
 
 /// What a finished job reports.
@@ -79,6 +91,10 @@ pub struct JobReport {
     pub skipped: bool,
     /// Budget outcome.
     pub budget: BudgetReport,
+    /// Live jobs that were cancelled: the stream time reached, the latest
+    /// `last_t` over the stages. `None` otherwise.
+    #[serde(default)]
+    pub stopped_at: Option<vi_core::Timestamp>,
 }
 
 /// The scheduler.
@@ -301,7 +317,8 @@ impl Scheduler {
         Ok(segments.len() as u64)
     }
 
-    /// Index one source.
+    /// Index one source: acquire, probe, register the video, then run the
+    /// policy over it (the same machinery as [`Self::run_with_media`]).
     pub async fn run(
         &self,
         source: Source,
@@ -399,6 +416,86 @@ impl Scheduler {
             fresh,
             "acquired and probed in {acquire_secs:.2}s"
         );
+        let media = MediaItem {
+            acquired,
+            probe,
+            video,
+            tracks,
+            expected_samples: Some(expected_samples),
+        };
+        self.run_prepared(Prepared {
+            job_id,
+            started,
+            acquire_secs,
+            policy_name,
+            policy,
+            dag,
+            media,
+            opts,
+            cancel,
+        })
+        .await
+    }
+
+    /// Run the policy over media the caller has already acquired, probed
+    /// and described (live C3): the live indexer's entry point, where the
+    /// media is a growing recording and the caller owns the `Video` row
+    /// (identity hash, `index_state = live`). The video and its tracks are
+    /// upserted so the rows operators reference exist; with
+    /// `JobOptions.live` nothing is cached, the budget rolls per hour of
+    /// stream time, `index_state` is not written at the end, and every
+    /// stage's `last_t` is checkpointed every second and reported.
+    pub async fn run_with_media(
+        &self,
+        media: MediaItem,
+        opts: JobOptions,
+        cancel: CancellationToken,
+    ) -> Result<JobReport> {
+        let started = Instant::now();
+        let job_id = JobId::new();
+        let (policy_name, policy, dag) =
+            self.plan_with(opts.policy.as_deref(), opts.inline_policy.as_ref())?;
+        self.events.emit(Event::JobStarted {
+            job: job_id,
+            video: Some(media.video.id),
+            source: media.acquired.source_uri.clone(),
+        });
+        self.storage.put_video(&media.video).await?;
+        if !media.tracks.is_empty() {
+            self.storage.put_tracks(&media.tracks).await?;
+        }
+        self.run_prepared(Prepared {
+            job_id,
+            started,
+            acquire_secs: 0.0,
+            policy_name,
+            policy,
+            dag,
+            media,
+            opts,
+            cancel,
+        })
+        .await
+    }
+
+    /// The part of a job after acquisition: plan the cache, wire the DAG,
+    /// run the stages, checkpoint, report.
+    async fn run_prepared(&self, prepared: Prepared) -> Result<JobReport> {
+        let Prepared {
+            job_id,
+            started,
+            acquire_secs,
+            policy_name,
+            policy,
+            dag,
+            media,
+            opts,
+            cancel,
+        } = prepared;
+        let live = opts.live;
+        let video = media.video.clone();
+        let duration = media.probe.duration.unwrap_or_default();
+        let expected_samples = media.expected_samples;
 
         // ---- operator output cache ---------------------------------------
         // Every completed stage leaves a marker keyed by the content hash,
@@ -406,23 +503,22 @@ impl Scheduler {
         // (provider, model, thresholds). A marker means "these outputs are
         // in the index"; a stage with a marker is skipped when no running
         // consumer needs its items, replayed from storage when one does and
-        // the operator can, and re-run otherwise.
+        // the operator can, and re-run otherwise. A live recording is
+        // unique and unfinished: nothing is cached or replayed.
         let stage_names = dag.stage_names();
         let mut state = JobState::new(
             job_id,
             video.id,
-            acquired.source_uri.clone(),
+            media.acquired.source_uri.clone(),
             policy_name.clone(),
             stage_names.iter().cloned(),
         );
-        let budget = Arc::new(Budget::for_policy(&policy, duration.as_secs_f64())?);
-        let media = Arc::new(MediaItem {
-            acquired,
-            probe,
-            video: video.clone(),
-            tracks,
-            expected_samples,
+        let budget = Arc::new(if live {
+            Budget::for_live(&policy)?
+        } else {
+            Budget::for_policy(&policy, duration.as_secs_f64())?
         });
+        let media = Arc::new(media);
         let (operators, consumers, roots) = dag.into_parts();
         let n = operators.len();
 
@@ -431,6 +527,8 @@ impl Scheduler {
         let mut cached: Vec<bool> = Vec::with_capacity(n);
         let stage_failures: Vec<Arc<StageFailures>> =
             (0..n).map(|_| Arc::new(StageFailures::default())).collect();
+        let stage_clocks: Vec<Arc<StageClock>> =
+            (0..n).map(|_| Arc::new(StageClock::default())).collect();
         let make_ctx = |i: usize, op: &dyn Operator, emitter: Emitter| OpContext {
             job: job_id,
             video: video.id,
@@ -443,15 +541,17 @@ impl Scheduler {
             emitter,
             cancel: cancel.child_token(),
             events: self.events.clone(),
-            expected_items: Some(expected_samples),
+            expected_items: expected_samples,
             budget: budget.clone(),
             failures: stage_failures[i].clone(),
+            live,
+            clock: stage_clocks[i].clone(),
         };
         for (i, op) in operators.iter().enumerate() {
             let probe_ctx = make_ctx(i, op.as_ref(), Emitter::none());
             let params = op.cache_params(&probe_ctx);
             let key = cache_key(&media.acquired.content_hash, op.as_ref(), &params);
-            let has = !opts.force && self.cache_marker_exists(&key);
+            let has = !live && !opts.force && self.cache_marker_exists(&key);
             keys.push(key);
             cached.push(has);
         }
@@ -542,6 +642,7 @@ impl Scheduler {
                 },
                 skipped: true,
                 budget: BudgetReport::default(),
+                stopped_at: None,
             });
         }
         for (i, name) in stage_names.iter().enumerate() {
@@ -573,9 +674,30 @@ impl Scheduler {
                 receivers.push(Some(rx));
             }
         }
+        // Each consumer receives only the kinds it declares (plus the media
+        // item), so a root that emits frames, audio and ticks reaches each
+        // consumer with its own kinds. Every shipped batch producer emits one
+        // kind, so batch DAGs deliver exactly what they did before.
+        let accepted: Vec<Vec<ItemKind>> = operators
+            .iter()
+            .map(|op| {
+                let mut kinds: Vec<ItemKind> = op.inputs().to_vec();
+                kinds.extend(op.optional_inputs().iter().copied());
+                if !kinds.contains(&ItemKind::Media) {
+                    kinds.push(ItemKind::Media);
+                }
+                kinds
+            })
+            .collect();
         let emitters: Vec<Emitter> = consumers
             .iter()
-            .map(|c| Emitter::new(c.iter().filter_map(|j| senders[*j].clone()).collect()))
+            .map(|c| {
+                Emitter::with_kinds(
+                    c.iter()
+                        .filter_map(|j| senders[*j].clone().map(|s| (s, accepted[*j].clone())))
+                        .collect(),
+                )
+            })
             .collect();
         // Seed the running roots with the media item (replayed stages need
         // it too, for the video id).
@@ -613,19 +735,51 @@ impl Scheduler {
             let cancel_on_fail = job_cancel.clone();
             let replay = plan[i] == Plan::Replay;
             handles.push(tokio::spawn(async move {
-                let result = run_stage(op, ctx, rx, &events, replay).await;
-                if result.is_err() {
+                let outcome = run_stage(op, ctx, rx, &events, replay, live).await;
+                if outcome.result.is_err() {
                     cancel_on_fail.cancel();
                 }
-                (stage, i, result)
+                (stage, i, outcome)
             }));
         }
         drop(emitters);
 
+        // Live jobs: checkpoint `last_t` per stage while the job runs, so
+        // the live indexer can read the watermark from the job state.
+        let checkpoint_done = CancellationToken::new();
+        let checkpointer = live.then(|| {
+            let storage = self.storage.clone();
+            let base = state.clone();
+            let names = stage_names.clone();
+            let clocks = stage_clocks.clone();
+            let done = checkpoint_done.clone();
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(LIVE_CHECKPOINT_INTERVAL);
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tokio::select! {
+                        _ = done.cancelled() => break,
+                        _ = tick.tick() => {}
+                    }
+                    let mut snap = base.clone();
+                    for (i, name) in names.iter().enumerate() {
+                        let st = snap.stage_mut(name);
+                        st.status = StageStatus::Running;
+                        st.last_t = clocks[i].get();
+                    }
+                    snap.updated_at = Utc::now();
+                    if let Err(e) = storage.checkpoint(snap.job_id, &snap).await {
+                        debug!("live checkpoint failed: {e}");
+                    }
+                }
+            })
+        });
+
         let mut ok = true;
         let mut any_failures = false;
+        let mut stopped = false;
         for h in handles {
-            let (stage, i, result) = h
+            let (stage, i, outcome) = h
                 .await
                 .map_err(|e| Error::Other(format!("stage task panicked: {e}")))?;
             let failures = &stage_failures[i];
@@ -634,8 +788,15 @@ impl Scheduler {
             st.items_skipped = failures.skipped_count();
             st.failures = failures.ranges();
             st.replayed = plan[i] == Plan::Replay;
+            st.last_t = stage_clocks[i].get();
+            let StageOutcome {
+                result,
+                emitted,
+                stored,
+            } = outcome;
             match result {
-                Ok((items, stored)) => {
+                Ok(()) => {
+                    let items = emitted;
                     st.items_done = items;
                     // A stage that stores without emitting (embeddings,
                     // extraction) did work when `stored` is non-zero.
@@ -653,10 +814,17 @@ impl Scheduler {
                         if st.items_failed > 0 {
                             any_failures = true;
                         }
-                        if st.items_failed == 0 && st.items_skipped == 0 {
+                        if !live && st.items_failed == 0 && st.items_skipped == 0 {
                             self.write_cache_marker(&keys[i], &stage, items, job_id);
                         }
                     }
+                }
+                Err(Error::Cancelled) if live => {
+                    // A live job ends by cancellation: the stream was
+                    // stopped. What the ticks committed stands.
+                    stopped = true;
+                    st.status = StageStatus::Complete;
+                    st.items_done = emitted;
                 }
                 Err(e) => {
                     ok = false;
@@ -667,18 +835,33 @@ impl Scheduler {
             state.updated_at = Utc::now();
             self.storage.checkpoint(job_id, &state).await?;
         }
+        checkpoint_done.cancel();
+        if let Some(task) = checkpointer {
+            let _ = task.await;
+        }
 
-        let index_state = if !ok {
-            IndexState::Failed
-        } else if policy.fine.is_empty() {
-            IndexState::Coarse
+        let index_state = if live {
+            // The caller owns the state of a live video.
+            video.index_state
         } else {
-            IndexState::Fine
+            let index_state = if !ok {
+                IndexState::Failed
+            } else if policy.fine.is_empty() {
+                IndexState::Coarse
+            } else {
+                IndexState::Fine
+            };
+            self.storage.set_index_state(video.id, index_state).await?;
+            index_state
         };
-        self.storage.set_index_state(video.id, index_state).await?;
         state.finished = true;
         state.updated_at = Utc::now();
         self.storage.checkpoint(job_id, &state).await?;
+        let stopped_at = if live && stopped {
+            stage_clocks.iter().filter_map(|c| c.get()).max()
+        } else {
+            None
+        };
 
         let elapsed = started.elapsed();
         let budget_report = BudgetReport {
@@ -686,6 +869,7 @@ impl Scheduler {
             max_cost_usd: budget.max_cost_usd,
             max_wallclock_secs: budget.max_wallclock_secs,
             exhausted: budget.exhausted_reason().map(str::to_string),
+            max_cost_usd_per_hour: budget.rolling.and_then(|r| r.max_cost_usd_per_hour),
         };
         let failed_total: u64 = state.stages.values().map(|s| s.items_failed).sum();
         let skipped_total: u64 = state.stages.values().map(|s| s.items_skipped).sum();
@@ -733,6 +917,7 @@ impl Scheduler {
             index_state,
             skipped: false,
             budget: budget_report,
+            stopped_at,
         })
     }
 
@@ -767,6 +952,22 @@ impl Scheduler {
     }
 }
 
+/// How often a live job writes its stages' `last_t` into the checkpoint.
+const LIVE_CHECKPOINT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// A job after acquisition, ready to run.
+struct Prepared {
+    job_id: JobId,
+    started: Instant,
+    acquire_secs: f64,
+    policy_name: String,
+    policy: IndexPolicy,
+    dag: Dag,
+    media: MediaItem,
+    opts: JobOptions,
+    cancel: CancellationToken,
+}
+
 /// Cache key per `docs/05-indexing-pipeline.md`: content hash, operator id
 /// and version, and the operator's parameters (provider, model, prompt
 /// hash, thresholds), hashed to a file name.
@@ -782,16 +983,28 @@ pub fn cache_key(content_hash: &str, op: &dyn Operator, params: &serde_json::Val
     format!("{}-{}", op.id(), &h.finalize().to_hex()[..24])
 }
 
-/// Drive one operator over its input channel. Returns items emitted. In
-/// replay mode the operator re-emits stored outputs once it has seen the
-/// media item and ignores everything else.
+/// What driving one operator came to: the error if it failed (or was
+/// cancelled), and the counts up to that point either way.
+struct StageOutcome {
+    result: Result<()>,
+    emitted: u64,
+    stored: u64,
+}
+
+/// Drive one operator over its input channel. Returns items emitted and
+/// rows stored. In replay mode the operator re-emits stored outputs once it
+/// has seen the media item and ignores everything else. In a live job every
+/// processed item moves the stage's clock (a tick to its head, so every
+/// operator that received the tick records `last_t = head`), and ticks
+/// move the budget's rolling window.
 async fn run_stage(
     op: Box<dyn Operator>,
     ctx: OpContext,
     mut rx: mpsc::Receiver<Item>,
     events: &EventBus,
     replay: bool,
-) -> Result<(u64, u64)> {
+    live: bool,
+) -> StageOutcome {
     let started = Instant::now();
     events.emit(Event::StageStarted {
         job: ctx.job,
@@ -836,7 +1049,14 @@ async fn run_stage(
                 item = rx.recv() => item,
             };
             let Some(item) = item else { break };
+            let time = if live { item.time() } else { None };
+            if let (true, Item::Tick { head }) = (live, &item) {
+                ctx.budget.advance(*head);
+            }
             let out = op.run(&ctx, OpInput { item }).await?;
+            if let Some(t) = time {
+                ctx.clock.advance(t);
+            }
             emitted += out.emitted;
             stored += out.stored;
         }
@@ -849,7 +1069,7 @@ async fn run_stage(
     // Close our end so upstream producers see the consumer gone.
     rx.close();
     let elapsed_ms = started.elapsed().as_millis() as u64;
-    match result {
+    let result = match result {
         Ok(()) => {
             debug!(stage = %ctx.stage, emitted, elapsed_ms, "stage finished");
             events.emit(Event::StageFinished {
@@ -858,7 +1078,7 @@ async fn run_stage(
                 items: emitted,
                 elapsed_ms,
             });
-            Ok((emitted, stored))
+            Ok(())
         }
         Err(e) => {
             warn!(stage = %ctx.stage, error = %e, "stage failed");
@@ -869,5 +1089,10 @@ async fn run_stage(
             });
             Err(e)
         }
+    };
+    StageOutcome {
+        result,
+        emitted,
+        stored,
     }
 }

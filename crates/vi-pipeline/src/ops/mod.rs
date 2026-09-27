@@ -17,6 +17,7 @@ pub mod subtitle_import;
 pub mod text_embed;
 pub mod thumbnail;
 pub mod vad;
+pub mod vad_stream;
 pub mod vlm_describe;
 
 pub use asr::Asr;
@@ -32,6 +33,7 @@ pub use subtitle_import::SubtitleImport;
 pub use text_embed::TextEmbed;
 pub use thumbnail::Thumbnail;
 pub use vad::Vad;
+pub use vad_stream::{SpeechScorer, VadStream};
 pub use vlm_describe::VlmDescribe;
 
 /// Operators this build knows how to construct.
@@ -41,6 +43,7 @@ pub const AVAILABLE: &[&str] = &[
     "phash",
     "thumbnail",
     "vad",
+    "vad_stream",
     "asr",
     "shot_boundary",
     "image_embed",
@@ -67,6 +70,7 @@ pub fn build(name: &str, config: &Config) -> Option<Box<dyn Operator>> {
             config.index.thumbnail_quality,
         ))),
         "vad" => Some(Box::new(Vad::new())),
+        "vad_stream" => Some(Box::new(VadStream::new())),
         "asr" => Some(Box::new(Asr::new())),
         "shot_boundary" => Some(Box::new(ShotBoundary::new())),
         "image_embed" => Some(Box::new(ImageEmbed::new())),

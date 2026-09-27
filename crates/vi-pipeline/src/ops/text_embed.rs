@@ -111,6 +111,7 @@ impl Operator for TextEmbed {
             ItemKind::TranscriptSpan,
             ItemKind::OcrSpan,
             ItemKind::Description,
+            ItemKind::Tick,
         ]
     }
 
@@ -123,6 +124,7 @@ impl Operator for TextEmbed {
             ItemKind::TranscriptSpan,
             ItemKind::OcrSpan,
             ItemKind::Description,
+            ItemKind::Tick,
         ]
     }
 
@@ -165,6 +167,12 @@ impl Operator for TextEmbed {
                 vi_core::Timestamp::ZERO,
             ),
             Item::Media(_) => return Ok(OpOutput::default()),
+            Item::Tick { .. } => {
+                // Live: embed what is waiting at every tick.
+                let mut st = self.state.lock().await;
+                let stored = self.flush(ctx, &mut st, true).await?;
+                return Ok(OpOutput { emitted: 0, stored });
+            }
             _ => return Err(ctx.err("expected a transcript or OCR span")),
         };
         if text.trim().is_empty() {
