@@ -141,3 +141,76 @@ def test_ask_one_records_verification_and_tally(tmp_path):
     assert row["tally"] == {"video_id": "V", "t0": 30.0, "t1": 38.0, "pieces": 2}
     assert row["calls"] == [{"tool": "view", "turn": 2, "ms": 5, "windows": 2, "flags": {"fps": 4}}]
     assert row["correct"] is True
+
+
+def test_ask_one_records_escalation(tmp_path):
+    """The runner keeps `done.escalated` on the row and marks the calls after
+    the `escalating to` status as the second pass (`pass: 2`), so a run file
+    can split the rows and the calls by pass."""
+    from eval.runners.answer import ask_one
+
+    events = [
+        {"type": "tool_call", "tool": "search", "turn": 1, "args": {"query": "x"}},
+        {"type": "tool_result", "tool": "search", "summary": "3 hits", "turn": 1, "ms": 4},
+        {"type": "status", "text": "escalating to gemini_pro"},
+        {"type": "tool_call", "tool": "search", "turn": 1, "args": {"query": "y"}},
+        {"type": "tool_result", "tool": "search", "summary": "2 hits", "turn": 1, "ms": 6},
+        {"type": "tool_call", "tool": "zoom", "turn": 2, "args": {"video_id": "V", "t": 3.0, "region": {"x": 0, "y": 0, "w": 0.5, "h": 0.5}}},
+        {"type": "tool_result", "tool": "zoom", "summary": "zoomed", "turn": 2, "ms": 9},
+        {"type": "token", "text": "Answer: B"},
+        {"type": "done", "partial": False, "reason": None, "usage": {"tool_calls": 3, "cost_usd": 0.5},
+         "escalated": {"provider": "gemini_pro", "model": "gemini-3.1-pro-preview", "cost_usd": 0.4, "tool_calls": 2,
+                       "first_predicted_text": "Answer: A", "first_reason": "tool-call cap (1) reached"}},
+    ]
+    lines = tmp_path / "events.jsonl"
+    lines.write_text("".join(json.dumps(e) + "\n" for e in events))
+    fake = tmp_path / "vidx"
+    fake.write_text(f"#!{sys.executable}\nimport sys\nsys.stdout.write(open({str(lines)!r}).read())\n")
+    fake.chmod(0o755)
+    q = Question(id="q1", benchmark="t", video_key="k", question="Which?", options=["1", "2"], answer="B")
+    row = ask_one(str(fake), None, "idx", "V", q, "agent", 0.3, 20, 400000, escalate="gemini_pro")
+    assert row["status"] == "ok", row
+    assert row["escalated"]["provider"] == "gemini_pro"
+    assert row["escalated"]["first_predicted_text"] == "Answer: A"
+    assert row["escalated"]["first_predicted"] == "A"
+    assert row["calls"] == [
+        {"tool": "search", "turn": 1, "ms": 4, "windows": 0},
+        {"tool": "search", "turn": 1, "ms": 6, "windows": 0, "pass": 2},
+        {"tool": "zoom", "turn": 2, "ms": 9, "windows": 0, "flags": {"region": True}, "pass": 2},
+    ]
+    assert row["correct"] is True
+    # Without escalation the row says so explicitly.
+    lines.write_text("".join(json.dumps(e) + "\n" for e in events[:2] + events[7:8] + [{"type": "done", "partial": False, "reason": None, "usage": {"tool_calls": 1}}]))
+    row = ask_one(str(fake), None, "idx", "V", q, "agent", 0.3, 20, 400000)
+    assert row["escalated"] is None and row["calls"] == [{"tool": "search", "turn": 1, "ms": 4, "windows": 0}]
+
+
+def test_ask_one_records_read_and_count_objects_flags(tmp_path):
+    """The runner records the 2026-10-02 tools' options per call: `read`'s `image` and
+    whether it named a region (`read_region`), `count_objects`'s `what` and `threshold`;
+    a `zoom` with a region keeps recording `region` alone."""
+    from eval.runners.answer import ask_one
+
+    events = [
+        {"type": "tool_call", "tool": "read", "turn": 1, "args": {"video_id": "V", "t": 190.0, "region": {"x": 0.1, "y": 0.2, "w": 0.5, "h": 0.3}, "image": True}},
+        {"type": "tool_result", "tool": "read", "summary": "4 lines", "turn": 1, "ms": 5},
+        {"type": "tool_call", "tool": "count_objects", "turn": 2, "args": {"video_id": "V", "t": 120.0, "what": "person", "threshold": 0.3}},
+        {"type": "tool_result", "tool": "count_objects", "summary": "2 candidates", "turn": 2, "ms": 7},
+        {"type": "tool_call", "tool": "zoom", "turn": 3, "args": {"video_id": "V", "t": 3.0, "region": {"x": 0, "y": 0, "w": 0.5, "h": 0.5}}},
+        {"type": "tool_result", "tool": "zoom", "summary": "zoomed", "turn": 3, "ms": 9},
+        {"type": "token", "text": "Answer: B"},
+        {"type": "done", "partial": False, "reason": None, "usage": {"tool_calls": 3}},
+    ]
+    lines = tmp_path / "events.jsonl"
+    lines.write_text("".join(json.dumps(e) + "\n" for e in events))
+    fake = tmp_path / "vidx"
+    fake.write_text(f"#!{sys.executable}\nimport sys\nsys.stdout.write(open({str(lines)!r}).read())\n")
+    fake.chmod(0o755)
+    q = Question(id="q1", benchmark="t", video_key="k", question="Which?", options=["1", "2"], answer="B")
+    row = ask_one(str(fake), None, "idx", "V", q, "agent", 0.3, 20, 400000)
+    assert row["calls"] == [
+        {"tool": "read", "turn": 1, "ms": 5, "windows": 0, "flags": {"image": True, "region": True, "read_region": True}},
+        {"tool": "count_objects", "turn": 2, "ms": 7, "windows": 0, "flags": {"what": "person", "threshold": 0.3}},
+        {"tool": "zoom", "turn": 3, "ms": 9, "windows": 0, "flags": {"region": True}},
+    ]
+    assert row["escalated"] is None and row["correct"] is True

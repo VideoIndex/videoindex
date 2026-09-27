@@ -59,23 +59,28 @@ def parse_letter(text: str, letters: list[str], options: list[str] | None = None
 
 
 def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question, policy: str, budget_usd: float, max_tool_calls: int, budget_tokens: int,
-            model: str | None = None, budget_secs: float = 120.0) -> dict:
+            model: str | None = None, budget_secs: float = 120.0, escalate: str | None = None) -> dict:
     cmd = [vi] + (["--config", config] if config else []) + [
         "ask", index, q.prompt(tools=policy == "agent"), "--json", "--video", video_id, "--policy", policy,
         "--budget-usd", str(budget_usd), "--max-tool-calls", str(max_tool_calls), "--budget-tokens", str(budget_tokens),
         "--budget-secs", str(budget_secs),
-    ] + (["--model", model] if model else [])
+    ] + (["--model", model] if model else []) + (["--escalate", escalate] if escalate else [])
     t = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True)
     ms = int((time.time() - t) * 1000)
     if proc.returncode != 0:
         return {"id": q.id, "status": "ask-failed", "error": proc.stderr[-400:], "ms": ms}
-    text, cites, tools, calls, usage, partial, reason, verification, tally = "", [], [], [], {}, False, None, None, None
+    text, cites, tools, calls, usage, partial, reason, verification, tally, escalated = "", [], [], [], {}, False, None, None, None, None
+    # Escalation (2026-10-02): a `status` "escalating to NAME" marks where the
+    # first pass ended; calls after it belong to the second pass (`pass: 2`).
+    ask_pass = 1
     for line in proc.stdout.splitlines():
         try:
             ev = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if ev["type"] == "status" and str(ev.get("text", "")).startswith("escalating to "):
+            ask_pass = 2
         if ev["type"] == "token":
             text += ev["text"]
         elif ev["type"] == "citation":
@@ -88,15 +93,18 @@ def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question,
             # Tool options worth reading back from the run file (EVAL-LESSONS: record
             # the arguments, not just the names): the look's flags, and whether a
             # `zoom` named a region.
-            flags = {k: args[k] for k in ("detail", "strip", "slow", "fps", "tiles", "page") if k in args}
+            flags = {k: args[k] for k in ("detail", "strip", "slow", "fps", "tiles", "page", "image", "what", "threshold") if k in args}
             if "region" in args:
                 flags["region"] = True
+                # `read` (2026-10-02): a region names where the text is; the check reads how often one was given.
+                if ev["tool"] == "read":
+                    flags["read_region"] = True
             calls.append({"tool": ev["tool"], "turn": ev.get("turn"), "ms": None,
                           "windows": len(args["windows"]) if isinstance(args.get("windows"), list) else (1 if "t0" in args else 0),
-                          **({"flags": flags} if flags else {})})
+                          **({"flags": flags} if flags else {}), **({"pass": 2} if ask_pass == 2 else {})})
         elif ev["type"] == "tool_result":
             for c in calls:
-                if c["tool"] == ev["tool"] and c["ms"] is None and c["turn"] == ev.get("turn"):
+                if c["tool"] == ev["tool"] and c["ms"] is None and c["turn"] == ev.get("turn") and (c.get("pass", 1) == ask_pass):
                     c["ms"] = ev.get("ms")
                     break
         elif ev["type"] == "done":
@@ -106,13 +114,20 @@ def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question,
             verification = ev.get("verification") or None
             # The tally's span: {video_id, t0, t1, pieces}, absent otherwise.
             tally = ev.get("tally") or None
+            # Escalation (2026-10-02): {provider, model, cost_usd, tool_calls, first_predicted_text, first_reason}.
+            escalated = ev.get("escalated") or None
     letter = parse_letter(text, q.letters, q.options)
+    if escalated:
+        # The first pass's own choice, for reading how often the second pass changed the answer.
+        escalated = {**escalated, "first_predicted_text": (escalated.get("first_predicted_text") or "").strip()[-600:],
+                     "first_predicted": parse_letter(escalated.get("first_predicted_text") or "", q.letters, q.options)}
     known = q.answer in q.letters
     return {
         "id": q.id, "status": "ok", "video_key": q.video_key, "task_types": q.task_types, "video_type": q.video_type,
         "answer": q.answer if known else None, "predicted": letter, "correct": (letter == q.answer) if known else None,
         "parsed": letter is not None, "kaggle_row": q.extra.get("kaggle_row"),
-        "text": text.strip()[-600:], "citations": cites, "tools": tools, "calls": calls, "usage": usage, "partial": partial, "stop_reason": reason, "verification": verification, "tally": tally, "ms": ms,
+        "text": text.strip()[-600:], "citations": cites, "tools": tools, "calls": calls, "usage": usage, "partial": partial, "stop_reason": reason, "verification": verification, "tally": tally,
+        "escalated": escalated, "ms": ms,
         "time_reference": q.time_reference,
     }
 
@@ -126,6 +141,7 @@ def main():
     ap.add_argument("--vi", default="target/release/vidx")
     ap.add_argument("--policy", default="agent")
     ap.add_argument("--model", help="chat model for the agent (a [providers.*] name or model id); default: the config's agent_llm role")
+    ap.add_argument("--escalate", help="escalation chat model (vidx ask --escalate): a second pass from scratch when the first ends at the cap or partial; the row stores `escalated`")
     ap.add_argument("--label", help="row label for the report (default: policy + model)")
     ap.add_argument("--budget-usd", type=float, default=0.5)
     ap.add_argument("--budget-tokens", type=int, default=120000)
@@ -170,13 +186,13 @@ def main():
                 results[r["id"]] = r
     todo = [q for q in qs if q.id not in results]
     config_record = {
-        "benchmark": a.benchmark, "policy": a.policy, "model": a.model, "label": a.label, "budget_usd": a.budget_usd, "budget_tokens": a.budget_tokens,
+        "benchmark": a.benchmark, "policy": a.policy, "model": a.model, "escalate": a.escalate, "label": a.label, "budget_usd": a.budget_usd, "budget_tokens": a.budget_tokens,
         "budget_secs": a.budget_secs, "max_tool_calls": a.max_tool_calls, "sample": n, "fraction": a.fraction, "seed": a.seed, "config": a.config, "index": a.index,
         "skipped_not_indexed": len(missing), "ids": a.ids,
         "vi_version": subprocess.run([a.vi, "--version"], capture_output=True, text=True).stdout.strip(),
         "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
-    print(f"{len(qs)} questions ({len(todo)} to run) with policy={a.policy} model={a.model or 'default'} jobs={a.jobs}", file=sys.stderr)
+    print(f"{len(qs)} questions ({len(todo)} to run) with policy={a.policy} model={a.model or 'default'} escalate={a.escalate or '-'} jobs={a.jobs}", file=sys.stderr)
 
     def flush():
         out_path.write_text(json.dumps({"config": config_record, "n_questions": len(qs), "results": list(results.values())}, indent=1))
@@ -184,11 +200,11 @@ def main():
     done = 0
     with ThreadPoolExecutor(max_workers=a.jobs) as ex:
         def ask_with_retry(q: Question) -> dict:
-            r = ask_one(a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens, a.model, a.budget_secs)
+            r = ask_one(a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens, a.model, a.budget_secs, a.escalate)
             tries = 0
             while r.get("status") == "ok" and not r.get("text") and tries < a.retry_empty:
                 tries += 1
-                again = ask_one(a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens, a.model, a.budget_secs)
+                again = ask_one(a.vi, a.config, a.index, vmap[q.video_key], q, a.policy, a.budget_usd, a.max_tool_calls, a.budget_tokens, a.model, a.budget_secs, a.escalate)
                 if again.get("status") != "ok":
                     # Keep the first (scored, empty) attempt rather than losing its spend.
                     r["retry_failed"] = again.get("error", again.get("status"))
