@@ -183,6 +183,7 @@ impl Index {
             k: opts.k.unwrap_or(10).clamp(1, 100) as usize,
             text_only: opts.text_only.unwrap_or(false),
             per_video_k: opts.per_video_k.map(|v| v.clamp(1, 100) as usize),
+            until: None,
         };
         let resp = vi_query::search(self.storage.as_ref(), Some(&self.providers), &req)
             .await

@@ -39,11 +39,11 @@ erDiagram
 | source_uri | text | Original location |
 | content_hash | blake3 | The **identity hash**: of the media file for a file; for a stream, of `"live:" + source key + start time` (`vi_core::model::live_identity_hash`, start as RFC 3339 UTC at whole seconds), so re-attaching to a running stream finds its row. Drives caching, dedup and `find_video_by_hash` |
 | title, description, channel, published_at | text/ts | From container or yt-dlp metadata |
-| duration | Timestamp | For a live video, the head: the latest decoded time, which grows |
+| duration | Timestamp | For a live video, the head: the latest decoded time, which grows (`Storage::set_live_progress` writes it every tick) |
 | start_wallclock | ts, nullable | Container metadata; for a stream, the programme date-time or ingest start |
 | probe | JSON | ffprobe-equivalent output; `probe["live"]` names the source and store for a stream |
 | index_state | enum | `acquired`, `coarse`, `fine`, `failed`, `live` (schema v3: coarse rows still arriving; readers treat it as coarse) |
-| watermark | Timestamp, nullable | Live only: the time up to which every coarse operator has committed its rows; answers read below it. `NULL` for batch videos (schema v3) |
+| watermark | Timestamp, nullable | Live only: the time up to which every coarse operator has committed its rows; answers read below it. Written with the head by `set_live_progress`. `NULL` for batch videos (schema v3) |
 | live_ended_at | ts, nullable | Live only: when the stream ended; `NULL` while live (schema v3) |
 
 A live video reports progress through `Event::LiveProgress { video, head, watermark, lag_by_stage }` on the event bus rather than a fraction; `vidx status` prints `live (head HH:MM:SS, watermark HH:MM:SS)` and its `--json` carries `head` and `watermark` per video. When the stream ends, the video moves to `coarse` and then `fine` like any other.
@@ -92,6 +92,8 @@ pub trait Storage: Send + Sync {
     async fn find_video_by_hash(&self, content_hash: &str) -> Result<Option<Video>>;
     async fn list_videos(&self) -> Result<Vec<Video>>;
     async fn set_index_state(&self, id: VideoId, state: IndexState) -> Result<()>;
+    async fn set_live_progress(&self, video: VideoId, head: Ts, watermark: Ts) -> Result<()>; // one tick: head into duration, watermark
+    async fn live_videos(&self) -> Result<Vec<Video>>;                  // index_state = live, oldest first
     async fn put_tracks(&self, t: &[Track]) -> Result<()>;
     async fn tracks(&self, video: VideoId) -> Result<Vec<Track>>;
     async fn put_segments(&self, s: &[Segment]) -> Result<()>;
@@ -106,6 +108,7 @@ pub trait Storage: Send + Sync {
     async fn put_descriptions(&self, d: &[Description]) -> Result<()>;
     async fn put_embeddings(&self, e: &[Embedding]) -> Result<()>;
     async fn put_provenance(&self, p: &Provenance) -> Result<ProvenanceId>;
+    async fn get_provenance(&self, id: ProvenanceId) -> Result<Option<Provenance>>;
     async fn get_embeddings(&self, model: &str, targets: &[(TargetKind, String)]) -> Result<Vec<Option<Vec<f32>>>>;
     async fn descriptions(&self, video: VideoId) -> Result<Vec<Description>>;
     async fn put_entities(&self, e: &[Entity], m: &[EntityMention]) -> Result<()>;
@@ -113,10 +116,14 @@ pub trait Storage: Send + Sync {
     async fn put_events(&self, e: &[Event]) -> Result<()>;
     async fn events(&self, video: VideoId) -> Result<Vec<Event>>;
     async fn delete_extractions(&self, video: VideoId) -> Result<u64>;
-    // search
+    // search; every query type takes `time_range: Option<TimeRange>` on the rows' start times
     async fn text_search(&self, q: &TextQuery) -> Result<Vec<Hit>>;    // BM25 / FTS
+    async fn find_mentions(&self, q: &MentionQuery) -> Result<Vec<VideoMentions>>; // exhaustive phrase counts per video
     async fn vector_search(&self, q: &VectorQuery) -> Result<Vec<Hit>>;
     async fn time_window(&self, video: VideoId, t0: Ts, t1: Ts, kinds: &[Kind]) -> Result<Window>;
+    // live feeds: the tail of time_window from a marker
+    async fn spans_since(&self, video: VideoId, kinds: &[Kind], since: Ts) -> Result<Vec<Span>>;
+    async fn segments_since(&self, video: VideoId, level: SegmentLevel, since: Ts) -> Result<Vec<Segment>>;
     // blobs
     async fn put_blob(&self, key: &BlobKey, bytes: Bytes) -> Result<()>;
     async fn get_blob(&self, key: &BlobKey) -> Result<Option<Bytes>>;
@@ -145,6 +152,14 @@ Implementations:
 Only the embedded backend ships in v1. The trait exists from day one so the pipeline and query layers never touch SQLite directly. The trait is implemented in `vi-index`; the record types live in `vi-core::model` so `vi-media` and `vi-pipeline` share them without depending on the storage crate.
 
 Writes to parent tables (videos, tracks, frame samples, segments) are upserts. `INSERT OR REPLACE` would delete and re-insert the row and the `ON DELETE CASCADE` constraints would silently drop every child row (see the decisions log in `vi_internal`).
+
+### Live progress and feeds
+
+A live indexer calls `set_live_progress(video, head, watermark)` once per tick. The head goes into the `duration` columns, because a live video's duration *is* its head (above): a separate head column would have been a second source of truth for `Video.duration`, `VideoStats.head` and `vidx status`, and would have lost the rational (only `duration_num/den` keep it). The watermark goes into the v3 watermark columns. Nothing else about the row moves, and there is no schema change for this. `live_videos()` lists the rows whose state is `live`, oldest first, so a server can find the streams it is serving after a restart.
+
+The feeds a live server polls between ticks are the tail of `time_window` from a marker: `spans_since(video, kinds, since)` returns the transcript spans that end after `since` and the OCR lines at or after it, in time order; `segments_since(video, level, since)` the segments of one level that end after it. The marker is a media time, normally the previous tick's watermark: under the watermark's meaning every row below it is already committed, so the rows a tick adds all end above the previous watermark, and an utterance that straddles it is reported rather than missed (a client that keeps rows by id sees it once). A shot that is still open is extended in place by `put_segments` and so appears at every tick until it closes.
+
+Every query type (`TextQuery`, `MentionQuery`, `VectorQuery`) takes `time_range: Option<TimeRange>` on the rows' start times, which is how `vi-query`'s `until` and the agent's "as of now" reach the storage layer; see the search details below.
 
 ## Embedded index directory layout
 
@@ -190,14 +205,16 @@ Properties:
 
 - FTS5 with the `unicode61` tokenizer and prefix indexes for spans and descriptions. BM25 ranking. Tantivy is an alternative if FTS5 ranking quality proves limiting; the trait hides the choice.
 - Vectors live in flat per-model files searched exactly (brute force, parallel); the `embeddings` table maps each row back to its target and the `.meta` file carries the video id and target kind so filters apply before scoring. An approximate index (Lance IVF-PQ or usearch HNSW) can replace the file behind the trait when tables grow past a few million rows.
+- Time filters: an FTS query with a `time_range` adds `AND t0_secs >= ? AND t0_secs < ?` (the OCR time, or the segment's start or frame's time for a description) before the limit, so the remaining rows keep the ranking the unbounded query gives them. The `.meta` file has no time column, so a bounded vector search over-fetches three times `k` nearest rows (twice `k` otherwise, for vanished targets) and drops those outside the range after resolving them through SQLite; when too many of the nearest rows lie after the bound the result is short of `k`. A time column in the sidecar is the fix, deferred to a later vector-file format bump.
+- `VectorStore` caches each model's row count when it opens the table; appends in the same process keep it current, and `VectorStore::refresh()` re-reads the counts from the file lengths for a reader in another process.
 - Temporal fusion, described in [06-query-and-agents](06-query-and-agents.md), happens above the storage layer.
 
 ## Schema versioning
 
-The schema version is a single integer in `manifest.json` and in a `schema_meta` table. Migrations are Rust functions registered in order (`vi_index::schema::MIGRATIONS`); `schema::migrate_to` builds an index at an older version for tests. Every migration is tested against fixture indexes produced by the previous version.
+The schema version is a single integer in `manifest.json` and in a `schema_meta` table. Migrations are Rust functions registered in order (`vi_index::schema::MIGRATIONS`); `schema::migrate_to` builds an index at an older version for tests. Every migration is tested against fixture indexes produced by the previous version. Each migration runs in an immediate (write-locked) transaction and re-reads the version under the lock, so several processes opening the same older index at once migrate it exactly once; the others wait on `busy_timeout` and find the work done (the evaluation night of 2026-09-30 saw two openers collide on the v3 `ALTER TABLE` before this).
 
 | Version | Change |
 |---|---|
 | 1 | Initial schema |
 | 2 | `embeddings.row`: an embedding knows its row in the model's vector file |
-| 3 | Live videos: `videos.watermark_num`, `watermark_den`, `watermark_secs`, `live_ended_at`, all nullable; `index_state` may be `live`. A v2 index opens as v3 after a copy to `meta.sqlite.v2.bak`; a build older than v3 refuses a v3 index (`SchemaTooNew`), so hosts upgrade `vidx` before receiving one |
+| 3 | Live videos: `videos.watermark_num`, `watermark_den`, `watermark_secs`, `live_ended_at`, all nullable; `index_state` may be `live`. A v2 index opens as v3 after a copy to `meta.sqlite.v2.bak`; a build older than v3 refuses a v3 index (`SchemaTooNew`), so hosts upgrade `vidx` before receiving one. Live progress (`set_live_progress`), the time filters and the since-feeds use these and the existing time columns; they add no version |

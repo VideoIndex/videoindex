@@ -274,6 +274,34 @@ impl VectorStore {
         Ok(n)
     }
 
+    /// Re-read every open table's row count from its file lengths, so a
+    /// reader in another process sees the rows a writer appended since the
+    /// table was opened (appends in this process keep the count current
+    /// already). A table whose files have gone is forgotten and reopens
+    /// from disk, or as empty, on its next use.
+    pub fn refresh(&self) -> Result<()> {
+        let mut tables = self.lock()?;
+        let mut gone = Vec::new();
+        for (model, t) in tables.iter_mut() {
+            let Ok(vec_meta) = std::fs::metadata(&t.vec_path) else {
+                gone.push(model.clone());
+                continue;
+            };
+            let by_vec = vec_meta.len().saturating_sub(HEADER) / (u64::from(t.dim) * 4);
+            let by_meta = std::fs::metadata(&t.meta_path)
+                .map(|m| m.len())
+                .unwrap_or(0)
+                / META_ROW;
+            // A writer between its two appends has more vectors than meta
+            // rows; only rows with both are usable.
+            t.count = by_vec.min(by_meta);
+        }
+        for model in gone {
+            tables.remove(&model);
+        }
+        Ok(())
+    }
+
     /// Row count (including dead rows) for a model, 0 if absent.
     pub fn count(&self, model: &str) -> Result<u64> {
         let mut tables = self.lock()?;
@@ -552,6 +580,38 @@ mod tests {
                 &[(EmbeddingId::new(), v1, TargetKind::Frame, &[1.0, 0.0])]
             )
             .is_err());
+    }
+
+    #[test]
+    fn refresh_sees_rows_appended_by_another_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = VectorStore::new(dir.path().join("vectors"));
+        let reader = VectorStore::new(dir.path().join("vectors"));
+        let v = VideoId::new();
+        let a = EmbeddingId::new();
+        writer
+            .append("m", 2, &[(a, v, TargetKind::Frame, &[1.0, 0.0])])
+            .unwrap();
+        assert_eq!(reader.count("m").unwrap(), 1, "opened after the first row");
+        let b = EmbeddingId::new();
+        writer
+            .append("m", 2, &[(b, v, TargetKind::Frame, &[0.0, 1.0])])
+            .unwrap();
+        // The reader cached the count when it opened the table.
+        assert_eq!(reader.count("m").unwrap(), 1);
+        assert_eq!(
+            reader.search("m", &[0.0, 1.0], &[], &[], 5).unwrap().len(),
+            1
+        );
+        reader.refresh().unwrap();
+        assert_eq!(reader.count("m").unwrap(), 2);
+        let hits = reader.search("m", &[0.0, 1.0], &[], &[], 5).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].embedding, b);
+        // A vanished table is forgotten rather than counted.
+        std::fs::remove_file(dir.path().join("vectors").join("m.vec")).unwrap();
+        reader.refresh().unwrap();
+        assert_eq!(reader.count("m").unwrap(), 0);
     }
 
     #[test]

@@ -40,7 +40,20 @@ pub fn migrate_to(conn: &Connection, target: u32) -> Result<u32> {
     let mut v = current_version(conn)?;
     let target = target.min(MIGRATIONS.len() as u32);
     while v < target {
-        let tx = conn.unchecked_transaction()?;
+        // Take the write lock before reading the version again: two
+        // processes opening the same older index used to both see the old
+        // version under a deferred transaction and both run the `ALTER
+        // TABLE`, the second failing with "duplicate column name". Under an
+        // immediate transaction the second waits (`busy_timeout`), then
+        // finds the work done.
+        let tx =
+            rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+        let now = current_version(&tx)?;
+        if now != v {
+            v = now;
+            tx.rollback()?;
+            continue;
+        }
         MIGRATIONS[v as usize](&tx)?;
         v += 1;
         tx.execute(
@@ -339,6 +352,41 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 3, "three FTS5 tables");
+    }
+
+    fn open_wal(p: &std::path::Path) -> Connection {
+        let c = Connection::open(p).unwrap();
+        c.busy_timeout(std::time::Duration::from_secs(30)).unwrap();
+        c.execute_batch("PRAGMA journal_mode = WAL;").unwrap();
+        c
+    }
+
+    #[test]
+    fn concurrent_openers_migrate_an_older_index_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.sqlite");
+        assert_eq!(migrate_to(&open_wal(&path), 2).unwrap(), 2);
+        // Four processes' worth of openers race to bring it to the current
+        // version; every one of them succeeds.
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let p = path.clone();
+                std::thread::spawn(move || migrate(&open_wal(&p)))
+            })
+            .collect();
+        for h in handles {
+            assert_eq!(h.join().unwrap().unwrap(), crate::SCHEMA_VERSION);
+        }
+        let c = open_wal(&path);
+        assert_eq!(current_version(&c).unwrap(), crate::SCHEMA_VERSION);
+        let n: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('videos') WHERE name = 'watermark_num'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "the column was added exactly once");
     }
 
     #[test]

@@ -77,6 +77,7 @@ pub async fn run_search(state: &AppState, ix: &OpenIndex, body: SearchBody) -> A
         k: body.k.clamp(1, 100),
         text_only: body.text_only,
         per_video_k: body.per_video_k.map(|v| v.clamp(1, 100)),
+        until: None,
     };
     let resp = vi_query::search(ix.storage.as_ref(), Some(&state.providers), &req).await?;
     to_json(&resp)

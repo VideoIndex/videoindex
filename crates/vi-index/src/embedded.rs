@@ -426,6 +426,26 @@ fn ocr_from_row(r: &Row<'_>) -> Result<OcrSpan> {
     })
 }
 
+fn provenance_from_row(r: &Row<'_>) -> Result<Provenance> {
+    let params: String = r.get("params")?;
+    let created: Option<String> = r.get("created_at")?;
+    Ok(Provenance {
+        id: parse_id(r.get("id")?, "provenance")?,
+        operator: r.get("operator")?,
+        operator_version: r.get::<_, i64>("operator_version")?.max(0) as u32,
+        provider: r.get("provider")?,
+        model: r.get("model")?,
+        model_version: r.get("model_version")?,
+        prompt_hash: r.get("prompt_hash")?,
+        params: serde_json::from_str(&params)?,
+        created_at: parse_dt(created)?.unwrap_or_else(Utc::now),
+        cost_usd: r.get("cost_usd")?,
+        tokens_in: r.get::<_, i64>("tokens_in")?.max(0) as u64,
+        tokens_out: r.get::<_, i64>("tokens_out")?.max(0) as u64,
+        latency_ms: r.get::<_, i64>("latency_ms")?.max(0) as u64,
+    })
+}
+
 fn description_from_row(r: &Row<'_>) -> Result<Description> {
     let tk: String = r.get("target_kind")?;
     let kind: String = r.get("kind")?;
@@ -441,6 +461,20 @@ fn description_from_row(r: &Row<'_>) -> Result<Description> {
         structured: structured.map(|s| serde_json::from_str(&s)).transpose()?,
         provenance_id: parse_id(r.get("provenance_id")?, "provenance")?,
     })
+}
+
+/// `AND <column> >= ? AND <column> < ?` with the two bound values in
+/// seconds when a time range is set; nothing otherwise. Appended to the
+/// search queries so a live index answers "as of `until`" without
+/// changing how the remaining rows rank.
+fn time_filter(range: Option<TimeRange>, column: &str) -> (String, Vec<f64>) {
+    match range {
+        Some(r) => (
+            format!(" AND {column} >= ? AND {column} < ?"),
+            vec![r.t0.as_secs_f64(), r.t1.as_secs_f64()],
+        ),
+        None => (String::new(), Vec::new()),
+    }
 }
 
 fn video_filter(videos: &[VideoId], column: &str) -> (String, Vec<String>) {
@@ -621,6 +655,50 @@ impl Storage for EmbeddedIndex {
                 params![id.to_string(), state.as_str()],
             )?;
             Ok(())
+        })
+        .await
+    }
+
+    async fn set_live_progress(
+        &self,
+        video: VideoId,
+        head: Timestamp,
+        watermark: Timestamp,
+    ) -> Result<()> {
+        self.with_conn(move |c| {
+            // The head is the video's duration while it is live (C1), so it
+            // goes into the duration columns; a separate head column would
+            // be a second source of truth for `Video.duration`,
+            // `VideoStats.head` and `vidx status`.
+            let n = c.execute(
+                "UPDATE videos SET duration_num = ?2, duration_den = ?3, duration_secs = ?4,
+                     watermark_num = ?5, watermark_den = ?6, watermark_secs = ?7
+                 WHERE id = ?1",
+                params![
+                    video.to_string(),
+                    head.num,
+                    head.den,
+                    head.as_secs_f64(),
+                    watermark.num,
+                    watermark.den,
+                    watermark.as_secs_f64(),
+                ],
+            )?;
+            if n == 0 {
+                return Err(IndexError::Invalid(format!("no video {video}")));
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    async fn live_videos(&self) -> Result<Vec<Video>> {
+        self.with_conn(|c| {
+            let mut st = c.prepare(&format!(
+                "SELECT {VIDEO_COLS} FROM videos WHERE index_state = 'live' ORDER BY created_at, id"
+            ))?;
+            let rows = st.query_map([], |r| Ok(video_from_row(r)))?;
+            rows.map(|r| r?).collect()
         })
         .await
     }
@@ -1105,6 +1183,20 @@ impl Storage for EmbeddedIndex {
         .await
     }
 
+    async fn get_provenance(&self, id: ProvenanceId) -> Result<Option<Provenance>> {
+        self.with_conn(move |c| {
+            c.query_row(
+                "SELECT id, operator, operator_version, provider, model, model_version, prompt_hash, params, created_at, cost_usd, tokens_in, tokens_out, latency_ms
+                 FROM provenance WHERE id = ?1",
+                [id.to_string()],
+                |r| Ok(provenance_from_row(r)),
+            )
+            .optional()?
+            .transpose()
+        })
+        .await
+    }
+
     async fn get_embeddings(
         &self,
         model: &str,
@@ -1333,18 +1425,26 @@ impl Storage for EmbeddedIndex {
             let mut hits = Vec::new();
             for kind in kinds {
                 let (filter, ids) = video_filter(&q.videos, "v.id");
+                let (time, secs) = time_filter(
+                    q.time_range,
+                    match kind {
+                        Kind::Transcript => "s.t0_secs",
+                        Kind::Ocr => "s.t_secs",
+                        _ => "COALESCE(seg.t0_secs, f.t_secs)",
+                    },
+                );
                 let sql = match kind {
                     Kind::Transcript => format!(
                         "SELECT s.id, v.id AS video_id, s.t0_num, s.t0_den, s.t1_num, s.t1_den, s.text, bm25(transcript_fts) AS score
                          FROM transcript_fts JOIN transcript_spans s ON s.rowid = transcript_fts.rowid
                          JOIN tracks tr ON tr.id = s.track_id JOIN videos v ON v.id = tr.video_id
-                         WHERE transcript_fts MATCH ?{filter} ORDER BY score LIMIT ?"
+                         WHERE transcript_fts MATCH ?{filter}{time} ORDER BY score LIMIT ?"
                     ),
                     Kind::Ocr => format!(
                         "SELECT s.id, v.id AS video_id, s.t_num AS t0_num, s.t_den AS t0_den, s.t_num AS t1_num, s.t_den AS t1_den, s.text, bm25(ocr_fts) AS score
                          FROM ocr_fts JOIN ocr_spans s ON s.rowid = ocr_fts.rowid
                          JOIN frame_samples f ON f.id = s.frame_sample_id JOIN tracks tr ON tr.id = f.track_id JOIN videos v ON v.id = tr.video_id
-                         WHERE ocr_fts MATCH ?{filter} ORDER BY score LIMIT ?"
+                         WHERE ocr_fts MATCH ?{filter}{time} ORDER BY score LIMIT ?"
                     ),
                     // Descriptions target a segment (a time range) or a frame
                     // sample (an instant); either way the hit needs a video and
@@ -1360,7 +1460,7 @@ impl Storage for EmbeddedIndex {
                          LEFT JOIN frame_samples f ON f.id = d.target_id AND d.target_kind = 'frame'
                          LEFT JOIN tracks tr ON tr.id = f.track_id
                          JOIN videos v ON v.id = COALESCE(seg.video_id, tr.video_id)
-                         WHERE descriptions_fts MATCH ?{filter} ORDER BY score LIMIT ?"
+                         WHERE descriptions_fts MATCH ?{filter}{time} ORDER BY score LIMIT ?"
                     ),
                     Kind::Segment | Kind::Frame => continue,
                 };
@@ -1368,6 +1468,9 @@ impl Storage for EmbeddedIndex {
                 let mut bound: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(fts.clone())];
                 for id in ids {
                     bound.push(Box::new(id));
+                }
+                for s in secs {
+                    bound.push(Box::new(s));
                 }
                 bound.push(Box::new(k));
                 let params_ref: Vec<&dyn rusqlite::ToSql> = bound.iter().map(|b| b.as_ref()).collect();
@@ -1425,6 +1528,14 @@ impl Storage for EmbeddedIndex {
                 };
                 for kind in &kinds {
                     let (filter, ids) = video_filter(&q.videos, "v.id");
+                    let (time, secs) = time_filter(
+                        q.time_range,
+                        match kind {
+                            Kind::Transcript => "s.t0_secs",
+                            Kind::Ocr => "s.t_secs",
+                            _ => "COALESCE(seg.t0_secs, f.t_secs)",
+                        },
+                    );
                     let sql = match kind {
                         Kind::Transcript => format!(
                             "SELECT * FROM (
@@ -1437,7 +1548,7 @@ impl Storage for EmbeddedIndex {
                                        FROM transcript_fts WHERE transcript_fts MATCH ?) m
                                  JOIN transcript_spans s ON s.rowid = m.rowid
                                  JOIN tracks tr ON tr.id = s.track_id JOIN videos v ON v.id = tr.video_id
-                                 WHERE 1{filter}
+                                 WHERE 1{filter}{time}
                                )
                              ) WHERE rn <= MAX(?, 1) ORDER BY video_id, t0_secs"
                         ),
@@ -1453,7 +1564,7 @@ impl Storage for EmbeddedIndex {
                                  FROM ocr_fts JOIN ocr_spans s ON s.rowid = ocr_fts.rowid
                                  JOIN frame_samples f ON f.id = s.frame_sample_id
                                  JOIN tracks tr ON tr.id = f.track_id JOIN videos v ON v.id = tr.video_id
-                                 WHERE ocr_fts MATCH ?{filter}
+                                 WHERE ocr_fts MATCH ?{filter}{time}
                                  GROUP BY v.id, s.text, CAST(s.t_secs / 60 AS INTEGER)
                                )
                              ) WHERE rn <= MAX(?, 1) ORDER BY video_id, t0_secs"
@@ -1474,7 +1585,7 @@ impl Storage for EmbeddedIndex {
                                  LEFT JOIN frame_samples f ON f.id = d.target_id AND d.target_kind = 'frame'
                                  LEFT JOIN tracks tr ON tr.id = f.track_id
                                  JOIN videos v ON v.id = COALESCE(seg.video_id, tr.video_id)
-                                 WHERE 1{filter}
+                                 WHERE 1{filter}{time}
                                )
                              ) WHERE rn <= MAX(?, 1) ORDER BY video_id, t0_secs"
                         ),
@@ -1484,6 +1595,9 @@ impl Storage for EmbeddedIndex {
                     let mut bound: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(fts.clone())];
                     for id in ids {
                         bound.push(Box::new(id));
+                    }
+                    for s in &secs {
+                        bound.push(Box::new(*s));
                     }
                     bound.push(Box::new(samples));
                     let params_ref: Vec<&dyn rusqlite::ToSql> =
@@ -1551,9 +1665,14 @@ impl Storage for EmbeddedIndex {
     async fn vector_search(&self, q: &VectorQuery) -> Result<Vec<Hit>> {
         let q = q.clone();
         let vectors = self.vectors.clone();
-        // Over-fetch so hits whose targets vanished can be dropped.
+        let time_range = q.time_range;
+        // Over-fetch so hits whose targets vanished can be dropped: twice
+        // `k` normally, three times when a time range will drop rows too
+        // (the vector files carry no time column to filter on before
+        // scoring; a later file format may add one).
+        let over = if time_range.is_some() { 3 } else { 2 };
         let raw = tokio::task::spawn_blocking(move || {
-            vectors.search(&q.model, &q.vector, &q.videos, &q.kinds, q.k.max(1) * 2)
+            vectors.search(&q.model, &q.vector, &q.videos, &q.kinds, q.k.max(1) * over)
         })
         .await??;
         if raw.is_empty() {
@@ -1579,6 +1698,9 @@ impl Storage for EmbeddedIndex {
                 let Some((hit_kind, t0, t1, text)) = resolve_target(c, kind, &target_id)? else {
                     continue;
                 };
+                if time_range.is_some_and(|r| !r.contains(t0)) {
+                    continue;
+                }
                 hits.push(Hit {
                     kind: hit_kind,
                     id: target_id,
@@ -1670,6 +1792,64 @@ impl Storage for EmbeddedIndex {
                     .collect::<Result<_>>()?;
             }
             Ok(w)
+        })
+        .await
+    }
+
+    async fn spans_since(
+        &self,
+        video: VideoId,
+        kinds: &[Kind],
+        since: Timestamp,
+    ) -> Result<Vec<Span>> {
+        let want_transcript = kinds.is_empty() || kinds.contains(&Kind::Transcript);
+        let want_ocr = kinds.is_empty() || kinds.contains(&Kind::Ocr);
+        self.with_conn(move |c| {
+            let vid = video.to_string();
+            let s = since.as_secs_f64();
+            let mut out: Vec<(f64, Span)> = Vec::new();
+            if want_transcript {
+                let mut st = c.prepare_cached(
+                    "SELECT s.* FROM transcript_spans s JOIN tracks tr ON tr.id = s.track_id
+                     WHERE tr.video_id = ?1 AND s.t1_secs > ?2 ORDER BY s.t0_secs",
+                )?;
+                for r in st.query_map(params![vid, s], |r| Ok(transcript_from_row(r)))? {
+                    let sp = r??;
+                    out.push((sp.t0.as_secs_f64(), Span::Transcript(sp)));
+                }
+            }
+            if want_ocr {
+                let mut st = c.prepare_cached(
+                    "SELECT o.* FROM ocr_spans o JOIN frame_samples f ON f.id = o.frame_sample_id
+                     JOIN tracks tr ON tr.id = f.track_id
+                     WHERE tr.video_id = ?1 AND o.t_secs >= ?2 ORDER BY o.t_secs",
+                )?;
+                for r in st.query_map(params![vid, s], |r| Ok(ocr_from_row(r)))? {
+                    let sp = r??;
+                    out.push((sp.t.as_secs_f64(), Span::Ocr(sp)));
+                }
+            }
+            out.sort_by(|a, b| a.0.total_cmp(&b.0));
+            Ok(out.into_iter().map(|(_, s)| s).collect())
+        })
+        .await
+    }
+
+    async fn segments_since(
+        &self,
+        video: VideoId,
+        level: SegmentLevel,
+        since: Timestamp,
+    ) -> Result<Vec<Segment>> {
+        self.with_conn(move |c| {
+            let mut st = c.prepare_cached(
+                "SELECT * FROM segments WHERE video_id = ?1 AND level = ?2 AND t1_secs > ?3 ORDER BY t0_secs",
+            )?;
+            let rows = st.query_map(
+                params![video.to_string(), level.as_str(), since.as_secs_f64()],
+                |r| Ok(segment_from_row(r)),
+            )?;
+            rows.map(|r| r?).collect()
         })
         .await
     }
@@ -2382,6 +2562,7 @@ mod tests {
                 videos: vec![],
                 kinds: vec![],
                 k: 5,
+                time_range: None,
             })
             .await
             .unwrap();
@@ -2401,6 +2582,7 @@ mod tests {
                 videos: vec![VideoId::new()],
                 kinds: vec![],
                 k: 5,
+                time_range: None,
             })
             .await
             .unwrap();
@@ -2412,6 +2594,7 @@ mod tests {
                 videos: vec![v.id],
                 kinds: vec![TargetKind::Segment],
                 k: 5,
+                time_range: None,
             })
             .await
             .unwrap();
@@ -2436,6 +2619,7 @@ mod tests {
                 videos: vec![],
                 kinds: vec![TargetKind::Description],
                 k: 5,
+                time_range: None,
             })
             .await
             .unwrap();
@@ -2455,6 +2639,7 @@ mod tests {
                 videos: vec![],
                 kinds: vec![],
                 k: 5,
+                time_range: None,
             })
             .await
             .unwrap();
@@ -2510,6 +2695,7 @@ mod tests {
             videos: vec![v.id],
             kinds: vec![TargetKind::Frame],
             k: 3,
+            time_range: None,
         };
         let hits = idx.vector_search(&q).await.unwrap();
         assert_eq!(hits.len(), 3);
@@ -2552,6 +2738,27 @@ mod tests {
         assert_eq!(idx.load_checkpoint(job).await.unwrap().unwrap(), state);
         assert!(idx.load_checkpoint(JobId::new()).await.unwrap().is_none());
         assert_eq!(idx.list_jobs().await.unwrap().len(), 1);
+
+        // Provenance rows read back whole; an unknown id is `None`.
+        let mut prov = Provenance::local("ask", 1, serde_json::json!({"until": 60.0}));
+        prov.prompt_hash = Some("abc123".into());
+        prov.tokens_in = 7;
+        idx.put_provenance(&prov).await.unwrap();
+        let back = idx.get_provenance(prov.id).await.unwrap().unwrap();
+        assert_eq!(back.id, prov.id);
+        assert_eq!(back.operator, "ask");
+        assert_eq!(back.prompt_hash.as_deref(), Some("abc123"));
+        assert_eq!(back.params, prov.params);
+        assert_eq!(back.tokens_in, 7);
+        assert_eq!(
+            back.created_at.timestamp_millis(),
+            prov.created_at.timestamp_millis()
+        );
+        assert!(idx
+            .get_provenance(ProvenanceId::new())
+            .await
+            .unwrap()
+            .is_none());
 
         let before = idx.manifest().await.unwrap();
         idx.put_video(&video("h3")).await.unwrap();
@@ -2665,6 +2872,7 @@ mod tests {
             kinds: vec![],
             prefix: false,
             samples_per_video: 2,
+            time_range: None,
         };
         let r = idx.find_mentions(&q).await.unwrap();
         assert_eq!(r.len(), 2, "{r:#?}");
@@ -2704,6 +2912,7 @@ mod tests {
                 kinds: vec![Kind::Transcript],
                 prefix: true,
                 samples_per_video: 0,
+                time_range: None,
             })
             .await
             .unwrap();
@@ -2717,6 +2926,7 @@ mod tests {
                 kinds: vec![],
                 prefix: false,
                 samples_per_video: 1,
+                time_range: None,
             })
             .await
             .unwrap();

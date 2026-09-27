@@ -60,6 +60,7 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
         k: args.k,
         text_only: args.text_only,
         per_video_k: args.per_video_k,
+        until: None,
     };
     let started = std::time::Instant::now();
     let resp = search(&idx, Some(&providers), &req).await?;
