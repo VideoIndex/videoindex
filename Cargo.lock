@@ -3706,6 +3706,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "url",
  "vi-core",
  "vi-testkit",

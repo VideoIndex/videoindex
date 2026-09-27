@@ -39,6 +39,24 @@ Runs in the sandboxed `vi-media` worker. Two independent streams:
 
 Hardware decode is auto-detected: VideoToolbox, NVDEC, VAAPI, else software. Decoding falls back to software on any hardware error for that job.
 
+#### The recording as the decode source
+
+A stream is never decoded from the network. The live ingest (`videoindex-live`'s realtime-core) writes it into a segmented recording, the live store of [04-data-model](04-data-model.md#the-live-store-the-indexs-neighbour), and the worker decodes from that recording through `MediaInput::Segments`. Reconnects, playlist logic and wall-clock mapping stay in the ingest; the recording is also the DVR that keeps `view` working on a live video.
+
+`vi_media::decode_live(cfg, LiveDecodeRequest { input, fps, max_dim, sample_rate, chunk_secs, tick_secs })` is the live counterpart of `decode_video` plus `decode_audio`: one long-lived worker per stream makes one pass over the feed and yields `LiveItem`s in packet order:
+
+| Item | Meaning |
+|---|---|
+| `Frame(Arc<FrameBuffer>)` | a sampled frame at `fps`, `t` on the recording's timeline |
+| `Audio(AudioChunk)` | `chunk_secs` of 16 kHz mono PCM, chunks contiguous and timed by sample count from the first sample (the file decoder's rule), so chunk boundaries do not depend on where segments are cut |
+| `Tick { head }` | everything up to `head` has been delivered; emitted after the segment whose end crossed another `tick_secs` of stream time, and once more at the head before `End`. `head` is a listed segment's end, never past the last one |
+| `Gap { t0, t1 }` | the index has no media for `[t0, t1)`; the audio run is flushed before it and the clock re-anchored after it; frame times skip it |
+| `End` | the index says `ended`, or the feed is not followed and the last listed segment is done |
+
+Inside the worker every segment is opened on its own (one libav input context per segment: the S0.5 measurement put a fresh open at about 100 ms, a third of the budget, and reading TS segments as one byte stream corrupts the last packet of each), the video decoder is rebuilt per segment (segments start at a keyframe), and the audio decoder and resampler continue across contiguous segments so nothing is lost at the cut. Times come from the index, `entry.t0` plus the offset from the segment's first video PTS, for audio as for video. With `follow` set on the feed the worker waits at the index for the next segment (100 ms poll; the worker's per-message idle timeout applies between segments, so `media.worker.timeout_secs` bounds how long a stalled writer is tolerated) and returns when the index says `ended`.
+
+Window decodes (`decode_video` or `decode_audio` with `t0`/`t1`) over `MediaInput::Segments` open only the segments that hold a sampling target inside the window (`SegmentIndex::covering`, then skipping segments no target falls in), log each opened file at debug level, and sample across them on the recording's timeline: a 5 s window at 1 fps over 2 s segments opens three files, which is how `view` on a live video stays under its latency budget. The file paths of `decode_video` and `decode_audio` are untouched by all of this: batch indexing produces the same rows as before.
+
 ### Audio operators
 
 | Operator | Where | Output |

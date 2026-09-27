@@ -146,6 +146,34 @@ impl From<SegmentFeed> for MediaInput {
     }
 }
 
+impl From<&str> for MediaInput {
+    fn from(path: &str) -> Self {
+        Self::File {
+            path: PathBuf::from(path),
+        }
+    }
+}
+
+impl From<String> for MediaInput {
+    fn from(path: String) -> Self {
+        Self::File {
+            path: PathBuf::from(path),
+        }
+    }
+}
+
+impl From<&String> for MediaInput {
+    fn from(path: &String) -> Self {
+        Self::File {
+            path: PathBuf::from(path),
+        }
+    }
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// One complete segment on disk.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SegmentEntry {
@@ -163,6 +191,52 @@ pub struct SegmentEntry {
     /// date-time, RTMP arrival time); `None` for replays and fixtures.
     #[serde(default)]
     pub wallclock: Option<DateTime<Utc>>,
+    /// True when the segment's in-file PTS do not continue the previous
+    /// segment's (an HLS `EXT-X-DISCONTINUITY`, an encoder restart). The
+    /// decoder re-anchors its audio clock there; the timeline itself comes
+    /// from `t0`, so nothing else changes. Absent in the JSON when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub discontinuity: bool,
+}
+
+/// A range of media time with no segments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SegmentGap {
+    /// Inclusive start.
+    pub t0: Timestamp,
+    /// Exclusive end.
+    pub t1: Timestamp,
+    /// Why the range is missing, as the writer names it (`discontinuity`,
+    /// `window_overrun`, `fetch`, `expired`, `recovered`, `other`); absent
+    /// in the JSON when the writer gave none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl SegmentGap {
+    /// A gap with an optional reason.
+    pub fn new(t0: Timestamp, t1: Timestamp, reason: Option<&str>) -> Self {
+        Self {
+            t0,
+            t1,
+            reason: reason.map(str::to_string),
+        }
+    }
+
+    /// The gap as a half-open range, `None` if it is empty or inverted.
+    pub fn range(&self) -> Option<TimeRange> {
+        TimeRange::new(self.t0, self.t1)
+    }
+}
+
+impl From<TimeRange> for SegmentGap {
+    fn from(r: TimeRange) -> Self {
+        Self {
+            t0: r.t0,
+            t1: r.t1,
+            reason: None,
+        }
+    }
 }
 
 /// The index of a segmented recording.
@@ -177,9 +251,9 @@ pub struct SegmentIndex {
     /// Segments in `seq` order.
     pub segments: Vec<SegmentEntry>,
     /// Ranges of media time with no segments (source discontinuities,
-    /// expired retention).
+    /// expired retention), each with the writer's reason when it gave one.
     #[serde(default)]
-    pub gaps: Vec<TimeRange>,
+    pub gaps: Vec<SegmentGap>,
     /// True once the writer has closed the recording; no further segments
     /// will appear.
     #[serde(default)]
@@ -280,6 +354,7 @@ mod tests {
             t1: Timestamp::from_secs(t1),
             bytes: 1,
             wallclock: None,
+            discontinuity: false,
         }
     }
 
@@ -313,13 +388,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = SegmentIndex::path_in(dir.path());
         let mut idx = index();
-        idx.gaps
-            .push(TimeRange::new(Timestamp::from_secs(10), Timestamp::from_secs(14)).unwrap());
+        idx.gaps.push(SegmentGap::from(
+            TimeRange::new(Timestamp::from_secs(10), Timestamp::from_secs(14)).unwrap(),
+        ));
         idx.save(&p).unwrap();
         assert!(!dir.path().join("index.json.tmp").exists());
         let back = SegmentIndex::load(&p).unwrap();
         assert_eq!(back, idx);
         assert!(!back.ended);
+        assert_eq!(
+            back.gaps[0].range(),
+            TimeRange::new(Timestamp::from_secs(10), Timestamp::from_secs(14))
+        );
+        // A gap without a reason and a segment without a discontinuity keep
+        // the old JSON shape: neither key is written.
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(!text.contains("reason"), "{text}");
+        assert!(!text.contains("discontinuity"), "{text}");
         // `ended`, `gaps` and `wallclock` default when absent.
         std::fs::write(
             &p,
@@ -330,6 +415,46 @@ mod tests {
         assert_eq!(back.segments.len(), 1);
         assert!(back.gaps.is_empty() && !back.ended);
         assert_eq!(back.segments[0].wallclock, None);
+        assert!(!back.segments[0].discontinuity);
+    }
+
+    #[test]
+    fn discontinuity_and_gap_reason_survive_a_save() {
+        // The shape the live store writes (realtime-core, S0): a per-segment
+        // `discontinuity` flag and a `reason` per gap. Both must round-trip
+        // through `load` and `save`, so the decoder can rewrite an index
+        // without losing what the writer recorded.
+        let dir = tempfile::tempdir().unwrap();
+        let p = SegmentIndex::path_in(dir.path());
+        std::fs::write(
+            &p,
+            r#"{"schema":1,"timebase":{"num":1,"den":90000},"ended":false,
+                "segments":[
+                  {"seq":1,"file":"seg/000001.ts","t0":{"num":0,"den":1},"t1":{"num":2,"den":1},"bytes":3},
+                  {"seq":2,"file":"seg/000002.ts","t0":{"num":6,"den":1},"t1":{"num":8,"den":1},"bytes":3,"discontinuity":true}],
+                "gaps":[{"t0":{"num":2,"den":1},"t1":{"num":6,"den":1},"reason":"window_overrun"}],
+                "retention":{"max_hours":12,"max_gb":10}}"#,
+        )
+        .unwrap();
+        let idx = SegmentIndex::load(&p).unwrap();
+        assert!(!idx.segments[0].discontinuity);
+        assert!(idx.segments[1].discontinuity);
+        assert_eq!(idx.gaps.len(), 1);
+        assert_eq!(idx.gaps[0].reason.as_deref(), Some("window_overrun"));
+        assert_eq!(
+            idx.gaps[0].range(),
+            TimeRange::new(Timestamp::from_secs(2), Timestamp::from_secs(6))
+        );
+        idx.save(&p).unwrap();
+        let back = SegmentIndex::load(&p).unwrap();
+        assert_eq!(back, idx);
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(text.contains(r#""discontinuity": true"#), "{text}");
+        assert!(text.contains(r#""reason": "window_overrun""#), "{text}");
+        assert_eq!(
+            SegmentGap::new(Timestamp::from_secs(1), Timestamp::from_secs(1), Some("x")).range(),
+            None
+        );
     }
 
     #[test]
@@ -361,6 +486,11 @@ mod tests {
         assert_eq!(
             json,
             serde_json::json!({"kind": "file", "path": "/tmp/a.mp4"})
+        );
+        assert_eq!(MediaInput::from("/tmp/a.mp4"), MediaInput::from(&p));
+        assert_eq!(
+            MediaInput::from(String::from("/tmp/a.mp4")),
+            MediaInput::from(&p)
         );
     }
 

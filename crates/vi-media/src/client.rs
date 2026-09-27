@@ -18,8 +18,8 @@ use crate::error::{MediaError, Result};
 use crate::frame::{FrameBuffer, FrameMeta, PixelFormat};
 use crate::probe::Probe;
 use crate::protocol::{
-    read_msg_async, write_msg_async, AudioDecodeRequest, Request, Response, VideoDecodeRequest,
-    PROTOCOL_VERSION,
+    read_msg_async, write_msg_async, AudioDecodeRequest, LiveDecodeRequest, Request, Response,
+    VideoDecodeRequest, PROTOCOL_VERSION,
 };
 use crate::sandbox;
 use crate::segments::MediaInput;
@@ -251,6 +251,10 @@ impl Session {
                 req,
                 shm: region.spec().clone(),
             },
+            Request::DecodeLive { req, .. } => Request::DecodeLive {
+                req,
+                shm: region.spec().clone(),
+            },
             other => other,
         };
         worker.send(&req).await?;
@@ -430,6 +434,20 @@ impl FrameStream {
     }
 }
 
+/// Bytes one delivered frame needs. The delivered frame is at most `max_dim`
+/// on its longest side, so `max_dim²` pixels bounds it; without a `max_dim`
+/// the source size must be known, which costs a probe.
+async fn frame_slot_size(cfg: &WorkerConfig, input: &MediaInput, max_dim: u32) -> Result<usize> {
+    if max_dim > 0 {
+        return Ok(PixelFormat::Rgb24.frame_size(max_dim, max_dim));
+    }
+    let p = probe(cfg, input.clone()).await?;
+    let s = p
+        .video_stream()
+        .ok_or_else(|| MediaError::NoStream("video", input.display()))?;
+    Ok(PixelFormat::Rgb24.frame_size(s.width.unwrap_or(1920), s.height.unwrap_or(1080)))
+}
+
 /// Start decoding video. Frames arrive as `Arc<FrameBuffer>` in RGB24.
 pub async fn decode_video(cfg: &WorkerConfig, req: VideoDecodeRequest) -> Result<FrameStream> {
     req.check()?;
@@ -437,18 +455,7 @@ pub async fn decode_video(cfg: &WorkerConfig, req: VideoDecodeRequest) -> Result
     if req.threads == 0 {
         req.threads = cfg.decode_threads;
     }
-    // Slot size: the delivered frame is at most max_dim on its longest side,
-    // so max_dim² pixels bounds it. Without a max_dim we must know the source
-    // size, which costs a probe.
-    let slot_size = if req.max_dim > 0 {
-        PixelFormat::Rgb24.frame_size(req.max_dim, req.max_dim)
-    } else {
-        let p = probe(cfg, &req.path).await?;
-        let s = p
-            .video_stream()
-            .ok_or_else(|| MediaError::NoStream("video", req.path.display().to_string()))?;
-        PixelFormat::Rgb24.frame_size(s.width.unwrap_or(1920), s.height.unwrap_or(1080))
-    };
+    let slot_size = frame_slot_size(cfg, &req.input, req.max_dim).await?;
     let session = Session::open(
         cfg,
         Request::DecodeVideo {
@@ -564,4 +571,165 @@ pub async fn decode_audio(cfg: &WorkerConfig, req: AudioDecodeRequest) -> Result
     )
     .await?;
     Ok(AudioStream { session })
+}
+
+/// One item of a live decode session, in the order the worker produced
+/// them: frames and chunks interleave as the segments' packets do; a `Tick`
+/// follows the segment that crossed another `tick_secs` of stream time; a
+/// `Gap` precedes the first item after a hole in the recording.
+#[derive(Debug)]
+pub enum LiveItem {
+    /// A chunk of mono PCM on the recording's timeline.
+    Audio(AudioChunk),
+    /// A sampled frame; `t` is on the recording's timeline.
+    Frame(Arc<FrameBuffer>),
+    /// Everything up to `head` has been delivered. `head` is never past the
+    /// end of the last segment the index listed.
+    Tick {
+        /// Stream time decoded so far.
+        head: Timestamp,
+    },
+    /// The recording has no media for `[t0, t1)`; the times of later items
+    /// skip it.
+    Gap {
+        /// Start of the hole.
+        t0: Timestamp,
+        /// End of the hole.
+        t1: Timestamp,
+    },
+    /// The recording ended (the index says `ended`, or it was not being
+    /// followed and the last listed segment is done). The last item.
+    End,
+}
+
+/// A live decode session over a segment feed: one long-lived worker, one
+/// pass, frames and audio and ticks together. See [`decode_live`].
+pub struct LiveStream {
+    session: Session,
+    ended: bool,
+}
+
+impl std::fmt::Debug for LiveStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveStream")
+            .field("info", &self.session.info)
+            .field("ended", &self.ended)
+            .finish()
+    }
+}
+
+impl LiveStream {
+    /// Geometry and timebase of the video stream, from the first segment.
+    pub fn info(&self) -> &SessionInfo {
+        &self.session.info
+    }
+
+    /// Final counts (`items` is frames plus chunks); `None` until `End`.
+    pub fn stats(&self) -> Option<SessionStats> {
+        self.session.stats
+    }
+
+    /// Next item; `Some(LiveItem::End)` once when the session ends, then
+    /// `None`. Between segments of a following feed this waits for the
+    /// writer, bounded by the worker's idle timeout.
+    pub async fn next(&mut self) -> Result<Option<LiveItem>> {
+        if self.ended {
+            return Ok(None);
+        }
+        loop {
+            match self.session.next_response().await? {
+                None => {
+                    self.ended = true;
+                    return Ok(Some(LiveItem::End));
+                }
+                Some(Response::Frame {
+                    slot,
+                    len,
+                    width,
+                    height,
+                    stride,
+                    format,
+                    pts,
+                    t,
+                    is_keyframe,
+                }) => {
+                    let guard = self.session.guard(slot, len);
+                    let meta = FrameMeta {
+                        width,
+                        height,
+                        stride,
+                        format,
+                        pts,
+                        t,
+                        is_keyframe,
+                        source_width: self.session.info.source_width,
+                        source_height: self.session.info.source_height,
+                    };
+                    return Ok(Some(LiveItem::Frame(FrameBuffer::shared(meta, guard))));
+                }
+                Some(Response::AudioChunk {
+                    slot,
+                    len,
+                    t0,
+                    t1,
+                    sample_rate,
+                    samples,
+                }) => {
+                    let guard = self.session.guard(slot, len);
+                    let bytes = guard.as_slice();
+                    let n = samples.min(bytes.len() / 2);
+                    let pcm: Vec<i16> = bytes[..n * 2]
+                        .chunks_exact(2)
+                        .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                        .collect();
+                    drop(guard);
+                    return Ok(Some(LiveItem::Audio(AudioChunk {
+                        t0,
+                        t1,
+                        sample_rate,
+                        samples: pcm,
+                    })));
+                }
+                Some(Response::Tick { head }) => return Ok(Some(LiveItem::Tick { head })),
+                Some(Response::Gap { t0, t1 }) => return Ok(Some(LiveItem::Gap { t0, t1 })),
+                Some(other) => warn!("ignoring unexpected worker message {other:?}"),
+            }
+        }
+    }
+}
+
+/// Decode a growing recording once (live C2): one worker for the stream's
+/// lifetime, one libav context per segment, the recording's timeline from
+/// the index. With `follow` set on the feed the worker waits at the index
+/// for the next segment (the idle timeout applies between segments) and
+/// ends when the index says `ended`; otherwise it ends after the last
+/// listed segment. The parent's `Config.media.worker.timeout_secs` should
+/// exceed the longest pause the writer may take.
+pub async fn decode_live(cfg: &WorkerConfig, req: LiveDecodeRequest) -> Result<LiveStream> {
+    req.check()?;
+    let mut req = req;
+    if req.threads == 0 {
+        req.threads = cfg.decode_threads;
+    }
+    // One region carries frames and chunks; a slot must hold either.
+    let slot_size = frame_slot_size(cfg, &req.input, req.max_dim)
+        .await?
+        .max(req.chunk_samples() * 2);
+    let session = Session::open(
+        cfg,
+        Request::DecodeLive {
+            req,
+            shm: crate::shm::ShmSpec {
+                path: PathBuf::new(),
+                slot_size: 0,
+                slots: 0,
+            },
+        },
+        slot_size,
+    )
+    .await?;
+    Ok(LiveStream {
+        session,
+        ended: false,
+    })
 }

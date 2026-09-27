@@ -169,14 +169,15 @@ A stream is recorded, while it runs, into a segmented local store next to the in
 
 ```
 <media-cache>/live/<video-id>/
-  index.json            { schema: 1, timebase: {num, den}, segments: [{ seq, file, t0, t1, bytes, wallclock? }], gaps: [{t0, t1}], ended }
+  index.json            { schema: 1, timebase: {num, den}, segments: [{ seq, file, t0, t1, bytes, wallclock?, discontinuity? }], gaps: [{t0, t1, reason?}], ended }
   seg/000001.ts …       2 s MPEG-TS segments (audio + video, codec copy)
 ```
 
-- `segments` are in `seq` order and contiguous unless a range appears in `gaps`; `t0`/`t1` are `Timestamp` rationals on the stream's media timeline (in-segment PTS keep that timeline, `-reset_timestamps 0` style), `wallclock` is the source's programme date-time for `t0` when it has one, `ended` is set once the writer has closed the recording.
+- `segments` are in `seq` order and contiguous unless a range appears in `gaps`; `t0`/`t1` are `Timestamp` rationals on the stream's media timeline, `wallclock` is the source's programme date-time for `t0` when it has one, `ended` is set once the writer has closed the recording.
+- **The index is the timeline.** libav reports a segment's times from that segment's own start, so the decoder places a frame or sample at in-segment PTS `p` at `t0 + (p − base)`, where `base` is the segment's first video PTS (its first audio PTS when it has no video). The in-file PTS therefore need not continue across segments; when they do not (an HLS `EXT-X-DISCONTINUITY`, an encoder restart) the writer sets `discontinuity: true` on the first segment after the break and the decoder re-anchors its audio clock there. A hole between consecutive segments (`t0` after the previous `t1`) is a gap: the times of everything after it skip the hole, and a live decode reports it as a `Gap`. `gaps` records the same holes for readers with the writer's `reason` (`discontinuity`, `window_overrun`, `fetch`, `expired`, `recovered`, `other`); both new fields are optional in the JSON and absent when false or unset, so an index written before them reads unchanged.
 - Writers append a segment by writing `seg/NNNNNN.ts.tmp`, renaming it, then rewriting `index.json` through a temporary file and rename, so a reader never lists a partial segment. `SegmentIndex::covering(t0, t1)` names the segments a window decode must open.
 - A truncated or unreadable `index.json` is a `protocol` error naming the file; a newer `schema` is refused like a newer index schema.
-- Probes and decodes name their source through `vi_media::MediaInput`: `File { path }` or `Segments(SegmentFeed { dir, follow })`. A probe over a feed reads `index.json` and the first segment, never `stat`s a single file, and reports `duration: None` while `follow` is set (`Probe.duration` is optional for that reason; batch callers treat `None` as zero).
+- Probes and decodes name their source through `vi_media::MediaInput`: `File { path }` or `Segments(SegmentFeed { dir, follow })`. A probe over a feed reads `index.json` and the first segment, never `stat`s a single file, and reports `duration: None` while `follow` is set (`Probe.duration` is optional for that reason; batch callers treat `None` as zero). Every decode request (`VideoDecodeRequest`, `AudioDecodeRequest`, `LiveDecodeRequest`) carries a `MediaInput`; paths convert into one, so file callers are unchanged. How the recording is decoded is in [05-indexing-pipeline](05-indexing-pipeline.md#the-recording-as-the-decode-source).
 - The test fixture exists in this layout too: `vi_testkit::fixture_segments_dir()` is the 2-minute fixture cut into 60 segments, and `vi_testkit::PacedWriter` replays it into a fresh directory at any speed.
 
 Properties:

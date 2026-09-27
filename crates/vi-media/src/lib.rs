@@ -10,7 +10,8 @@
 //! - [`worker`]: the decode worker process. All libav calls happen there, in
 //!   a child process, so a crash in a codec never takes the index down.
 //! - [`client`]: the parent-side API: [`client::probe`],
-//!   [`client::decode_video`], [`client::decode_audio`].
+//!   [`client::decode_video`], [`client::decode_audio`] and, over a growing
+//!   recording, [`client::decode_live`].
 //! - [`protocol`] and [`shm`]: the length-prefixed pipe protocol and the
 //!   shared-memory slots frames travel through.
 //! - [`segments`]: the segment index of a live store, shared by the writer
@@ -44,15 +45,15 @@ mod decode;
 
 pub use acquire::{Acquired, Acquirer, LocalFile, Source, YtDlp};
 pub use client::{
-    decode_audio, decode_video, probe, worker_info, AudioChunk, AudioStream, FrameStream,
-    WorkerInfo,
+    decode_audio, decode_live, decode_video, probe, worker_info, AudioChunk, AudioStream,
+    FrameStream, LiveItem, LiveStream, WorkerInfo,
 };
 pub use error::{MediaError, Result};
 pub use frame::{FrameBuffer, PixelFormat};
 pub use probe::{ChapterInfo, Probe, StreamInfo};
-pub use protocol::{AudioDecodeRequest, VideoDecodeRequest};
+pub use protocol::{AudioDecodeRequest, LiveDecodeRequest, VideoDecodeRequest};
 pub use remote::{Http, ObjectStore};
-pub use segments::{MediaInput, SegmentEntry, SegmentFeed, SegmentIndex};
+pub use segments::{MediaInput, SegmentEntry, SegmentFeed, SegmentGap, SegmentIndex};
 
 /// Argument that makes the `vidx` binary (or any host binary) act as the decode
 /// worker. Hosts check `std::env::args().nth(1) == Some(WORKER_ARG)` before
