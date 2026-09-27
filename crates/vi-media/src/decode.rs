@@ -1247,10 +1247,18 @@ impl AudioChunker {
         }
         let key = (aframe.format(), aframe.channels(), aframe.rate());
         if self.resampler.as_ref().is_none_or(|(_, k)| *k != key) {
+            // A frame without a named layout (some PCM demuxers) still has
+            // a channel count; swresample wants a layout on both sides.
+            let layout = aframe.channel_layout();
+            let layout = if layout.is_empty() || layout.channels() == 0 {
+                ChannelLayout::default(i32::from(aframe.channels()))
+            } else {
+                layout
+            };
             self.resampler = Some((
                 resampling::Context::get(
                     aframe.format(),
-                    aframe.channel_layout(),
+                    layout,
                     aframe.rate(),
                     Sample::I16(ff::format::sample::Type::Packed),
                     ChannelLayout::default(1),
