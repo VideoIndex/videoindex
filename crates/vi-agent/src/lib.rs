@@ -20,3 +20,11 @@ pub use agent::{Agent, AskBudget, AskEvent, AskRequest, AskUsage, Collected};
 pub use policy::{Policy, RetrievalOnlyPolicy, Step};
 pub use tools::{ToolCall, ToolContext, ToolOutput};
 pub use view::{render_view, ViewRequest, ViewResult};
+
+// Live (C5): module tools, the `until` clamp and media located through
+// `MediaInput`; new modules and exports only, appended here.
+pub mod media_input;
+pub mod tool_ext;
+pub mod until;
+pub use tool_ext::{Extensions, Tool, ToolRegistry};
+pub use until::Bound;

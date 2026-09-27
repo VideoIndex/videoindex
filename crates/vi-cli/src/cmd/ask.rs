@@ -48,6 +48,10 @@ pub struct Args {
     /// `agent_llm` role).
     #[arg(long)]
     pub model: Option<String>,
+    /// Answer as of this media time, in seconds: the tools read, and the
+    /// answer cites, only below it ("ask as of time T").
+    #[arg(long)]
+    pub until: Option<f64>,
 }
 
 pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
@@ -92,6 +96,8 @@ pub async fn run(args: Args, config: &Config, out: &Output) -> Result<()> {
             max_answer_tokens: args.max_answer_tokens,
         },
         session_id: args.session.clone(),
+        until: args.until,
+        system_addendum: None,
     };
     // Titles for citation display.
     use vi_index::Storage;

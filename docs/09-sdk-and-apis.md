@@ -89,7 +89,7 @@ vidx eval  <config.toml>                          runs the eval harness (shells 
 vidx doctor                                       checks ffmpeg, hardware decode, yt-dlp, ONNX providers, GPU
 ```
 
-All commands take `--config videoindex.toml` and `--json` for machine-readable output. Exit codes are stable.
+All commands take `--config videoindex.toml` and `--json` for machine-readable output. Exit codes are stable. `vidx ask --until <secs>` answers as of a media time (the tools read, and the answer cites, only below it), which is how a batch index is asked "as of time T" when the live dev set is scored against it.
 
 ## Server (HTTP)
 
@@ -103,7 +103,7 @@ Base path `/v1`. JSON in, JSON or SSE out. OpenAPI document served at `/v1/opena
 | GET | `/jobs/{id}` | job status; `Accept: text/event-stream` for progress |
 | DELETE | `/jobs/{id}` | cancel |
 | POST | `/indexes/{id}/search` | hybrid search |
-| POST | `/indexes/{id}/ask` | agentic answer; SSE stream of the events in 06; optional `model` picks a configured chat provider |
+| POST | `/indexes/{id}/ask` | agentic answer; SSE stream of the events in 06; optional `model` picks a configured chat provider; optional `until` (seconds) answers as of that media time and `system_addendum` appends per-ask text to the system prompt (06, "Answers as of a time") |
 | GET | `/models` | chat providers `ask` accepts as `model` (name, adapter, model id, default) |
 | POST | `/indexes/{id}/view` | frame grid as PNG or WebP |
 | GET | `/indexes/{id}/videos/{vid}/timeline` | segments |

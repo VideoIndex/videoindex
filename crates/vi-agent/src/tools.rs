@@ -216,6 +216,7 @@ pub fn specs(with_describe: bool) -> Vec<ToolSpec> {
             },"required":["video_id","t0","t1"]}),
         });
     }
+    v.extend(crate::tool_ext::registered_specs());
     v
 }
 
@@ -252,6 +253,7 @@ fn video_arg(ctx: &ToolContext, args: &Value) -> std::result::Result<VideoId, St
 }
 
 fn range_args(args: &Value, duration: f64) -> std::result::Result<(f64, f64), String> {
+    let duration = crate::until::clamp_secs_for_ask(duration);
     let t0 = arg_f64(args, "t0").ok_or("t0 is required")?;
     let t1 = arg_f64(args, "t1").ok_or("t1 is required")?;
     if t1 <= t0 {
@@ -321,6 +323,9 @@ async fn video(ctx: &ToolContext, id: VideoId) -> std::result::Result<Video, Str
 /// Execute one call. Errors that the model can act on (bad arguments,
 /// missing video) come back as content, not as `Err`.
 pub async fn execute(ctx: &ToolContext, call: &ToolCall) -> Result<ToolOutput> {
+    if let Some(r) = crate::tool_ext::dispatch(ctx, call).await {
+        return r;
+    }
     let r = match call.name.as_str() {
         "search" => tool_search(ctx, &call.args).await,
         "find_mentions" => tool_find_mentions(ctx, &call.args).await,

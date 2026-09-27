@@ -232,6 +232,8 @@ async fn call_tool(
                     .get("model")
                     .and_then(Value::as_str)
                     .map(str::to_string),
+                until: args.get("until").and_then(Value::as_f64),
+                system_addendum: None,
             };
             let stream = ask_stream(state, ix, body)?;
             let v = collect(state, &key.bucket(), stream).await;

@@ -518,6 +518,8 @@ impl Index {
             videos,
             budget: budget.map(AskBudget::from).unwrap_or_default(),
             session_id,
+            until: None,
+            system_addendum: None,
         };
         let stream = {
             let _guard = runtime().enter();
