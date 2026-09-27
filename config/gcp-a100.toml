@@ -39,6 +39,20 @@ model = "gemini-3.8-flash"
 concurrency = 4
 requests_per_minute = 50
 
+# The escalation model for `vidx ask --escalate gemini_pro` and the server's
+# `escalate` field (protocol P2E on the results pages): a second pass from
+# scratch when the Flash pass ends at the tool-call cap or partial. List
+# price $2 / $12 per Mtok (2026-10-02); same key as `gemini`.
+[providers.gemini_pro]
+adapter = "gemini"
+model = "gemini-3.1-pro-preview"
+concurrency = 4
+requests_per_minute = 50
+pricing = { input_per_mtok = 2.0, output_per_mtok = 12.0 }
+# The Gemini 3 Pro models loop and degrade at the loop's default temperature
+# of 0 (a quarter of the answers on 2026-10-02); their documented default.
+temperature = 1.0
+
 # In-process ONNX models (SigLIP, RapidOCR, bge-small).
 [providers.local]
 adapter = "onnx_local"

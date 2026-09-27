@@ -93,6 +93,7 @@ Roles used by the pipeline: `asr`, `ocr`, `image_embed`, `text_embed`, `vlm_desc
 - **Batching**: embedders batch to the provider's maximum; ASR batches chunks when the endpoint allows.
 - **Streaming**: SSE and chunked parsers normalized to `LlmEvent { Token, ToolCall, Usage, Done }`.
 - **Cost accounting**: every call records tokens, images, seconds of media, latency, and computed cost into a `Provenance` row. Costs come from the adapter's pricing table, overridable in config.
+- **Temperature**: the agent loop asks every chat model for temperature 0. A `[providers.*]` block may set `temperature` to override it for that provider's calls; the Gemini 3 Pro models loop and degrade below their default of 1.0, so `config/gcp-a100.toml` sets `temperature = 1.0` on `gemini_pro` (2026-10-02).
 - **Prompt registry**: prompts are versioned assets in `vi-providers/prompts/*.md` with a hash; the hash is part of every cache key and Provenance row. Python and JS can register overrides at runtime.
 - **Structured output**: operators that need JSON request it via `supports_json_schema` when available and fall back to instruction-plus-repair otherwise.
 - **Redaction**: keys never appear in logs, errors, or Provenance.

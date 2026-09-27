@@ -470,6 +470,12 @@ pub struct ProviderConfig {
     pub max_retries: Option<u32>,
     /// Price table override for cost accounting.
     pub pricing: Option<Pricing>,
+    /// Sampling temperature every call to this provider is made with,
+    /// overriding the request's (the agent loop asks for 0). The Gemini 3
+    /// models loop and degrade below their default of 1.0 (2026-10-02: a
+    /// quarter of gemini-3.1-pro-preview's answers at 0 were repeated
+    /// syllables or single characters); set `temperature = 1.0` for them.
+    pub temperature: Option<f32>,
     /// Directory holding model files for local adapters.
     pub model_dir: Option<PathBuf>,
     /// Anything adapter-specific.

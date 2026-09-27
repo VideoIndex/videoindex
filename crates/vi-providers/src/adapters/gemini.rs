@@ -34,6 +34,8 @@ pub struct Gemini {
     api_key: String,
     model: String,
     pricing: Pricing,
+    /// A configured temperature overrides the request's.
+    temperature: Option<f32>,
     http: reqwest::Client,
     governor: Arc<Governor>,
     cancel: CancellationToken,
@@ -85,6 +87,7 @@ impl Gemini {
             base_url,
             api_key,
             pricing: cfg.pricing.unwrap_or_else(|| default_pricing(&model)),
+            temperature: cfg.temperature,
             model,
             http: http_client(name, governor.timeout)?,
             governor,
@@ -169,7 +172,7 @@ impl Gemini {
         }
         let mut gen = json!({
             "maxOutputTokens": req.max_tokens,
-            "temperature": req.temperature,
+            "temperature": self.temperature.unwrap_or(req.temperature),
         });
         if let Some(schema) = &req.json_schema {
             gen["responseMimeType"] = json!("application/json");
@@ -414,6 +417,33 @@ impl Vlm for Gemini {
 mod tests {
     use super::*;
     use crate::adapters::openai_compat::collect_stream;
+
+    /// A `temperature` in the provider's config wins over the request's:
+    /// the loop asks every model for 0, which makes the Gemini 3 Pro models
+    /// loop (2026-10-02).
+    #[test]
+    fn a_configured_temperature_overrides_the_request() {
+        std::env::set_var("VI_TEST_GEMINI_KEY_T", "g-key");
+        let mut cfg = ProviderConfig {
+            adapter: "gemini".into(),
+            api_key_env: Some("VI_TEST_GEMINI_KEY_T".into()),
+            ..ProviderConfig::default()
+        };
+        let req = GenerateRequest::new(vec![Message::text(Role::User, "hi")]);
+        let gov = Arc::new(Governor::from_config("g", &cfg));
+        let g =
+            Gemini::from_config("g", &cfg, None, gov.clone(), CancellationToken::new()).unwrap();
+        assert_eq!(
+            g.body(&req).unwrap()["generationConfig"]["temperature"],
+            json!(0.0)
+        );
+        cfg.temperature = Some(1.0);
+        let g = Gemini::from_config("g", &cfg, None, gov, CancellationToken::new()).unwrap();
+        assert_eq!(
+            g.body(&req).unwrap()["generationConfig"]["temperature"],
+            json!(1.0)
+        );
+    }
 
     #[test]
     fn schema_is_stripped() {
