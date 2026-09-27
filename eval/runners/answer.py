@@ -70,7 +70,7 @@ def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question,
     ms = int((time.time() - t) * 1000)
     if proc.returncode != 0:
         return {"id": q.id, "status": "ask-failed", "error": proc.stderr[-400:], "ms": ms}
-    text, cites, tools, calls, usage, partial, reason, verification = "", [], [], [], {}, False, None, None
+    text, cites, tools, calls, usage, partial, reason, verification, tally = "", [], [], [], {}, False, None, None, None
     for line in proc.stdout.splitlines():
         try:
             ev = json.loads(line)
@@ -101,15 +101,18 @@ def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question,
                     break
         elif ev["type"] == "done":
             usage, partial, reason = ev["usage"], ev["partial"], ev.get("reason")
-            # The count-twice rule (2026-09-30): asked | not_needed | declined.
+            # The count-twice rule (2026-09-30): asked | not_needed | declined;
+            # tallied when the loop ran its tally on a repeated action.
             verification = ev.get("verification") or None
+            # The tally's span: {video_id, t0, t1, pieces}, absent otherwise.
+            tally = ev.get("tally") or None
     letter = parse_letter(text, q.letters, q.options)
     known = q.answer in q.letters
     return {
         "id": q.id, "status": "ok", "video_key": q.video_key, "task_types": q.task_types, "video_type": q.video_type,
         "answer": q.answer if known else None, "predicted": letter, "correct": (letter == q.answer) if known else None,
         "parsed": letter is not None, "kaggle_row": q.extra.get("kaggle_row"),
-        "text": text.strip()[-600:], "citations": cites, "tools": tools, "calls": calls, "usage": usage, "partial": partial, "stop_reason": reason, "verification": verification, "ms": ms,
+        "text": text.strip()[-600:], "citations": cites, "tools": tools, "calls": calls, "usage": usage, "partial": partial, "stop_reason": reason, "verification": verification, "tally": tally, "ms": ms,
         "time_reference": q.time_reference,
     }
 

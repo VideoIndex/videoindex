@@ -114,3 +114,30 @@ def test_corpus_scoring():
     assert s["f1"] == 1.0 and s["fact_coverage"] == 0.5 and abs(s["quality"] - (0.3 + 0.35)) < 1e-6
     lib = CorpusQuestion(id="l", kind="library", question="?", facts=["f1", "f2"])
     assert score_result(lib, {"claims": [], "facts_covered": [True, False]})["quality"] == 0.5
+
+
+def test_ask_one_records_verification_and_tally(tmp_path):
+    """The runner keeps the loop's `verification` and `tally` from `done`,
+    and the tally's `view` calls with their fps and window count."""
+    from eval.runners.answer import ask_one
+
+    events = [
+        {"type": "tool_call", "tool": "view", "turn": 2,
+         "args": {"video_id": "V", "fps": 4, "windows": [{"t0": 30.0, "t1": 34.0}, {"t0": 34.0, "t1": 38.0}]}},
+        {"type": "tool_result", "tool": "view", "summary": "2 windows", "turn": 2, "ms": 5},
+        {"type": "token", "text": "Answer: B"},
+        {"type": "done", "partial": False, "reason": None, "usage": {"tool_calls": 1},
+         "verification": "tallied", "tally": {"video_id": "V", "t0": 30.0, "t1": 38.0, "pieces": 2}},
+    ]
+    lines = tmp_path / "events.jsonl"
+    lines.write_text("".join(json.dumps(e) + "\n" for e in events))
+    fake = tmp_path / "vidx"
+    fake.write_text(f"#!{sys.executable}\nimport sys\nsys.stdout.write(open({str(lines)!r}).read())\n")
+    fake.chmod(0o755)
+    q = Question(id="q1", benchmark="t", video_key="k", question="How many times?", options=["1", "2"], answer="B")
+    row = ask_one(str(fake), None, "idx", "V", q, "agent", 0.3, 20, 400000)
+    assert row["status"] == "ok", row
+    assert row["verification"] == "tallied"
+    assert row["tally"] == {"video_id": "V", "t0": 30.0, "t1": 38.0, "pieces": 2}
+    assert row["calls"] == [{"tool": "view", "turn": 2, "ms": 5, "windows": 2, "flags": {"fps": 4}}]
+    assert row["correct"] is True
