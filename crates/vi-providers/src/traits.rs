@@ -461,7 +461,9 @@ pub enum GenerateEvent {
     Usage(crate::cost::Usage),
     /// End of stream.
     Done {
-        /// Why it stopped: `stop`, `length`, `tool_use`.
+        /// Why it stopped: `stop`, `length`, `tool_use`, or a provider's own
+        /// reason (lower-cased Gemini reasons such as `safety` or
+        /// `malformed_function_call`; OpenAI-compatible reasons as sent).
         finish_reason: String,
         /// Final accounting.
         stats: CallStats,

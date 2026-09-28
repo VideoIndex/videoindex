@@ -643,7 +643,7 @@ impl Inner {
                     finish = %reason,
                     finish_message = self.finish_message.get(cand).map_or("", String::as_str),
                     reported_as = %finish_emitted,
-                    "gemini: finishReason other than STOP (the adapter maps only MAX_TOKENS, to `length`, when there is no tool call; anything else reads as `stop`)"
+                    "gemini: finishReason other than STOP (reported as `tool_use` when the turn has a call, else `length` for MAX_TOKENS and the reason lower-cased otherwise)"
                 );
             }
         }

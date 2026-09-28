@@ -224,7 +224,8 @@ impl Gemini {
             // history holds calls) and mode NONE forbids new calls. A model
             // that still wants to call writes the call as text (pseudo code)
             // or ends with `UNEXPECTED_TOOL_CALL` / `MALFORMED_FUNCTION_CALL`,
-            // which the parse reports as `stop`; the raw trace shows which.
+            // which the parse reports as `unexpected_tool_call` /
+            // `malformed_function_call`; the raw trace shows which.
             if req.tool_choice == crate::traits::ToolChoice::None {
                 body["toolConfig"] = json!({"functionCallingConfig": {"mode": "NONE"}});
             }
@@ -275,6 +276,7 @@ impl Gemini {
         struct St {
             usage: Usage,
             finish: Option<String>,
+            finish_message: Option<String>,
             calls: u64,
             done: bool,
             queue: std::collections::VecDeque<GenerateEvent>,
@@ -286,6 +288,7 @@ impl Gemini {
                 ..Usage::default()
             },
             finish: None,
+            finish_message: None,
             calls: 0,
             done: false,
             queue: Default::default(),
@@ -393,6 +396,9 @@ impl Gemini {
                                     if let Some(f) = cand["finishReason"].as_str() {
                                         st.finish = Some(f.to_string());
                                     }
+                                    if let Some(m) = cand["finishMessage"].as_str() {
+                                        st.finish_message = Some(m.to_string());
+                                    }
                                 }
                             }
                             Some(Err(e)) => {
@@ -402,21 +408,31 @@ impl Gemini {
                             }
                             None => {
                                 st.done = true;
-                                // Only `MAX_TOKENS` is told apart; `SAFETY`,
-                                // `RECITATION`, `MALFORMED_FUNCTION_CALL`,
-                                // `UNEXPECTED_TOOL_CALL`, `OTHER`, ... read as a
-                                // normal `stop`, so the agent takes whatever text
-                                // came before the cut (possibly none) as the whole
-                                // answer. A tool call anywhere in the turn makes
-                                // it `tool_use` whatever the reason.
+                                // A tool call anywhere in the turn makes it
+                                // `tool_use` whatever the reason; otherwise
+                                // each reason keeps its own name (see
+                                // `finish_string`), so a `SAFETY` cut or a
+                                // `MALFORMED_FUNCTION_CALL` no longer reads as
+                                // a normal `stop`.
                                 let finish = if st.calls > 0 {
                                     "tool_use".to_string()
                                 } else {
-                                    match st.finish.as_deref() {
-                                        Some("MAX_TOKENS") => "length".to_string(),
-                                        _ => "stop".to_string(),
-                                    }
+                                    finish_string(st.finish.as_deref())
                                 };
+                                if let Some(f) = st.finish.as_deref() {
+                                    if f != "STOP" && f != "MAX_TOKENS" {
+                                        tracing::warn!(
+                                            provider = %provider,
+                                            model = %model,
+                                            finish = f,
+                                            finish_message =
+                                                st.finish_message.as_deref().unwrap_or(""),
+                                            reported_as = %finish,
+                                            tool_calls = st.calls,
+                                            "gemini finishReason other than STOP or MAX_TOKENS"
+                                        );
+                                    }
+                                }
                                 st.trace.end(&finish, &st.usage);
                                 st.queue.push_back(GenerateEvent::Usage(st.usage));
                                 st.queue.push_back(GenerateEvent::Done {
@@ -445,6 +461,18 @@ impl Gemini {
             context_tokens: 1_000_000,
             price: self.pricing,
         }
+    }
+}
+
+/// The finish string for a Gemini `finishReason` in a turn without tool
+/// calls: `STOP` (or none) is `stop`, `MAX_TOKENS` is `length`, anything else
+/// its own name lower-cased (`safety`, `recitation`,
+/// `malformed_function_call`, `unexpected_tool_call`, ...).
+fn finish_string(reason: Option<&str>) -> String {
+    match reason {
+        None | Some("STOP") => "stop".to_string(),
+        Some("MAX_TOKENS") => "length".to_string(),
+        Some(other) => other.to_ascii_lowercase(),
     }
 }
 
@@ -1316,6 +1344,60 @@ mod tests {
         assert_eq!(kinds, ["request", "error", "final"]);
         assert!(text.contains("missing a thought_signature"));
         assert!(!text.contains(SECRET));
+    }
+
+    /// A turn that ends in `MALFORMED_FUNCTION_CALL` or `UNEXPECTED_TOOL_CALL`
+    /// with no parts reports that reason (lower-cased) and no tokens; it no
+    /// longer reads as a normal `stop`.
+    #[tokio::test]
+    async fn a_malformed_or_unexpected_call_keeps_its_finish_reason() {
+        for (reason, content, want) in [
+            (
+                "MALFORMED_FUNCTION_CALL",
+                r#""content":{"role":"model"},"finishMessage":"Malformed function call: print(default_api.search(query='x'))","#,
+                "malformed_function_call",
+            ),
+            ("UNEXPECTED_TOOL_CALL", "", "unexpected_tool_call"),
+        ] {
+            let chunk = format!(
+                r#"{{"candidates":[{{{content}"finishReason":"{reason}","index":0}}],"usageMetadata":{{"promptTokenCount":5000,"candidatesTokenCount":0,"thoughtsTokenCount":700}}}}"#
+            );
+            let (addr, server) = fake_gemini("200 OK", sse_body(&[&chunk])).await;
+            let g = adapter_at(addr, "VI_TEST_GEMINI_KEY_M");
+            let out = collect_stream(
+                Llm::generate(
+                    &g,
+                    GenerateRequest::new(vec![Message::text(Role::User, "q")]),
+                )
+                .await
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+            server.await.unwrap();
+            assert_eq!(out.finish_reason, want, "{reason}");
+            assert_eq!(out.text, "", "{reason}");
+            assert!(out.tool_calls.is_empty(), "{reason}");
+            assert_eq!(out.usage.tokens_out, 700, "{reason}");
+        }
+    }
+
+    #[test]
+    fn finish_reasons_keep_their_names() {
+        assert_eq!(finish_string(None), "stop");
+        assert_eq!(finish_string(Some("STOP")), "stop");
+        assert_eq!(finish_string(Some("MAX_TOKENS")), "length");
+        assert_eq!(finish_string(Some("SAFETY")), "safety");
+        assert_eq!(finish_string(Some("RECITATION")), "recitation");
+        assert_eq!(
+            finish_string(Some("MALFORMED_FUNCTION_CALL")),
+            "malformed_function_call"
+        );
+        assert_eq!(
+            finish_string(Some("UNEXPECTED_TOOL_CALL")),
+            "unexpected_tool_call"
+        );
+        assert_eq!(finish_string(Some("OTHER")), "other");
     }
 
     /// `vidx` loads its config with `VI_*` overrides that reject unknown
