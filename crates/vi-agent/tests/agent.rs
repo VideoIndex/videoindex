@@ -907,6 +907,17 @@ async fn ask_fake(
     addr: std::net::SocketAddr,
     question: &str,
 ) -> Vec<AskEvent> {
+    ask_fake_in(dir, addr, question, None).await.0
+}
+
+/// `ask_fake` with an optional session id; also returns the index, to read
+/// the stored session back.
+async fn ask_fake_in(
+    dir: &std::path::Path,
+    addr: std::net::SocketAddr,
+    question: &str,
+    session_id: Option<&str>,
+) -> (Vec<AskEvent>, Arc<EmbeddedIndex>) {
     let (idx, config) = build_index(dir).await;
     let video_id = {
         use vi_index::Storage;
@@ -934,16 +945,17 @@ async fn ask_fake(
         config.clone(),
         CancellationToken::new(),
     ));
-    let agent = Agent::new(idx, providers, config);
+    let agent = Agent::new(idx.clone(), providers, config);
     let mut events = Vec::new();
     let mut stream = Box::pin(agent.ask(AskRequest {
         videos: vec![video_id],
+        session_id: session_id.map(str::to_string),
         ..AskRequest::new(question)
     }));
     while let Some(ev) = stream.next().await {
         events.push(ev);
     }
-    events
+    (events, idx)
 }
 
 fn answer_text(events: &[AskEvent]) -> String {
@@ -1003,6 +1015,116 @@ async fn empty_length_stop_falls_to_the_empty_answer_retry() {
         }
         other => panic!("last event {other:?}"),
     }
+}
+
+/// Turn 1 streams a fragment of call JSON as text ("ffff_2}", as
+/// gemini-3.1-pro-preview does before its structured call) and calls
+/// `search`; turn 2 returns nothing; turn 3 answers "Answer: B" when its
+/// request ends with the empty-answer retry, otherwise says what it saw.
+async fn fragment_then_empty_server() -> std::net::SocketAddr {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut turn = 0;
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
+            let req = read_request(&mut sock).await;
+            let body_json: serde_json::Value = req
+                .split("\r\n\r\n")
+                .nth(1)
+                .and_then(|b| serde_json::from_str(b).ok())
+                .unwrap_or_default();
+            let chunks: Vec<String> = match turn {
+                0 => vec![
+                    r#"{"choices":[{"delta":{"content":"ffff_2}"}}]}"#.into(),
+                    r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"search","arguments":"{\"query\":\"kw7\",\"k\":3}"}}]},"finish_reason":"tool_calls"}]}"#.into(),
+                    r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20}}"#.into(),
+                ],
+                1 => vec![
+                    r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#.into(),
+                    r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":0}}"#.into(),
+                ],
+                _ => {
+                    let msgs = body_json["messages"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default();
+                    let last = &msgs[msgs.len() - 1];
+                    let word = if last["role"] == "user"
+                        && last["content"]
+                            .as_str()
+                            .unwrap_or("")
+                            .starts_with("Write the answer now")
+                    {
+                        "Answer: B".to_string()
+                    } else {
+                        format!("unexpected {last}").replace('"', "'")
+                    };
+                    vec![
+                        format!(
+                            r#"{{"choices":[{{"delta":{{"content":"{word}"}},"finish_reason":"stop"}}]}}"#
+                        ),
+                        r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":5}}"#
+                            .into(),
+                    ]
+                }
+            };
+            turn += 1;
+            let mut body = String::new();
+            for c in chunks {
+                body.push_str(&format!("data: {c}\n\n"));
+            }
+            body.push_str("data: [DONE]\n\n");
+            let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let _ = sock.write_all(resp.as_bytes()).await;
+            let _ = sock.shutdown().await;
+        }
+    });
+    addr
+}
+
+/// Text streamed in a turn that also calls a tool is not answer text
+/// (2026-10-03: gemini-3.1-pro-preview streams tails of its call JSON as
+/// text). An empty final turn after such a turn is still retried; the answer
+/// is the retry's, not the fragment, and the stored session answer holds no
+/// fragment. The fragment still streams as it arrived.
+#[tokio::test]
+async fn text_beside_tool_calls_does_not_count_as_the_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let addr = fragment_then_empty_server().await;
+    let (events, idx) = ask_fake_in(
+        dir.path(),
+        addr,
+        "which option is right?",
+        Some("sess-fragment"),
+    )
+    .await;
+    let text = answer_text(&events);
+    assert!(text.ends_with("Answer: B"), "{text:?}");
+    assert_eq!(text, "ffff_2}Answer: B", "the fragment still streams");
+    match events.last().unwrap() {
+        AskEvent::Done {
+            partial,
+            usage,
+            reason,
+        } => {
+            assert!(!partial, "{reason:?}");
+            assert_eq!(reason, &None);
+            assert_eq!(usage.tool_calls, 1);
+            assert_eq!(usage.provider_calls, 3, "search, empty turn, retry");
+        }
+        other => panic!("last event {other:?}"),
+    }
+    use vi_index::Storage;
+    let session = idx.get_session("sess-fragment").await.unwrap().unwrap();
+    assert_eq!(
+        session["turns"],
+        serde_json::json!([["which option is right?", "Answer: B"]]),
+        "{session}"
+    );
 }
 
 /// `zoom` returns one frame at source size or larger: the whole fixture frame

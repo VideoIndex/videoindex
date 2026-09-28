@@ -496,6 +496,17 @@ async fn run(
             ));
         }
         turn_no += 1;
+        // Text written in a turn that also carries tool calls is the model
+        // thinking aloud, not the answer: it streams as it arrives (the
+        // answer's streaming is unchanged), but it is dropped from `answer`
+        // once the turn turns out to hold calls. Found 2026-10-03 in the raw
+        // Gemini trace: gemini-3.1-pro-preview streams tails of its
+        // function-call JSON as text parts ("ffff_2}", "_", "id:", ...)
+        // before the structured call; kept in `answer`, they made an empty
+        // final turn look answered, so it was never retried and the
+        // fragments were the whole answer. The `length` continuation below
+        // keeps using `turn.text`.
+        let before = answer.len();
         let turn = generate_turn(
             llm.as_ref(),
             greq,
@@ -508,6 +519,17 @@ async fn run(
         )
         .await?;
         usage.provider_calls += 1;
+        if !turn.calls.is_empty() {
+            // Text the citation scanner still holds (a trailing `[` or an
+            // unfinished marker) belongs to this turn: stream it now rather
+            // than let it land in the next turn's answer text.
+            for piece in scanner.finish() {
+                if let Piece::Text(t) = piece {
+                    let _ = tx.send(AskEvent::Token { text: t }).await;
+                }
+            }
+            answer.truncate(before);
+        }
         if !allow_tools && !turn.calls.is_empty() {
             // Tools were withheld (`tool_choice: none`) but the model called
             // one anyway: some OpenAI-compatible servers ignore the flag.
