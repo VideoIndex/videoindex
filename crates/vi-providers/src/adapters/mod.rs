@@ -4,6 +4,7 @@
 pub mod anthropic;
 pub mod common;
 pub mod gemini;
+pub mod gemini_trace;
 pub mod openai_compat;
 
 pub use anthropic::Anthropic;

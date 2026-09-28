@@ -113,6 +113,10 @@ where
                 }
                 match st.body.next().await {
                     Some(Ok(chunk)) => {
+                        // Each network chunk is decoded on its own, so a
+                        // multi-byte character split across two reads becomes
+                        // U+FFFD twice (the Gemini raw trace flags a line
+                        // holding U+FFFD).
                         st.buf.push_str(&String::from_utf8_lossy(&chunk));
                         drain(&mut st.buf, &mut st.pending, false);
                     }
