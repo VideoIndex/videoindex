@@ -214,3 +214,32 @@ def test_ask_one_records_read_and_count_objects_flags(tmp_path):
         {"tool": "zoom", "turn": 3, "ms": 9, "windows": 0, "flags": {"region": True}},
     ]
     assert row["escalated"] is None and row["correct"] is True
+
+
+def test_ask_one_records_level_kind_and_search_hit_kinds(tmp_path):
+    """The runner records `level` (timeline, get_descriptions) and `kind` (search) per call, and the
+    per-kind hit counts a search's summary carries (2026-10-03: the index-time levers are read by them)."""
+    from eval.runners.answer import ask_one
+
+    events = [
+        {"type": "tool_call", "tool": "search", "turn": 1, "args": {"query": "red car", "kind": "description"}},
+        {"type": "tool_result", "tool": "search", "summary": '7 hits for "red car" (description 4, transcript 3)', "turn": 1, "ms": 5},
+        {"type": "tool_call", "tool": "timeline", "turn": 2, "args": {"video_id": "V", "level": "shot"}},
+        {"type": "tool_result", "tool": "timeline", "summary": "40 shot segments", "turn": 2, "ms": 3},
+        {"type": "tool_call", "tool": "search", "turn": 3, "args": {"query": "nothing"}},
+        {"type": "tool_result", "tool": "search", "summary": '0 hits for "nothing"', "turn": 3, "ms": 2},
+        {"type": "token", "text": "Answer: B"},
+        {"type": "done", "partial": False, "reason": None, "usage": {"tool_calls": 3}},
+    ]
+    lines = tmp_path / "events.jsonl"
+    lines.write_text("".join(json.dumps(e) + "\n" for e in events))
+    fake = tmp_path / "vidx"
+    fake.write_text(f"#!{sys.executable}\nimport sys\nsys.stdout.write(open({str(lines)!r}).read())\n")
+    fake.chmod(0o755)
+    q = Question(id="q1", benchmark="t", video_key="k", question="Which?", options=["1", "2"], answer="B")
+    row = ask_one(str(fake), None, "idx", "V", q, "agent", 0.3, 20, 400000)
+    assert row["calls"] == [
+        {"tool": "search", "turn": 1, "ms": 5, "windows": 0, "flags": {"kind": "description"}, "hits": {"description": 4, "transcript": 3}},
+        {"tool": "timeline", "turn": 2, "ms": 3, "windows": 0, "flags": {"level": "shot"}},
+        {"tool": "search", "turn": 3, "ms": 2, "windows": 0},
+    ]

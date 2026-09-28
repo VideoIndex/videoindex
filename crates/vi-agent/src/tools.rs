@@ -2,6 +2,7 @@
 //! read-only against the index and the media and is exposed identically to
 //! the loop's LLM, to SDK callers, and over MCP.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -414,9 +415,33 @@ async fn tool_search(ctx: &ToolContext, args: &Value) -> ToolResult {
             })
         })
         .collect();
+    // The event-stream summary names how many hits carry evidence of each
+    // kind ("12 hits for \"x\" (description 4, transcript 8)"), so a run file
+    // can read which signals a search reached without storing the hits.
+    let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
+    for h in &resp.hits {
+        let kinds: BTreeSet<String> = h
+            .evidence
+            .iter()
+            .map(|e| format!("{:?}", e.kind).to_lowercase())
+            .collect();
+        for k in kinds {
+            *by_kind.entry(k).or_default() += 1;
+        }
+    }
+    let kinds = by_kind
+        .iter()
+        .map(|(k, n)| format!("{k} {n}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let summary = if kinds.is_empty() {
+        format!("{} hits for \"{query}\"", resp.hits.len())
+    } else {
+        format!("{} hits for \"{query}\" ({kinds})", resp.hits.len())
+    };
     Ok(ToolOutput {
         content: json!({"query": query, "hits": hits, "index_state": resp.index_state}).to_string(),
-        summary: format!("{} hits for \"{query}\"", resp.hits.len()),
+        summary,
         ..ToolOutput::default()
     })
 }

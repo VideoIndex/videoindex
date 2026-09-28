@@ -93,7 +93,9 @@ def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question,
             # Tool options worth reading back from the run file (EVAL-LESSONS: record
             # the arguments, not just the names): the look's flags, and whether a
             # `zoom` named a region.
-            flags = {k: args[k] for k in ("detail", "strip", "slow", "fps", "tiles", "page", "image", "what", "threshold") if k in args}
+            # `level` (timeline / get_descriptions: chapter | scene | shot) and `kind` (search: one evidence
+            # kind) say which index rows a call reached (2026-10-03: the index-time levers are read by them).
+            flags = {k: args[k] for k in ("detail", "strip", "slow", "fps", "tiles", "page", "image", "what", "threshold", "level", "kind") if k in args}
             if "region" in args:
                 flags["region"] = True
                 # `read` (2026-10-02): a region names where the text is; the check reads how often one was given.
@@ -106,6 +108,12 @@ def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question,
             for c in calls:
                 if c["tool"] == ev["tool"] and c["ms"] is None and c["turn"] == ev.get("turn") and (c.get("pass", 1) == ask_pass):
                     c["ms"] = ev.get("ms")
+                    # A search's summary ends with how many hits carry each evidence kind:
+                    # '12 hits for "x" (description 4, transcript 8)' -> {"description": 4, "transcript": 8}.
+                    if ev["tool"] == "search":
+                        m = re.search(r"\(([a-z]+ \d+(?:, [a-z]+ \d+)*)\)$", str(ev.get("summary") or ""))
+                        if m:
+                            c["hits"] = {k: int(n) for k, n in (part.split(" ") for part in m.group(1).split(", "))}
                     break
         elif ev["type"] == "done":
             usage, partial, reason = ev["usage"], ev["partial"], ev.get("reason")
