@@ -16,6 +16,11 @@ pub const CONFIG_PATH_ENV: &str = "VI_CONFIG";
 pub const ENV_PREFIX: &str = "VI_";
 /// Separator between nested keys in environment overrides.
 pub const ENV_SPLIT: &str = "__";
+/// `VI_*` variables that are not config keys (read directly by the code
+/// that uses them), so the overrides skip them instead of rejecting an
+/// unknown key: `VI_CONFIG` (the config path) and `VI_GEMINI_RAW_DIR` (the
+/// Gemini adapter's raw trace files, `vi-providers`).
+pub const ENV_NOT_CONFIG: &[&str] = &["CONFIG", "GEMINI_RAW_DIR"];
 /// `default_policy` value meaning: `coarse_only` when its provider roles
 /// are all bound, else `coarse_local`.
 pub const AUTO_POLICY: &str = "auto";
@@ -685,7 +690,7 @@ impl Config {
         fig = fig.merge(
             Env::prefixed(ENV_PREFIX)
                 .split(ENV_SPLIT)
-                .ignore(&["CONFIG"]),
+                .ignore(ENV_NOT_CONFIG),
         );
         fig.extract().map_err(|e| Error::Config(e.to_string()))
     }
@@ -823,6 +828,19 @@ mod tests {
             assert_eq!(c.media.sample_max_dim, 777);
             assert_eq!(c.index.thumbnail_px, 200);
             assert_eq!(c.log.level, "debug");
+            Ok(())
+        });
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)] // figment::Jail's closure signature
+    fn variables_that_are_not_config_keys_are_skipped() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file("videoindex.toml", "")?;
+            jail.set_env("VI_GEMINI_RAW_DIR", "/tmp/gemini-raw");
+            assert!(Config::load(Some(Path::new("videoindex.toml"))).is_ok());
+            jail.set_env("VI_NOT_A_KEY", "1");
+            assert!(Config::load(Some(Path::new("videoindex.toml"))).is_err());
             Ok(())
         });
     }
