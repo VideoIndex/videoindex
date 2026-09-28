@@ -91,11 +91,12 @@ def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question,
             # a turn ran concurrently) and, once the result arrives, its wall time.
             args = ev.get("args") or {}
             # Tool options worth reading back from the run file (EVAL-LESSONS: record
-            # the arguments, not just the names): the look's flags, and whether a
-            # `zoom` named a region.
+            # the arguments, not just the names): the look's flags, what a
+            # `count_objects` counted and at which threshold, the phrase a `zoom` asked
+            # the detector for (`count`), and whether a `zoom` or `count_objects` named a region.
             # `level` (timeline / get_descriptions: chapter | scene | shot) and `kind` (search: one evidence
             # kind) say which index rows a call reached (2026-10-03: the index-time levers are read by them).
-            flags = {k: args[k] for k in ("detail", "strip", "slow", "fps", "tiles", "page", "image", "what", "threshold", "level", "kind") if k in args}
+            flags = {k: args[k] for k in ("detail", "strip", "slow", "fps", "tiles", "page", "image", "what", "threshold", "level", "kind", "count") if k in args}
             if "region" in args:
                 flags["region"] = True
                 # `read` (2026-10-02): a region names where the text is; the check reads how often one was given.
@@ -114,6 +115,12 @@ def ask_one(vi: str, config: str | None, index: str, video_id: str, q: Question,
                         m = re.search(r"\(([a-z]+ \d+(?:, [a-z]+ \d+)*)\)$", str(ev.get("summary") or ""))
                         if m:
                             c["hits"] = {k: int(n) for k, n in (part.split(" ") for part in m.group(1).split(", "))}
+                    # A zoom that ran the detector (its `count`, or the loop's phrase on a count of
+                    # things) ends its summary with "; 4 candidates for 'red ribbon'".
+                    if ev["tool"] == "zoom":
+                        m = re.search(r"; (\d+) candidates for '", str(ev.get("summary") or ""))
+                        if m:
+                            c["candidates"] = int(m.group(1))
                     break
         elif ev["type"] == "done":
             usage, partial, reason = ev["usage"], ev["partial"], ev.get("reason")

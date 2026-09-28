@@ -188,7 +188,8 @@ def test_ask_one_records_escalation(tmp_path):
 def test_ask_one_records_read_and_count_objects_flags(tmp_path):
     """The runner records the 2026-10-02 tools' options per call: `read`'s `image` and
     whether it named a region (`read_region`), `count_objects`'s `what` and `threshold`;
-    a `zoom` with a region keeps recording `region` alone."""
+    a `zoom` with a region keeps recording `region` alone, and a `zoom` that asks the
+    detector for a phrase records it as `count` and the candidates its summary names."""
     from eval.runners.answer import ask_one
 
     events = [
@@ -198,8 +199,10 @@ def test_ask_one_records_read_and_count_objects_flags(tmp_path):
         {"type": "tool_result", "tool": "count_objects", "summary": "2 candidates", "turn": 2, "ms": 7},
         {"type": "tool_call", "tool": "zoom", "turn": 3, "args": {"video_id": "V", "t": 3.0, "region": {"x": 0, "y": 0, "w": 0.5, "h": 0.5}}},
         {"type": "tool_result", "tool": "zoom", "summary": "zoomed", "turn": 3, "ms": 9},
+        {"type": "tool_call", "tool": "zoom", "turn": 4, "args": {"video_id": "V", "t": 3.0, "count": "red ribbon", "region": {"x": 0, "y": 0, "w": 0.5, "h": 0.5}}},
+        {"type": "tool_result", "tool": "zoom", "summary": "zoomed 00:00:03 (full frame → 1920×1080); 4 candidates for 'red ribbon'", "turn": 4, "ms": 640},
         {"type": "token", "text": "Answer: B"},
-        {"type": "done", "partial": False, "reason": None, "usage": {"tool_calls": 3}},
+        {"type": "done", "partial": False, "reason": None, "usage": {"tool_calls": 4}},
     ]
     lines = tmp_path / "events.jsonl"
     lines.write_text("".join(json.dumps(e) + "\n" for e in events))
@@ -212,6 +215,7 @@ def test_ask_one_records_read_and_count_objects_flags(tmp_path):
         {"tool": "read", "turn": 1, "ms": 5, "windows": 0, "flags": {"image": True, "region": True, "read_region": True}},
         {"tool": "count_objects", "turn": 2, "ms": 7, "windows": 0, "flags": {"what": "person", "threshold": 0.3}},
         {"tool": "zoom", "turn": 3, "ms": 9, "windows": 0, "flags": {"region": True}},
+        {"tool": "zoom", "turn": 4, "ms": 640, "windows": 0, "flags": {"count": "red ribbon", "region": True}, "candidates": 4},
     ]
     assert row["escalated"] is None and row["correct"] is True
 
@@ -243,3 +247,29 @@ def test_ask_one_records_level_kind_and_search_hit_kinds(tmp_path):
         {"tool": "timeline", "turn": 2, "ms": 3, "windows": 0, "flags": {"level": "shot"}},
         {"tool": "search", "turn": 3, "ms": 2, "windows": 0},
     ]
+
+
+def test_ask_one_records_tool_flags(tmp_path):
+    """A fake `vidx` prints the JSONL events of one ask; the run record keeps
+    each call's flags (what `count_objects` counted, its threshold, a region)."""
+    from eval.runners.answer import ask_one
+    events = [
+        {"type": "tool_call", "tool": "count_objects", "turn": 1,
+         "args": {"video_id": "V", "t": 12, "what": "person", "threshold": 0.3, "region": {"x": 0, "y": 0, "w": 0.5, "h": 1}}},
+        {"type": "tool_result", "tool": "count_objects", "turn": 1, "ms": 850, "summary": "count_objects 'person' at 00:00:12: 3 candidates"},
+        {"type": "tool_call", "tool": "zoom", "turn": 2, "args": {"video_id": "V", "t": 12}},
+        {"type": "tool_result", "tool": "zoom", "turn": 2, "ms": 400, "summary": "zoomed"},
+        {"type": "token", "text": "Three people. Answer: B"},
+        {"type": "done", "usage": {"tool_calls": 2}, "partial": False},
+    ]
+    fake = tmp_path / "vidx"
+    fake.write_text("#!/bin/sh\ncat <<'EOF'\n" + "\n".join(json.dumps(e) for e in events) + "\nEOF\n")
+    fake.chmod(0o755)
+    q = Question(id="q1", benchmark="b", video_key="V", question="How many people?", options=["2", "3", "4"], answer="B")
+    r = ask_one(str(fake), None, "idx", "V", q, "agent", 0.3, 20, 400000)
+    assert r["status"] == "ok" and r["correct"] is True
+    assert r["tools"] == ["count_objects", "zoom"]
+    count, zoom = r["calls"]
+    assert count["flags"] == {"what": "person", "threshold": 0.3, "region": True}
+    assert count["ms"] == 850 and count["turn"] == 1
+    assert "flags" not in zoom
