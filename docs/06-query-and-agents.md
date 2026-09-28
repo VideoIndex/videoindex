@@ -128,6 +128,8 @@ For "When does the speaker first mention retrieval evaluation?" the default poli
 
 ## Answers and citations
 
+The answer is the text of the turns in which the model made no tool call. Text written in a turn that also calls tools (a note to itself before the call, or, with the Gemini 3 Pro models, tails of the call's own JSON streamed as text parts) is streamed as it arrives but is not kept as the answer, and a final turn that comes back with no text is asked again rather than ending with such a fragment (2026-10-03; before that, a fragment from an earlier turn counted as the answer and the retry was skipped). The Gemini adapter reports a finish reason other than `STOP` or `MAX_TOKENS` by its own name (`safety`, `recitation`, `malformed_function_call`, `unexpected_tool_call`) and logs it.
+
 Streaming events over the SDK and over SSE:
 
 ```
