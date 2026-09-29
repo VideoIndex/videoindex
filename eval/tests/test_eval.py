@@ -273,3 +273,24 @@ def test_ask_one_records_tool_flags(tmp_path):
     assert count["flags"] == {"what": "person", "threshold": 0.3, "region": True}
     assert count["ms"] == 850 and count["turn"] == 1
     assert "flags" not in zoom
+
+
+def test_ask_one_passes_max_answer_tokens(tmp_path):
+    """`--max-answer-tokens` reaches `vidx ask` only when set (the CLI's own
+    default, 4000, applies otherwise), so a gemini_pro run can give the model
+    room for its thinking."""
+    from eval.runners.answer import ask_one
+
+    argv_file = tmp_path / "argv.json"
+    fake = tmp_path / "vidx"
+    fake.write_text(f"#!{sys.executable}\nimport json, sys\nopen({str(argv_file)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+                    "sys.stdout.write(json.dumps({'type': 'token', 'text': 'Answer: A'}) + '\\n' + json.dumps({'type': 'done', 'partial': False, 'reason': None, 'usage': {}}) + '\\n')\n")
+    fake.chmod(0o755)
+    q = Question(id="q1", benchmark="t", video_key="k", question="?", options=["1", "2"], answer="A")
+    row = ask_one(str(fake), None, "idx", "V", q, "agent", 0.6, 20, 400000, model="gemini_pro", max_answer_tokens=8000)
+    assert row["status"] == "ok", row
+    argv = json.loads(argv_file.read_text())
+    assert argv[argv.index("--max-answer-tokens") + 1] == "8000"
+    assert argv[argv.index("--model") + 1] == "gemini_pro"
+    ask_one(str(fake), None, "idx", "V", q, "agent", 0.3, 20, 400000)
+    assert "--max-answer-tokens" not in json.loads(argv_file.read_text())
