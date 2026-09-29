@@ -335,6 +335,26 @@ pub struct IndexPolicy {
     pub max_cost_usd_per_hour: f64,
     /// Wall-clock ceiling per hour of video, humantime-style (`"20m"`).
     pub max_wallclock_per_hour: String,
+    /// What `vlm_describe` describes, one VLM call each:
+    /// [`describe_level::SCENE`] (`"scene"`, the default) takes the scenes
+    /// of the `scenes` operator and asks for the full scene schema
+    /// (summary, visible, on-screen text, actions, topics);
+    /// [`describe_level::SHOT`] (`"shot"`) takes every shot of
+    /// `shot_boundary` (replayed from a cached coarse pass) and asks for a
+    /// compact fixed schema (people, objects with counts, actions,
+    /// on-screen text, a one-sentence summary; at most 80 words), for
+    /// enumeration and counting questions and for long videos whose index
+    /// otherwise holds no text about what is visible. A TOML policy sets
+    /// `describe_level = "shot"`; checked by [`IndexPolicy::validate`].
+    pub describe_level: String,
+}
+
+/// Values of [`IndexPolicy::describe_level`].
+pub mod describe_level {
+    /// One description per scene (the default).
+    pub const SCENE: &str = "scene";
+    /// One description per shot.
+    pub const SHOT: &str = "shot";
 }
 
 impl Default for IndexPolicy {
@@ -375,6 +395,9 @@ impl IndexPolicy {
             // wall-clock cut-off skips OCR and embeddings rather than
             // slowing anything down, so the default is generous.
             max_wallclock_per_hour: "60m".to_string(),
+            // One `vlm_describe` call per scene; `"shot"` describes every
+            // shot instead (see the field).
+            describe_level: describe_level::SCENE.to_string(),
         }
     }
 
@@ -400,7 +423,8 @@ impl IndexPolicy {
         }
     }
 
-    /// The M0 policy: sampling, perceptual hashes, thumbnails.
+    /// The M0 policy: sampling, perceptual hashes, thumbnails. No
+    /// `vlm_describe`, so `describe_level` keeps the default `"scene"`.
     pub fn m0() -> Self {
         Self {
             coarse: ["sample", "phash", "thumbnail"]
@@ -439,6 +463,39 @@ impl IndexPolicy {
                 self.max_wallclock_per_hour
             ))
         })
+    }
+
+    /// Whether `vlm_describe` describes shots rather than scenes.
+    pub fn describes_shots(&self) -> bool {
+        self.describe_level == describe_level::SHOT
+    }
+
+    /// Check what the types cannot: `describe_level` is `"scene"` or
+    /// `"shot"`, and a policy with `vlm_describe` has the operator that
+    /// produces its level (`scenes` for scenes, `shot_boundary` for shots;
+    /// either may replay from a cached earlier pass). `name` is for the
+    /// message.
+    pub fn validate(&self, name: &str) -> Result<()> {
+        let level = self.describe_level.as_str();
+        if level != describe_level::SCENE && level != describe_level::SHOT {
+            return Err(Error::Config(format!(
+                "policy '{name}': describe_level '{level}' is not \"scene\" or \"shot\""
+            )));
+        }
+        let has = |op: &str| self.operators().any(|o| o == op);
+        if has("vlm_describe") {
+            let needed = if self.describes_shots() {
+                "shot_boundary"
+            } else {
+                "scenes"
+            };
+            if !has(needed) {
+                return Err(Error::Config(format!(
+                    "policy '{name}': vlm_describe with describe_level = \"{level}\" needs '{needed}' in the policy (its outputs replay from the cache when they already exist)"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// All operators in run order.
@@ -806,6 +863,43 @@ mod tests {
         assert_eq!(c.index.thumbnail_px, 320);
         assert_eq!(c.policy("mine").unwrap().sample_fps, 0.5);
         assert!(c.policy.contains_key("lecture_default"));
+    }
+
+    #[test]
+    fn describe_level_defaults_to_scene_and_is_validated() {
+        let c = Config::from_toml_str(
+            r#"
+            [policy.describe_shots]
+            coarse = ["sample", "shot_boundary"]
+            fine = ["vlm_describe"]
+            describe_level = "shot"
+            "#,
+        )
+        .unwrap();
+        let p = c.policy("describe_shots").unwrap();
+        assert_eq!(p.describe_level, "shot");
+        assert!(p.describes_shots());
+        assert!(p.validate("describe_shots").is_ok());
+        // Unset: scene, and every built-in policy validates.
+        for (name, p) in &c.policy {
+            if name != "describe_shots" {
+                assert_eq!(p.describe_level, "scene", "{name}");
+                assert!(!p.describes_shots());
+                p.validate(name).unwrap();
+            }
+        }
+        // Scene descriptions need `scenes`; shot descriptions need shots.
+        let mut p = p.clone();
+        p.describe_level = "scene".into();
+        let err = p.validate("x").unwrap_err().to_string();
+        assert!(err.contains("'scenes'"), "{err}");
+        p.describe_level = "shot".into();
+        p.coarse = vec!["sample".into()];
+        let err = p.validate("x").unwrap_err().to_string();
+        assert!(err.contains("'shot_boundary'"), "{err}");
+        p.describe_level = "shots".into();
+        let err = p.validate("x").unwrap_err().to_string();
+        assert!(err.contains("not \"scene\" or \"shot\""), "{err}");
     }
 
     #[test]

@@ -3738,6 +3738,7 @@ dependencies = [
  "blake3",
  "bytes",
  "chrono",
+ "futures",
  "image",
  "serde",
  "serde_json",

@@ -1952,3 +1952,273 @@ async fn a_fine_pass_replays_asr_and_subtitles_without_rewriting_them() {
         "{first_shot}"
     );
 }
+
+/// `describe_level = "shot"` over a coarse-indexed video, the way a shot
+/// pass runs on an existing index: only `vlm_describe` runs (shots and
+/// transcript replay, nothing is decoded again), every shot gets one
+/// description targeted at the shot with the rendered counts in its text
+/// and its summary on the shot, a pass the budget stopped is finished by
+/// the next one without duplicates, and a third pass is all cached.
+#[tokio::test]
+async fn shot_level_describes_every_shot_over_a_cached_coarse_pass() {
+    use vi_core::model::{SegmentLevel, TargetKind};
+    use vi_index::{Kind, MentionQuery};
+
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("videos");
+    let media = seed_incoming(&cache);
+    let idx = Arc::new(EmbeddedIndex::create(&dir.path().join("t.vidx")).unwrap());
+    let (addr, bodies, peak) = fake_vlm_server().await;
+    // One call at a time, so the budget stops after exactly three.
+    let mut c = fake_vlm_config(&cache, addr, 1);
+    let coarse = [
+        "subtitle_import",
+        "sample",
+        "shot_boundary",
+        "phash",
+        "thumbnail",
+    ];
+    c.policy.insert("coarse".into(), policy(&coarse));
+    let shots_policy = |cap: f64| {
+        let mut p = policy(&coarse);
+        p.fine = vec!["vlm_describe".into()];
+        p.describe_level = "shot".into();
+        p.max_cost_usd_per_hour = cap;
+        p.max_wallclock_per_hour = "0".into();
+        p
+    };
+    // $0.75 an hour over the fixture's two minutes is $0.025: calls are
+    // allowed while less has been spent, so three at $0.01.
+    c.policy.insert("shots_tight".into(), shots_policy(0.75));
+    c.policy.insert("shots".into(), shots_policy(0.0));
+    let sched = Scheduler::new(idx.clone(), Arc::new(c.clone()), EventBus::default());
+    // The same provider taking four calls at once, for the pass that
+    // finishes the job.
+    c.providers.get_mut("fake").unwrap().concurrency = Some(4);
+    let sched4 = Scheduler::new(idx.clone(), Arc::new(c), EventBus::default());
+    let run = |p: &str, src: std::path::PathBuf| {
+        let sched = if p == "shots" {
+            sched4.clone()
+        } else {
+            sched.clone()
+        };
+        let p = p.to_string();
+        async move {
+            sched
+                .run(
+                    Source::Path(src),
+                    JobOptions {
+                        policy: Some(p),
+                        ..JobOptions::default()
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap()
+        }
+    };
+
+    let first = run("coarse", media).await;
+    assert!(first.ok, "{first:?}");
+    let video = idx.list_videos().await.unwrap()[0].clone();
+    let media = cache.join(format!("{}.mp4", video.content_hash));
+    let shots = idx.segments(video.id, SegmentLevel::Shot).await.unwrap();
+    assert_eq!(shots.len(), 12);
+
+    // A tight budget: three shots described, the other nine skipped (one
+    // per shot), no cache marker for the stage.
+    let tight = run("shots_tight", media.clone()).await;
+    assert!(tight.ok && !tight.skipped, "{tight:?}");
+    let vd = &tight.stages["vlm_describe"];
+    assert_eq!(vd.status, StageStatus::Complete, "{vd:?}");
+    assert_eq!(vd.items_done, 3, "{vd:?}");
+    assert_eq!(vd.items_skipped, 9, "{vd:?}");
+    assert_eq!(tight.budget.exhausted.as_deref(), Some("cost"));
+    assert!(
+        (tight.budget.cost_usd - 0.03).abs() < 1e-9,
+        "{:?}",
+        tight.budget
+    );
+    // Only vlm_describe ran: shots and transcript replayed, no pixels.
+    assert!(tight.stages["shot_boundary"].replayed);
+    assert!(tight.stages["subtitle_import"].replayed);
+    for st in ["sample", "phash", "thumbnail"] {
+        assert_eq!(tight.stages[st].status, StageStatus::Skipped, "{st}");
+    }
+    assert_eq!(bodies.lock().unwrap().len(), 3);
+    assert_eq!(peak.swap(0, std::sync::atomic::Ordering::SeqCst), 1);
+
+    // No budget, four calls at once: the nine left are described, the
+    // three re-emitted, the rows written in shot order.
+    let full = run("shots", media.clone()).await;
+    assert!(full.ok && !full.skipped, "{full:?}");
+    let vd = &full.stages["vlm_describe"];
+    assert_eq!(vd.items_done, 12, "{vd:?}");
+    assert_eq!(vd.items_skipped, 0, "{vd:?}");
+    assert_eq!(bodies.lock().unwrap().len(), 12);
+    let top = peak.load(std::sync::atomic::Ordering::SeqCst);
+    assert!((2..=4).contains(&top), "{top} calls in flight at most");
+    assert_eq!(idx.segments(video.id, SegmentLevel::Shot).await.unwrap(), {
+        // Same shot rows (ids, times), now with summaries.
+        let mut s = shots.clone();
+        for x in &mut s {
+            x.summary = Some("A host greets two guests at a desk.".into());
+        }
+        s
+    });
+
+    // One description per shot, targeted at the shot, with the rendered
+    // fields in the searchable text.
+    let descs = idx.descriptions(video.id).await.unwrap();
+    assert_eq!(descs.len(), 12, "{descs:?}");
+    let mut targets: Vec<String> = descs.iter().map(|d| d.target_id.clone()).collect();
+    targets.sort();
+    let mut shot_ids: Vec<String> = shots.iter().map(|s| s.id.to_string()).collect();
+    shot_ids.sort();
+    assert_eq!(targets, shot_ids);
+    for d in &descs {
+        assert_eq!(d.target_kind, TargetKind::Segment);
+        assert_eq!(
+            d.text,
+            "A host greets two guests at a desk. 3 people: a host, two guests. 2 chairs, 1 laptop. host waves. LIVE"
+        );
+        let prov = idx.get_provenance(d.provenance_id).await.unwrap().unwrap();
+        assert_eq!(prov.operator, "vlm_describe");
+        assert!(prov.params["shot"].is_string(), "{:?}", prov.params);
+    }
+    let m = idx
+        .find_mentions(&MentionQuery {
+            terms: vec!["2 chairs".into()],
+            videos: vec![video.id],
+            kinds: vec![Kind::Description],
+            prefix: false,
+            samples_per_video: 0,
+            time_range: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(m.len(), 1);
+    assert_eq!(m[0].total(), 12, "{m:?}");
+
+    // The requests: the shot prompt, the shot schema, one grid each, and
+    // the transcript replayed from the coarse pass.
+    {
+        let bodies = bodies.lock().unwrap();
+        for b in bodies.iter() {
+            assert!(b.contains("80 words"), "shot prompt");
+            assert!(
+                b.contains("\"objects\"") && b.contains("json_schema"),
+                "shot schema"
+            );
+            assert!(b.contains("Shot 00:"), "{}", &b[..b.len().min(400)]);
+        }
+        assert!(bodies.iter().any(|b| b.contains("caption kw")));
+    }
+
+    // Everything cached now: nothing runs, no call.
+    let again = run("shots", media).await;
+    assert!(again.skipped, "{again:?}");
+    assert_eq!(bodies.lock().unwrap().len(), 12);
+}
+
+/// The default level still describes scenes, a shot pass has its own
+/// cache key, and a policy whose level has no producer fails at plan time.
+#[tokio::test]
+async fn scene_level_is_the_default_and_levels_have_their_own_cache_keys() {
+    use vi_core::model::{SegmentLevel, TargetKind};
+    use vi_pipeline::ops::VlmDescribe;
+    use vi_pipeline::{Budget, Emitter, OpContext, Operator, StageClock, StageFailures};
+
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("videos");
+    let media = seed_incoming(&cache);
+    let idx = Arc::new(EmbeddedIndex::create(&dir.path().join("t.vidx")).unwrap());
+    let (addr, bodies, peak) = fake_vlm_server().await;
+    let mut c = fake_vlm_config(&cache, addr, 4);
+    let mut scenes = policy(&["subtitle_import", "sample", "shot_boundary"]);
+    scenes.fine = vec!["scenes".into(), "vlm_describe".into()];
+    assert_eq!(scenes.describe_level, "scene");
+    c.policy.insert("scenes".into(), scenes.clone());
+    let mut no_scenes = scenes.clone();
+    no_scenes.fine = vec!["vlm_describe".into()];
+    c.policy.insert("no_scenes".into(), no_scenes);
+    let c = Arc::new(c);
+    let sched = Scheduler::new(idx.clone(), c.clone(), EventBus::default());
+    let err = sched.plan(Some("no_scenes")).unwrap_err().to_string();
+    assert!(err.contains("'scenes'"), "{err}");
+
+    let r = sched
+        .run(
+            Source::Path(media),
+            JobOptions {
+                policy: Some("scenes".into()),
+                ..JobOptions::default()
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(r.ok, "{r:?}");
+    let video = &idx.list_videos().await.unwrap()[0];
+    let scene_rows = idx.segments(video.id, SegmentLevel::Scene).await.unwrap();
+    assert!(!scene_rows.is_empty());
+    let descs = idx.descriptions(video.id).await.unwrap();
+    assert_eq!(descs.len(), scene_rows.len());
+    for d in &descs {
+        assert_eq!(d.target_kind, TargetKind::Segment);
+        assert!(scene_rows.iter().any(|s| s.id.to_string() == d.target_id));
+        assert_eq!(d.text, "A synthetic test pattern. Coloured bars. test");
+    }
+    assert!(scene_rows
+        .iter()
+        .all(|s| s.summary.as_deref() == Some("A synthetic test pattern.")));
+    // Shots were delivered too (shot_boundary feeds scenes) but ignored,
+    // and their parents, set by `scenes`, are intact.
+    let shots = idx.segments(video.id, SegmentLevel::Shot).await.unwrap();
+    assert!(shots
+        .iter()
+        .all(|s| s.summary.is_none() && s.parent_id.is_some()));
+    {
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), scene_rows.len());
+        assert!(bodies.iter().all(|b| b.contains("\"topics\"")
+            && !b.contains("80 words")
+            && b.contains("Segment 00:")));
+    }
+    // Scenes are described one at a time, whatever the provider takes.
+    assert_eq!(peak.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    // The two levels key the cache differently.
+    let ctx = |policy: vi_core::config::IndexPolicy| OpContext {
+        job: vi_core::JobId::new(),
+        video: video.id,
+        stage: "vlm_describe".into(),
+        storage: idx.clone(),
+        config: c.clone(),
+        providers: Arc::new(vi_providers::ProviderRegistry::new(
+            c.clone(),
+            CancellationToken::new(),
+        )),
+        policy,
+        worker: c.media.worker.clone(),
+        emitter: Emitter::none(),
+        cancel: CancellationToken::new(),
+        events: EventBus::default(),
+        expected_items: None,
+        budget: Arc::new(Budget::unlimited()),
+        failures: Arc::new(StageFailures::default()),
+        live: false,
+        clock: Arc::new(StageClock::default()),
+    };
+    let op = VlmDescribe::new();
+    let scene_params = op.cache_params(&ctx(scenes.clone()));
+    let mut shot_policy = scenes;
+    shot_policy.describe_level = "shot".into();
+    let shot_params = op.cache_params(&ctx(shot_policy));
+    assert_ne!(scene_params, shot_params);
+    assert_ne!(scene_params["prompt_hash"], shot_params["prompt_hash"]);
+    assert_eq!(shot_params["level"], "shot");
+    // The scene key has no level field, as before the option existed.
+    assert!(scene_params.get("level").is_none(), "{scene_params}");
+    assert_eq!(scene_params["model"], "fake-vl");
+}

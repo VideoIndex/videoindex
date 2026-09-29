@@ -20,6 +20,13 @@ pub struct Prompt {
 const BUILTIN: &[(&str, &str)] = &[
     ("agent_system", include_str!("../prompts/agent_system.md")),
     ("vlm_describe", include_str!("../prompts/vlm_describe.md")),
+    // `vlm_describe` with `describe_level = "shot"`: the compact per-shot
+    // schema (people, objects with counts, actions, on-screen text,
+    // summary).
+    (
+        "vlm_describe_shot",
+        include_str!("../prompts/vlm_describe_shot.md"),
+    ),
     (
         "entities_events",
         include_str!("../prompts/entities_events.md"),
@@ -74,5 +81,16 @@ mod tests {
         assert_ne!(q.hash, p.hash);
         assert!(get("nope").is_none());
         assert!(names().contains(&"vlm_describe"));
+        let shot = get("vlm_describe_shot").unwrap();
+        for field in [
+            "\"people\"",
+            "\"objects\"",
+            "\"count\"",
+            "\"on_screen_text\"",
+            "80 words",
+        ] {
+            assert!(shot.text.contains(field), "{field}");
+        }
+        assert_ne!(shot.hash, get("vlm_describe").unwrap().hash);
     }
 }

@@ -1,0 +1,126 @@
+# Per-shot description pass over an existing index (describe_level = "shot").
+#
+# config/gcp-a100.toml with two changes: the vlm_describe role is bound to
+# the gemini provider, and a [policy.describe_shots] runs only
+# vlm_describe, per shot, over an index built with coarse_only. Everything
+# else must stay identical to gcp-a100.toml: the coarse operators' cache
+# keys hash their providers, models, [models.*] settings and the policy's
+# sample_fps, and a key that no longer matches makes that stage (and all
+# it feeds) re-run instead of replaying from the cache.
+#
+# Run WITHOUT --force (force ignores every cache marker and re-runs the
+# whole coarse pass, recreating the shots):
+#   set -a; source .env; set +a      # GEMINI_API_KEY
+#   vidx --config scripts/describe_shots_example.toml index \
+#       /data/videoindex/indexes/eval-minerva-shots.vidx <the index's media files> \
+#       --policy describe_shots
+# The media files are the probe.path of each video in the index's
+# meta.sqlite. Per video the log shows the stage plan: vlm_describe and
+# text_embed run (text_embed embeds the new descriptions; it re-embeds the
+# replayed transcript spans in place), subtitle_import, asr and
+# shot_boundary replay, the rest is skipped.
+
+default_policy = "auto"   # coarse_only here, since every role below is bound
+
+[media]
+cache_dir = "/data/videoindex/videos"
+
+[models]
+dir = "/data/videoindex/models"
+device = "auto"          # cuda when built with --features cuda and the CUDA libs exist, else cpu
+
+[models.asr]
+language = "en"
+skip_if_human_subtitles = false
+concurrency = 4
+
+# Local Whisper server: scripts/asr_server.sh start
+[providers.whisper_local]
+adapter = "openai_compat"
+base_url = "http://127.0.0.1:9000/v1"
+model = "large-v3"
+concurrency = 4
+timeout_secs = 600
+max_retries = 4
+
+# Hosted models for the agent and scene descriptions (key in $ANTHROPIC_API_KEY).
+[providers.claude]
+adapter = "anthropic"
+model = "claude-sonnet-5"
+concurrency = 4
+requests_per_minute = 50
+
+# Alternative chat model for `vidx ask --model gemini-3.8-flash` and the server's
+# `model` field (key in $GEMINI_API_KEY, from the git-ignored .env).
+[providers.gemini]
+adapter = "gemini"
+model = "gemini-3.8-flash"
+concurrency = 4
+requests_per_minute = 50
+
+# In-process ONNX models (SigLIP, RapidOCR, bge-small).
+[providers.local]
+adapter = "onnx_local"
+model_dir = "/data/videoindex/models"
+
+[roles]
+asr = { provider = "whisper_local" }
+ocr = { provider = "local" }
+image_embed = { provider = "local" }
+text_embed = { provider = "local" }
+agent_llm = { provider = "claude" }
+vlm_describe = { provider = "gemini" }   # was "claude" in gcp-a100.toml
+extract_llm = { provider = "claude" }
+
+# The built-in coarse_only policy without a wall-clock limit: this machine
+# also builds and tests while it indexes, and a cut-off would skip OCR and
+# embeddings instead of waiting.
+[policy.coarse_only]
+sample_fps = 1.0
+coarse = ["subtitle_import", "vad", "asr", "sample", "shot_boundary", "phash", "thumbnail", "image_embed", "ocr", "text_embed"]
+fine = []
+max_cost_usd_per_hour = 0.0
+max_wallclock_per_hour = "0"
+
+# Coarse pass with speech recognition; the rest of lecture_default lands
+# operator by operator.
+[policy.coarse_asr]
+sample_fps = 1.0
+coarse = ["subtitle_import", "vad", "asr", "sample", "shot_boundary", "phash", "thumbnail", "image_embed", "ocr", "text_embed"]
+fine = []
+max_cost_usd_per_hour = 0.0
+max_wallclock_per_hour = "20m"
+
+# Visual-only pass for checking shot detection and thumbnails quickly.
+[policy.visual]
+sample_fps = 1.0
+coarse = ["sample", "shot_boundary", "phash", "thumbnail", "image_embed", "ocr", "text_embed"]
+fine = []
+max_cost_usd_per_hour = 0.0
+max_wallclock_per_hour = "10m"
+
+# Full pass with the fine stages (VLM descriptions and extraction cost money).
+[policy.full]
+sample_fps = 1.0
+coarse = ["subtitle_import", "vad", "asr", "sample", "shot_boundary", "phash", "thumbnail", "image_embed", "ocr"]
+fine = ["scenes", "chapters", "vlm_describe", "entities_events", "text_embed"]
+vlm_grid = "3x3"
+max_cost_usd_per_hour = 3.0
+max_wallclock_per_hour = "30m"
+
+# Only vlm_describe, one call per shot, over an index built with
+# coarse_only: the coarse list is coarse_only's, so every coarse stage is
+# cached and replays or is skipped. The cost cap is per hour of video and
+# applies to each video separately (cap x that video's hours): 0.74 x the
+# 33.53 hours of eval-minerva's 152 videos is a $24.81 ceiling in total.
+# A video whose shots cost more than its share stops early (the rest are
+# counted as skipped, no cache marker is written); a later run with a
+# higher cap describes only the shots still missing.
+[policy.describe_shots]
+sample_fps = 1.0
+coarse = ["subtitle_import", "vad", "asr", "sample", "shot_boundary", "phash", "thumbnail", "image_embed", "ocr", "text_embed"]
+fine = ["vlm_describe"]
+describe_level = "shot"
+vlm_grid = "3x3"
+max_cost_usd_per_hour = 0.74
+max_wallclock_per_hour = "0"

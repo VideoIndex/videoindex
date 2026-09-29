@@ -185,6 +185,7 @@ impl Scheduler {
                 (name, policy)
             }
         };
+        policy.validate(&name)?;
         let mut operators = Vec::new();
         for op_name in policy.operators() {
             let built = match self.custom.get(op_name) {

@@ -93,6 +93,8 @@ For each scene, compose a frame grid (default 3×3 of dedup'd keyframes with tim
 
 Default budget: one VLM call per scene. Policies can request denser coverage for sections with high visual change or on demand from a query.
 
+The policy's `describe_level` picks what one call covers: `"scene"` (the default) is the description above. `describe_level = "shot"` describes every shot from `shot_boundary` instead, with a compact fixed schema (prompt `vlm_describe_shot`: `people`, `objects` with counts, `actions`, `on_screen_text`, a one-sentence `summary`, at most 80 words), stored as a description of the shot segment whose searchable text reads "2 chairs, 1 laptop", with the summary on the shot so `timeline(level: "shot")` shows it. It is meant for enumeration and counting questions and for hour-long videos whose index otherwise holds no text about what is visible. Over an existing index it runs as a policy with the coarse list the index was built with and `fine = ["vlm_describe"]`: shots and transcript replay from the cache and only each shot's grid frames are decoded. The level is part of the cache key, and shots already described with the same prompt and model are re-emitted rather than paid for again, so a pass the budget stopped is finished by the next one.
+
 ### Entities and events
 
 An LLM operator reads scene descriptions plus transcript in sliding windows and emits Entities, EntityMentions, and Events with time ranges. Entities are canonicalized across the video by name and embedding similarity.
@@ -160,6 +162,7 @@ sample_fps = 1.0
 coarse = ["subtitle_import", "vad", "asr", "sample", "shot_boundary", "phash", "thumbnail", "image_embed", "ocr", "text_embed"]
 fine   = ["scenes", "chapters", "vlm_describe", "entities_events"]
 vlm_grid = "3x3"
+describe_level = "scene"   # or "shot": one vlm_describe call per shot
 max_cost_usd_per_hour = 2.0
 max_wallclock_per_hour = "20m"
 
