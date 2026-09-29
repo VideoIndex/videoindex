@@ -24,7 +24,7 @@ concurrency = 4
 timeout_secs = 600
 max_retries = 4
 
-# Hosted models for the agent and scene descriptions (key in $ANTHROPIC_API_KEY).
+# Hosted models for the agent and extraction (key in $ANTHROPIC_API_KEY).
 [providers.claude]
 adapter = "anthropic"
 model = "claude-sonnet-5"
@@ -32,7 +32,8 @@ concurrency = 4
 requests_per_minute = 50
 
 # Alternative chat model for `vidx ask --model gemini-3.8-flash` and the server's
-# `model` field (key in $GEMINI_API_KEY, from the git-ignored .env).
+# `model` field, and the model behind vlm_describe (see [roles]); key in
+# $GEMINI_API_KEY, from the git-ignored .env.
 [providers.gemini]
 adapter = "gemini"
 model = "gemini-3.8-flash"
@@ -64,7 +65,16 @@ ocr = { provider = "local" }
 image_embed = { provider = "local" }
 text_embed = { provider = "local" }
 agent_llm = { provider = "claude" }
-vlm_describe = { provider = "claude" }
+# The per-shot descriptions that moved LVBench (+15 and +10 against the two
+# 2026-10-03/04 bases; vi_internal DECISIONS 2026-10-04) were Gemini 3.8
+# Flash's, at $0.0030 a shot: $0.82 an hour of LVBench video (271 shots an
+# hour), $0.45 an hour of MINERVA video (153 shots an hour). The same pass
+# with the Claude binding would cost about ten times that. This role also
+# serves the agent's on-demand `describe` tool (roles::VLM_DESCRIBE in
+# crates/vi-agent/src/tools.rs), which therefore moves from Claude Sonnet 5
+# to Gemini 3.8 Flash too (it is called on 3-8% of the benchmark
+# questions); a separate role for the tool is a possible later split.
+vlm_describe = { provider = "gemini" }
 extract_llm = { provider = "claude" }
 
 # The built-in coarse_only policy without a wall-clock limit: this machine
@@ -99,6 +109,16 @@ max_wallclock_per_hour = "10m"
 sample_fps = 1.0
 coarse = ["subtitle_import", "vad", "asr", "sample", "shot_boundary", "phash", "thumbnail", "image_embed", "ocr"]
 fine = ["scenes", "chapters", "vlm_describe", "entities_events", "text_embed"]
+# One vlm_describe call per shot instead of one per scene, with a fixed
+# schema (people, objects with counts, actions, on-screen text, a
+# one-sentence summary): with Gemini 3.8 Flash $0.0030 a shot, $0.82 an
+# hour of LVBench video (271 shots an hour), $0.45 an hour of MINERVA
+# video (153 shots an hour). The densest eval video (861 shots an hour)
+# costs about $2.84 an hour for this stage alone (at the pilot's $0.0033
+# a shot), so with the other fine stages max_cost_usd_per_hour = 3.0 is
+# close to binding on such videos: the pass then stops describing early,
+# and a later run with a higher cap describes only the shots still missing.
+describe_level = "shot"
 vlm_grid = "3x3"
 max_cost_usd_per_hour = 3.0
 max_wallclock_per_hour = "30m"

@@ -170,6 +170,8 @@ max_wallclock_per_hour = "20m"
 fine = []
 ```
 
+With `describe_level = "shot"` every shot segment carries one description (the fixed schema of [VLM describe](#vlm-describe), its fields as searchable text, its summary on the shot), one `vlm_describe` call per shot instead of one per scene. Since 2026-10-04 it is the setting of the `full` policy in `config/gcp-a100.toml`, the configuration of the GPU indexing machine. With Gemini 3.8 Flash bound to `vlm_describe` a shot costs about $0.0030: $0.82 an hour of LVBench video (271 shots an hour) and $0.45 an hour of MINERVA video (153 shots an hour); a Claude binding costs about ten times that. On LVBench-shaped videos (hour-long, with sparse speech about what is on screen) the shot descriptions moved the agent's accuracy, while on MINERVA they read flat (the numbers are on the [results pages](results/)).
+
 `default_policy = "auto"` (the default) picks `coarse_only` when the `asr`, `ocr`, `image_embed` and `text_embed` roles are bound and `coarse_local` (no provider-backed operators) otherwise. `text_embed` sits in the coarse pass because hybrid search needs span vectors; the fine pass adds the VLM and LLM stages in M2.
 
 When a budget is exhausted the job stops issuing new provider calls, finishes writing what it has, marks the Video with the reached state, and reports which stages were skipped. `max_wallclock_per_hour` accepts `20m`, `1h30m`, `90s`; `0` for either limit means unlimited. The ceiling is the per-hour figure times the video's duration in hours (at least one minute's worth).
