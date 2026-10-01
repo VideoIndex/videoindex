@@ -58,6 +58,8 @@ Done when: a question typed in the browser at videoindex.app streams an answer w
 
 **Progress 2026-09-17:** first tuning round from the corpus set: the agent gained exhaustive library tools (`find_mentions`, `count_mentions`, `library_stats`) and `search` caps hits per video; corpus quality 79% → 93% (Sonnet 5), level with the Gemini agentic reference at 39% of its cost, recall 100%. Results in `docs/results/corpus-2026-09-17.md`.
 
+**Progress 2026-10-04:** the results pages in `docs/results/` are dated 2026-10-04 and carry the shipped indexing policy, a short Gemini description on every shot (`describe_level = "shot"`, see [05](05-indexing-pipeline.md)): LVBench 84.1% (340 questions; the Gemini agentic-video reference 80.8%) and MINERVA 78.1% (310; reference 76.5%) at the headline protocol P2 (20 tool calls, a $0.30 cost cap). The shot descriptions moved LVBench (+2 on the page against the 2026-09-29 agent, about +7 rows on the mean of three draws, carried by the rows whose shot text the agent read) and read flat on MINERVA; the agent's tools are unchanged since 2026-09-29. The corpus set stays at `docs/results/corpus-2026-09-29.md`.
+
 - `eval/` harness, loaders for LVBench and Minerva, 1H-VideoQA if obtainable, baselines, reports.
 - Provider and policy sweeps on azuremc; pareto plots.
 - Tune sampling, grids, prompts, and policy from results; port winning policies to Rust.

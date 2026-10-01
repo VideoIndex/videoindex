@@ -112,7 +112,11 @@ produced.
   ended 13 of 310 questions and the token budget 4. The budget alone buys nothing: the unchanged
   2026-09-26 agent scores 72.6 / 72.9 / 73.2 / 72.9% at P1, P2, P3 (30 calls, $0.75, 1M tokens,
   600 s) and P4 (50 calls, $2.00, 1M, 900 s) for $0.067 / $0.096 / $0.127 / $0.126 a question, every
-  step inside the noise, and past P3 the loop stops on its own. Read a P2 row against a P2 row, and
+  step inside the noise, and past P3 the loop stops on its own. The pages dated 2026-10-04 add one
+  more variable to name: the index. From that date the benchmark indexes carry a description of
+  every shot (the shipped policy), and an index-time change is measured as an index-only paired
+  diff (one binary, two indexes) before it ships; the 2026-09-29 rows on the same pages are the
+  undescribed indexes. Read a P2 row against a P2 row, and
   read the cost per question as part of the result. The cost–accuracy curve behind this is in the
   engineering document.
 
